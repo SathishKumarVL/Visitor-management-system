@@ -71,7 +71,7 @@ Open http://localhost:5173
 
 ### 7. Verify
 
-1. Login as `reception` / `ChangeMe@123!`
+1. Login as `reception` using the password you configured in `Seed:DefaultPassword` (User Secrets)
 2. Open Reception Mode → New Visitor
 3. Complete wizard and submit
 4. Login as `host` and approve

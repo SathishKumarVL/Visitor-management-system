@@ -63,15 +63,10 @@ Vite proxies `/api`, `/uploads`, and `/branding` to the API.
 
 ### Seed users
 
-| Username | Role | Password |
-|----------|------|----------|
-| superadmin | SuperAdmin | `ChangeMe@123!` |
-| admin | Admin | `ChangeMe@123!` |
-| reception | Reception | `ChangeMe@123!` |
-| security | Security | `ChangeMe@123!` |
-| host | Host | `ChangeMe@123!` |
+On first run (when users do not already exist), seed accounts are created for:
+`superadmin`, `admin`, `reception`, `security`, `host`.
 
-Non-superadmin users are flagged to change password in production.
+Initial passwords come from `Seed:DefaultPassword` via User Secrets / environment variables — never from tracked config or docs. Seeded users are marked `MustChangePassword`. Existing users are never password-reset on startup. See [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Project layout
 
