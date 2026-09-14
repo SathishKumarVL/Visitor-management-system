@@ -237,15 +237,13 @@ public class PassController : ControllerBase
         return Ok(new ApiResponse<PassDto>(true, result));
     }
 
-    [HttpGet("scan/{passCode}")]
+    [HttpGet("verify/{visitNumber}")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Security}")]
-    public async Task<ActionResult<ApiResponse<PassDto>>> Scan(string passCode)
+    public async Task<ActionResult<ApiResponse<PassDto>>> Verify(string visitNumber)
     {
-        var result = await _visitors.LookupByPassCodeAsync(passCode, _env.WebRootPath);
+        var result = await _visitors.LookupByVisitNumberAsync(visitNumber, _env.WebRootPath);
         if (result is null)
-            return NotFound(new ApiResponse<PassDto>(false, null, "INVALID VISITOR PASS"));
-        if (string.Equals(result.Status, VisitStatus.CheckedOut.ToString(), StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new ApiResponse<PassDto>(false, result, "VISITOR ALREADY CHECKED OUT"));
+            return NotFound(new ApiResponse<PassDto>(false, null, "Visitor pass not found."));
         return Ok(new ApiResponse<PassDto>(true, result));
     }
 }

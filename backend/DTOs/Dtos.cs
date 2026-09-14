@@ -342,8 +342,6 @@ public class PassDto
     public DateTime? CheckInAt { get; set; }
     public string? PhotoUrl { get; set; }
     public string Status { get; set; } = string.Empty;
-    public string QrPayload { get; set; } = string.Empty;
-    public string? QrImageBase64 { get; set; }
 }
 
 public class ReportRequest

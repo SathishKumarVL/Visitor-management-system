@@ -39,15 +39,15 @@ Authorize with: `Authorization: Bearer <token>`
 | POST | `/api/approvals/{id}/approve` | Host/Admin |
 | POST | `/api/approvals/{id}/reject` | Host/Admin (body: `{ reason }`) |
 
-## Pass / QR
+## Pass / Verify
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/pass/{visitId}` | Get pass |
 | POST | `/api/pass/{visitId}/generate` | Reprint |
-| GET | `/api/pass/scan/{passCode}` | Lookup by QR payload |
+| GET | `/api/pass/verify/{visitNumber}` | Lookup by human-readable visit number |
 
-QR payload contains **only** the pass code (no personal data).
+Visitor passes display a Visit Number (e.g. `VMS-2026-000184`). QR codes are not used.
 
 ## Masters / Users / Settings / Reports / Audit
 

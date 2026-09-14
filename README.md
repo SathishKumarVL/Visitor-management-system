@@ -81,9 +81,9 @@ Initial passwords come from `Seed:DefaultPassword` via User Secrets / environmen
 ## Core workflows
 
 1. Reception registers visitor (touch wizard)
-2. Host approves/rejects
-3. Reception/Security checks in → visitor pass + QR
-4. Security scans QR for verification / check-out
+2. Host approves/rejects (when configured)
+3. Reception/Security checks in → visitor pass with Visit Number
+4. Security/Reception verifies by Visit Number / search / check-out
 5. Dashboards, search, reports, audit log
 
 ## Documentation

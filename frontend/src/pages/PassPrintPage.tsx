@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { QRCodeSVG } from 'qrcode.react'
 import { apiErrorMessage, passApi } from '../lib/api'
 import type { PassDto } from '../types/api'
 import { Alert, Panel, Spinner } from '../components/ui/Panel'
@@ -57,8 +56,9 @@ export function PassPrintPage() {
             <div className="mt-2 text-xs font-semibold uppercase tracking-[0.2em] text-ink-muted">Visitor Pass</div>
             <div className="text-sm text-ink-muted">{company}</div>
           </div>
-          <div className="rounded-xl bg-brand-gradient px-3 py-2 font-mono text-sm font-bold text-white">
-            {pass.passCode}
+          <div className="rounded-xl bg-brand-gradient px-3 py-2 text-center font-mono text-sm font-bold text-white">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-white/80">Visit #</div>
+            {pass.visitNumber}
           </div>
         </div>
 
@@ -82,10 +82,10 @@ export function PassPrintPage() {
                 No photo
               </div>
             )}
-            <div className="rounded-xl bg-white p-2 shadow-sm ring-1 ring-border">
-              <QRCodeSVG value={pass.passCode} size={120} level="M" includeMargin={false} />
+            <div className="w-full rounded-xl bg-mint/60 px-3 py-3 text-center">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Visit number</div>
+              <div className="mt-1 break-all font-mono text-sm font-bold text-ink">{pass.visitNumber}</div>
             </div>
-            <div className="text-center font-mono text-xs text-ink-muted">{pass.passCode}</div>
           </div>
         </div>
       </Panel>

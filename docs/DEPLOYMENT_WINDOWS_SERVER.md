@@ -143,7 +143,7 @@ Example rewrite for React Router:
 - [ ] Browse https://vms.tiaano.local
 - [ ] Login as reception
 - [ ] Register visitor, approve, check-in, print pass
-- [ ] Scan QR on security tablet
+- [ ] Verify visitor by Visit Number on security tablet
 - [ ] Confirm photos write to uploads
 - [ ] Force password change for seed users
 - [ ] Disable Swagger in Production (already gated to Development)

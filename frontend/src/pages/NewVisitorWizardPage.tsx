@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { QRCodeSVG } from 'qrcode.react'
 import { apiErrorMessage, mastersApi, passApi, visitorsApi } from '../lib/api'
 import type { MasterItemDto, PassDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
 import { Alert, PageHeader, Panel } from '../components/ui/Panel'
@@ -652,8 +651,9 @@ export function NewVisitorWizardPage() {
             {completedPass ? (
               <div className="mb-2 flex items-start justify-between gap-3 border-b border-gray-200 pb-2">
                 <BrandLogo className="h-12 print:h-10" />
-                <div className="shrink-0 text-right font-mono text-sm font-bold text-steel print:text-xs">
-                  {completedPass.passCode}
+                <div className="shrink-0 text-right">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Visit #</div>
+                  <div className="font-mono text-sm font-bold text-steel print:text-xs">{completedPass.visitNumber}</div>
                 </div>
               </div>
             ) : null}
@@ -709,13 +709,11 @@ export function NewVisitorWizardPage() {
                     No photo
                   </div>
                 )}
-                {completedPass ? (
-                  <div className="flex flex-col items-center gap-1">
-                    <div className="rounded bg-white p-1">
-                      <QRCodeSVG value={completedPass.passCode} size={112} level="M" includeMargin={false} />
-                    </div>
-                    <div className="max-w-[120px] break-all text-center font-mono text-[10px] text-gray-600">
-                      {completedPass.passCode}
+                {completedPass?.visitNumber ? (
+                  <div className="flex flex-col items-center gap-1 rounded-md bg-gray-50 px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Visit number</div>
+                    <div className="max-w-[140px] break-all text-center font-mono text-xs font-bold text-gray-800">
+                      {completedPass.visitNumber}
                     </div>
                   </div>
                 ) : null}

@@ -19,7 +19,7 @@ import { CurrentlyInsidePage } from './pages/CurrentlyInsidePage'
 import { ExpectedVisitorsPage } from './pages/ExpectedVisitorsPage'
 import { VisitorPassesPage } from './pages/VisitorPassesPage'
 import { PassPrintPage } from './pages/PassPrintPage'
-import { QrScanPage } from './pages/QrScanPage'
+import { VerifyVisitorPage } from './pages/VerifyVisitorPage'
 import { FaceCheckoutPage } from './pages/FaceCheckoutPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
@@ -83,7 +83,8 @@ export default function App() {
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Reception', 'Security']} />}>
               <Route path="/passes" element={<VisitorPassesPage />} />
               <Route path="/passes/:visitId/print" element={<PassPrintPage />} />
-              <Route path="/scan" element={<QrScanPage />} />
+              <Route path="/verify" element={<VerifyVisitorPage />} />
+              <Route path="/scan" element={<VerifyVisitorPage />} />
               <Route path="/checkout/face" element={<FaceCheckoutPage />} />
             </Route>
 

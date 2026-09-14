@@ -112,7 +112,7 @@ export function VisitorDetailPage() {
             {canGate && status.includes('inside') ? (
               <Button variant="danger" disabled={busy} onClick={() => void checkOut()}>Check out</Button>
             ) : null}
-            {canGate && visitor.passCode ? (
+            {canGate ? (
               <Button variant="amber" disabled={busy} onClick={() => void printPass()}>Print pass</Button>
             ) : null}
           </div>
@@ -140,13 +140,13 @@ export function VisitorDetailPage() {
             <h2 className="mb-3 font-semibold text-steel">Visit details</h2>
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
               <Item label="Visitor #" value={visitor.visitorNumber} />
+              <Item label="Visit #" value={visitor.visitNumber} />
               <Item label="Visit date" value={formatDate(visitor.visitDate)} />
               <Item label="Host" value={visitor.hostName} />
               <Item label="Department" value={visitor.departmentName} />
               <Item label="Phone" value={visitor.phone || '—'} />
               <Item label="Email" value={visitor.email || '—'} />
               <Item label="Intercom" value={visitor.intercom || '—'} />
-              <Item label="Pass code" value={visitor.passCode || '—'} />
               <Item label="Check-in" value={formatDateTime(visitor.checkInAt)} />
               <Item label="Check-out" value={formatDateTime(visitor.checkOutAt)} />
               <Item label="Duration" value={formatDuration(visitor.durationMinutes)} />

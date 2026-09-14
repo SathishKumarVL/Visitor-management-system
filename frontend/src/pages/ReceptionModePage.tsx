@@ -62,10 +62,10 @@ export function ReceptionModePage() {
           />
           <ModeTile
             className="min-h-36"
-            title="SCAN VISITOR PASS"
-            description="Verify QR on a visitor badge"
-            icon="▦"
-            onClick={() => navigate('/scan')}
+            title="VERIFY VISITOR"
+            description="Look up by visit number on the pass"
+            icon="✓"
+            onClick={() => navigate('/verify')}
           />
         </div>
       </div>

@@ -19,7 +19,7 @@ export function SecurityModePage() {
         </Panel>
         <Panel>
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-muted">Primary</p>
-          <p className="mt-2 text-lg font-semibold text-ink">Scan visitor pass</p>
+          <p className="mt-2 text-lg font-semibold text-ink">Verify by visit number</p>
         </Panel>
         <Panel>
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-muted">Inside</p>
@@ -32,14 +32,15 @@ export function SecurityModePage() {
       </div>
 
       <div className="mb-6">
-        <Button size="lg" className="min-h-16 w-full sm:w-auto" onClick={() => navigate('/scan')}>
-          SCAN VISITOR PASS
+        <Button size="lg" className="min-h-16 w-full sm:w-auto" onClick={() => navigate('/verify')}>
+          VERIFY VISITOR
         </Button>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <ModeTile title="CHECK IN" description="Open expected arrivals" icon="→" onClick={() => navigate('/visitors/expected')} />
         <ModeTile title="CHECK OUT" description="Face match or list checkout" accent icon="✓" onClick={() => navigate('/checkout/face')} />
+        <ModeTile title="VERIFY VISITOR" description="Look up by visit number" icon="◎" onClick={() => navigate('/verify')} />
         <ModeTile title="CURRENTLY INSIDE" description="Live on-site list" icon="●" onClick={() => navigate('/visitors/inside')} />
         <ModeTile title="SEARCH" description="Find a visitor" icon="🔍" onClick={() => navigate('/visitors')} />
         <ModeTile title="VISITOR PASSES" description="Issue or reprint passes" icon="▣" onClick={() => navigate('/passes')} />

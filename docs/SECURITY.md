@@ -95,4 +95,5 @@ Until that exists: keep the existing encryption key in the secret store even if 
 
 ## What Phase 1A does **not** cover
 
-Public uploads, QR pass expiry, anonymous settings, rate limiting, MFA, refresh tokens, multi-tenancy, licensing.
+Public uploads, settings auth, rate limiting, MFA, refresh tokens, multi-tenancy, licensing.
+QR functionality has been removed from the product.

@@ -40,7 +40,7 @@ const MENU_ICONS: Record<string, string> = {
   settings: '⚙',
   audit: '☰',
   passes: '▣',
-  scan: '▦',
+  verify: '✓',
 }
 
 export function AppLayout() {

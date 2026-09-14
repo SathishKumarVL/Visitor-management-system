@@ -24,7 +24,7 @@ Database name (dev default): `TiaanoVms`
 | VisitorPhotos | Stored photo paths |
 | VisitorDocuments | Masked/encrypted ID data |
 | Approvals | Approval history |
-| VisitorPasses | QR pass codes (no PII in QR) |
+| VisitorPasses | Issued pass records (legacy PassCode retained; Visit Number is the public identifier) |
 | AuditLogs | Immutable audit trail |
 | SystemSettings | Configurable settings |
 | NotificationOutbox | Notification abstraction queue |

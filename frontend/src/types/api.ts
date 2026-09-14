@@ -212,8 +212,6 @@ export interface PassDto {
   checkInAt?: string | null
   photoUrl?: string | null
   status: string
-  qrPayload: string
-  qrImageBase64?: string | null
 }
 
 export interface CreateUserRequest {

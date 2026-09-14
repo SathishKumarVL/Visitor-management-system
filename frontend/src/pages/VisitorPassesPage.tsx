@@ -71,7 +71,6 @@ export function VisitorPassesPage() {
                 </Link>
                 <div className="text-sm text-gray-500">
                   {v.visitNumber} · {v.companyName} · {v.statusLabel}
-                  {v.passCode ? ` · Pass ${v.passCode}` : ''}
                 </div>
               </div>
               <Button variant="amber" disabled={busy} onClick={() => void print(v.visitId)}>

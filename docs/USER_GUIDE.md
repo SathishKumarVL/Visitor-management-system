@@ -12,10 +12,9 @@
 ## Security tablet
 
 1. Login as `security`
-2. **Scan Pass** with camera QR reader
-3. Verify visitor / check out
-4. Invalid codes show **INVALID VISITOR PASS**
-5. Already exited visits show **VISITOR ALREADY CHECKED OUT**
+2. **Verify Visitor** by Visit Number printed on the pass
+3. Confirm photo/name/host and check in or check out as needed
+4. Use **Currently Inside** and search for name/mobile/company lookups
 
 ## Host
 
@@ -33,4 +32,4 @@
 
 ## Visitor pass
 
-Printed pass includes TIAANO branding, photo, visitor/host/department/purpose/location, visit ID, check-in time, and QR (pass identifier only).
+Printed pass includes branding, photo, visitor/host/department/purpose/location, human-readable Visit Number (e.g. `VMS-2026-000184`), check-in time, and status. No QR codes.

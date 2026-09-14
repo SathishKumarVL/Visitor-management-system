@@ -125,7 +125,8 @@ export const approvalsApi = {
 export const passApi = {
   get: (visitId: string) => unwrap(api.get<ApiResponse<PassDto>>(`/pass/${visitId}`)),
   generate: (visitId: string) => unwrap(api.post<ApiResponse<PassDto>>(`/pass/${visitId}/generate`)),
-  scan: (passCode: string) => unwrap(api.get<ApiResponse<PassDto>>(`/pass/scan/${encodeURIComponent(passCode)}`)),
+  verify: (visitNumber: string) =>
+    unwrap(api.get<ApiResponse<PassDto>>(`/pass/verify/${encodeURIComponent(visitNumber)}`)),
 }
 
 export const dashboardApi = {

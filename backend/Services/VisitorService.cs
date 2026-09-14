@@ -2,7 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
-using QRCoder;
 using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
@@ -26,7 +25,7 @@ public interface IVisitorService
     Task<IReadOnlyList<VisitorListItemDto>> GetPendingApprovalsAsync(ClaimsPrincipal user);
     Task<PassDto?> GetPassAsync(Guid visitId, string webRoot);
     Task<PassDto> ReprintPassAsync(Guid visitId, ClaimsPrincipal user, string webRoot);
-    Task<PassDto?> LookupByPassCodeAsync(string passCode, string webRoot);
+    Task<PassDto?> LookupByVisitNumberAsync(string visitNumber, string webRoot);
     Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes);
 }
 
@@ -622,13 +621,27 @@ public class VisitorService : IVisitorService
         return await BuildPassDto(visit, pass, webRoot);
     }
 
-    public async Task<PassDto?> LookupByPassCodeAsync(string passCode, string webRoot)
+    public async Task<PassDto?> LookupByVisitNumberAsync(string visitNumber, string webRoot)
     {
-        if (string.IsNullOrWhiteSpace(passCode)) return null;
-        var pass = await _db.VisitorPasses.AsNoTracking().FirstOrDefaultAsync(p => p.PassCode == passCode.Trim());
-        if (pass is null) return null;
-        var visit = await LightVisitQuery().FirstOrDefaultAsync(v => v.Id == pass.VisitorVisitId);
+        if (string.IsNullOrWhiteSpace(visitNumber)) return null;
+        var normalized = visitNumber.Trim();
+        var visit = await LightVisitQuery()
+            .FirstOrDefaultAsync(v => v.VisitNumber == normalized);
         if (visit is null) return null;
+        var pass = visit.Passes.OrderByDescending(p => p.IssuedAt).FirstOrDefault();
+        if (pass is null)
+        {
+            // Historical visits may lack a pass row; still allow verification by visit number.
+            pass = new VisitorPass
+            {
+                Id = Guid.Empty,
+                VisitorVisitId = visit.Id,
+                PassCode = visit.VisitNumber,
+                IssuedAt = visit.CheckInAt ?? visit.CreatedAt,
+                ValidUntil = visit.CheckInAt?.AddHours(12) ?? visit.CreatedAt.AddHours(12),
+                IsActive = visit.Status == VisitStatus.Inside || visit.Status == VisitStatus.Approved
+            };
+        }
         return await BuildPassDto(visit, pass, webRoot);
     }
 
@@ -913,10 +926,6 @@ public class VisitorService : IVisitorService
 
     private async Task<PassDto> BuildPassDto(VisitorVisit visit, VisitorPass pass, string webRoot)
     {
-        using var generator = new QRCodeGenerator();
-        using var data = generator.CreateQrCode(pass.PassCode, QRCodeGenerator.ECCLevel.Q);
-        var qr = new PngByteQRCode(data);
-        var bytes = qr.GetGraphic(8);
         var settings = await _settings.GetAsync();
         var item = MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
         return new PassDto
@@ -933,9 +942,7 @@ public class VisitorService : IVisitorService
             VisitNumber = item.VisitNumber,
             CheckInAt = item.CheckInAt,
             PhotoUrl = item.PhotoUrl,
-            Status = item.StatusLabel,
-            QrPayload = pass.PassCode,
-            QrImageBase64 = Convert.ToBase64String(bytes)
+            Status = item.StatusLabel
         };
     }
 
@@ -980,13 +987,15 @@ public class VisitorService : IVisitorService
 
     private async Task<string> NextVisitNumberAsync(string prefix)
     {
-        var date = DateTime.Now.ToString("yyyyMMdd");
-        var patternPrefix = $"{prefix}-VIS-{date}-";
+        // Human-readable commercial visit number, e.g. VMS-2026-000184
+        var year = DateTime.Now.ToString("yyyy");
+        var code = string.IsNullOrWhiteSpace(prefix) ? "VMS" : prefix.Trim().ToUpperInvariant();
+        var patternPrefix = $"{code}-{year}-";
         var existing = await _db.VisitorVisits.AsNoTracking()
             .Where(v => v.VisitNumber.StartsWith(patternPrefix))
             .Select(v => v.VisitNumber)
             .ToListAsync();
-        return $"{patternPrefix}{(MaxNumericSuffix(existing, patternPrefix) + 1):D4}";
+        return $"{patternPrefix}{(MaxNumericSuffix(existing, patternPrefix) + 1):D6}";
     }
 
     private static int MaxNumericSuffix(IEnumerable<string> values, string patternPrefix)
