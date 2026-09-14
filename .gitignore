@@ -1,0 +1,46 @@
+## .NET
+**/bin/
+**/obj/
+**/publish/
+**/logs/
+*.user
+*.suo
+appsettings.*.local.json
+
+## Node
+frontend/node_modules/
+frontend/dist/
+
+## Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+secrets.json
+**/secrets.json
+appsettings.*.local.json
+
+## Runtime / generated
+**/wwwroot/uploads/*
+!**/wwwroot/uploads/.gitkeep
+**/App_Data/mail-pickup/*
+!**/App_Data/mail-pickup/.gitkeep
+uploads/*
+!uploads/.gitkeep
+*.eml
+*.log
+*.bundle
+
+## Test / coverage
+**/TestResults/
+**/coverage/
+*.trx
+
+## OS / IDE
+.vs/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini

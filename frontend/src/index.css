@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+/*
+  TIAANO VMS design tokens
+  Brand colors can later be overridden per tenant via :root / settings injection.
+*/
+:root {
+  --primary: #008f95;
+  --primary-dark: #006f75;
+  --primary-deep: #005a62;
+  --primary-light: #35c7c7;
+  --accent: #35c7c7;
+  --aqua-light: #ddf7f6;
+  --mint: #eef9f8;
+  --background: #f5fbfa;
+  --surface: #ffffff;
+  --text-primary: #0b3440;
+  --text-secondary: #54717a;
+  --border: #d4e8e6;
+  --success: #0f8a5f;
+  --warning: #c47a12;
+  --danger: #c62828;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.5rem;
+  --shadow-sm: 0 1px 2px rgba(11, 52, 64, 0.05);
+  --shadow-md: 0 8px 24px rgba(11, 52, 64, 0.08);
+  --shadow-lg: 0 18px 40px rgba(0, 90, 98, 0.12);
+  --gradient-primary: linear-gradient(135deg, #005a62 0%, #008f95 48%, #35c7c7 100%);
+  --gradient-soft: linear-gradient(160deg, #eef9f8 0%, #ddf7f6 45%, #f5fbfa 100%);
+  --gradient-hero: radial-gradient(circle at 18% 22%, rgba(53, 199, 199, 0.35), transparent 42%),
+    radial-gradient(circle at 82% 12%, rgba(0, 143, 149, 0.28), transparent 38%),
+    linear-gradient(145deg, #005a62 0%, #008f95 52%, #0b3440 100%);
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --transition-fast: 180ms ease;
+}
+
+@theme {
+  --color-primary: var(--primary);
+  --color-primary-dark: var(--primary-dark);
+  --color-primary-deep: var(--primary-deep);
+  --color-primary-light: var(--primary-light);
+  --color-accent: var(--accent);
+  --color-aqua: var(--accent);
+  --color-aqua-light: var(--aqua-light);
+  --color-mint: var(--mint);
+  --color-page: var(--background);
+  --color-surface: var(--surface);
+  --color-ink: var(--text-primary);
+  --color-ink-muted: var(--text-secondary);
+  --color-border: var(--border);
+
+  /* Backward-compatible aliases used across existing pages */
+  --color-steel: var(--primary);
+  --color-steel-dark: var(--primary-deep);
+  --color-steel-light: var(--primary-light);
+  --color-amber: var(--primary);
+  --color-amber-dark: var(--primary-dark);
+  --color-amber-soft: var(--aqua-light);
+
+  --color-gray-50: #f5fbfa;
+  --color-gray-100: #e8f4f3;
+  --color-gray-200: #d4e8e6;
+  --color-gray-300: #a8c5c3;
+  --color-gray-500: #54717a;
+  --color-gray-700: #2f4b52;
+  --color-gray-900: #0b3440;
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --shadow-card: var(--shadow-md);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  line-height: 1.5;
+  background:
+    radial-gradient(circle at top right, rgba(53, 199, 199, 0.12), transparent 32%),
+    radial-gradient(circle at 8% 40%, rgba(0, 143, 149, 0.06), transparent 28%),
+    linear-gradient(180deg, #eef9f8 0%, #f5fbfa 42%, #eef4f3 100%);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.bg-brand-gradient {
+  background-image: var(--gradient-primary);
+}
+
+.bg-brand-soft {
+  background-image: var(--gradient-soft);
+}
+
+.bg-brand-hero {
+  background-image: var(--gradient-hero);
+}
+
+.shadow-card {
+  box-shadow: var(--shadow-md);
+}
+
+.shadow-elevated {
+  box-shadow: var(--shadow-lg);
+}
+
+.decorative-orb {
+  pointer-events: none;
+  position: absolute;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.22), transparent 60%);
+}
+
+/* iPad / iOS Safari: keep native select usable and avoid clipped arrows / zoom */
+.field-select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: none;
+}
+
+.field-select::-ms-expand {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #e8f4f3 20%, #ddf7f6 50%, #e8f4f3 80%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
+  html,
+  body {
+    background: white !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .visitor-pass-print {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
