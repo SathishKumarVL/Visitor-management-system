@@ -4,7 +4,7 @@ import { AppLayout } from './components/layout/AppLayout'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { useAuthStore } from './store/authStore'
 import { useSettingsStore } from './store/settingsStore'
-import { Spinner } from './components/ui/Panel'
+import { LoadingMask } from './components/LoadingMask'
 import { LoginPage } from './pages/LoginPage'
 import { HomeRedirect } from './pages/HomeRedirect'
 import { UnauthorizedPage } from './pages/UnauthorizedPage'
@@ -41,11 +41,7 @@ export default function App() {
   }, [bootstrap, loadSettings])
 
   if (!initialized) {
-    return (
-      <div className="min-h-screen">
-        <Spinner label="Starting TIAANO VMS…" />
-      </div>
-    )
+    return <LoadingMask label="Starting TIAANO VMS…" />
   }
 
   return (

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, passApi, visitorsApi } from '../lib/api'
 import type { MasterItemDto, PassDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
-import { Alert, PageHeader, Panel } from '../components/ui/Panel'
+import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../components/ui/Field'
 import { nowIsoTime, todayIsoDate, validateVisitorEmail } from '../lib/utils'
@@ -364,12 +364,7 @@ export function NewVisitorWizardPage() {
   const progress = ((draft.step + 1) / STEPS.length) * 100
 
   if (loadingExpected) {
-    return (
-      <div>
-        <PageHeader title="Expected arrival" subtitle="Loading appointment…" />
-        <Panel><p className="text-sm text-gray-500">Preparing check-in wizard…</p></Panel>
-      </div>
-    )
+    return <Spinner label="Preparing check-in wizard…" />
   }
 
   return (
