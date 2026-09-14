@@ -135,3 +135,30 @@ See `docs/OVERNIGHT_BLOCKERS.md`:
 ## Honest readiness statement
 
 The application is **materially safer and more commercially structured** than the audit baseline, but it is **not** claimed fully production-hardened or multi-tenant SaaS complete.
+
+## Architecture sanity check (post-run)
+
+| Concern | Assessment |
+|---------|------------|
+| Accidental over-engineering | **Medium risk in Phase 6–7 scaffold** — product modules/licenses/releases tables exist but are not deeply enforced yet. Prefer leaving them dormant over expanding into a full licensing engine now. |
+| Duplicated abstractions | Auth moved to `AuthService.cs`; media has `IMediaStorageService`. Acceptable. `VisitorService` remains a fat service (known debt). |
+| Unnecessary dependencies | QR packages removed. MailKit retained (SMTP). No speculative cloud SDKs added. |
+| Dead code | Legacy `PassCode` column retained intentionally (no destructive drop). `/scan` route aliases verify. |
+| Tenant isolation | Foundation present (TenantId + claim binding + query filters). **Not** yet a full adversarial isolation suite. Do not treat as SaaS-ready. |
+| Unnecessary rewrites | Core VMS workflows preserved; QR removed; media path changed without deleting historical photos (legacy fallback reads). |
+| Preferred next posture | Harden security + tenant isolation tests; **do not** expand licensing/upgrade/cloud frameworks until product need is clear. |
+
+## Autonomy policy reminder (for future runs)
+
+Routine code decisions may proceed without confirmation. The following remain **BLOCKED** without explicit human authorization:
+
+- production deployment
+- credential obtain/use requiring human approval
+- credential exposure/rotation without safe migration
+- delete/irreversible alteration of customer/historical data
+- destroy Git history without recoverable backup
+- real external communications
+- connect/modify external infrastructure
+- security exceptions merely to finish a phase
+
+Phases may be **PARTIALLY COMPLETE** when one external blocker exists, provided independent work continues.
