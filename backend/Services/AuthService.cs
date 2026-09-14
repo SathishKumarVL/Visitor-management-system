@@ -195,6 +195,10 @@ public class AuthService : IAuthService
         claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
         if (user.DepartmentId.HasValue)
             claims.Add(new Claim("departmentId", user.DepartmentId.Value.ToString()));
+        if (user.TenantId != Guid.Empty)
+            claims.Add(new Claim("tenantId", user.TenantId.ToString()));
+        if (user.SiteId.HasValue)
+            claims.Add(new Claim("siteId", user.SiteId.Value.ToString()));
 
         var token = new JwtSecurityToken(
             issuer: _config["Jwt:Issuer"],

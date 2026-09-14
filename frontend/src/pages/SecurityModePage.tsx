@@ -38,6 +38,7 @@ export function SecurityModePage() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <ModeTile title="EMERGENCY MODE" description="Evacuation roster for people inside" accent icon="!" onClick={() => navigate('/emergency')} />
         <ModeTile title="CHECK IN" description="Open expected arrivals" icon="→" onClick={() => navigate('/visitors/expected')} />
         <ModeTile title="CHECK OUT" description="Face match or list checkout" accent icon="✓" onClick={() => navigate('/checkout/face')} />
         <ModeTile title="VERIFY VISITOR" description="Look up by visit number" icon="◎" onClick={() => navigate('/verify')} />

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.StaticFiles;
+using Tiaano.Vms.Api.Models;
 
 namespace Tiaano.Vms.Api.Services;
 
@@ -16,16 +17,24 @@ public interface IMediaStorageService
 public sealed class MediaStorageService : IMediaStorageService
 {
     private readonly IWebHostEnvironment _env;
+    private readonly ITenantContext _tenant;
     private static readonly FileExtensionContentTypeProvider ContentTypes = new();
 
-    public MediaStorageService(IWebHostEnvironment env)
+    public MediaStorageService(IWebHostEnvironment env, ITenantContext tenant)
     {
         _env = env;
+        _tenant = tenant;
         Directory.CreateDirectory(PrivateRoot);
         Directory.CreateDirectory(LegacyUploadsRoot);
+        Directory.CreateDirectory(LegacyPrivateRoot);
     }
 
+    private Guid EffectiveTenantId => _tenant.TenantId is Guid id && id != Guid.Empty ? id : WellKnownTenants.TiaanoId;
+
     public string PrivateRoot =>
+        Path.GetFullPath(Path.Combine(_env.ContentRootPath, "App_Data", "media", "tenants", EffectiveTenantId.ToString("N"), "visitors"));
+
+    public string LegacyPrivateRoot =>
         Path.GetFullPath(Path.Combine(_env.ContentRootPath, "App_Data", "media", "visitors"));
 
     public string LegacyUploadsRoot =>
@@ -93,11 +102,14 @@ public sealed class MediaStorageService : IMediaStorageService
             return Task.FromResult<(Stream, string)?>(null);
 
         var privatePath = Path.Combine(PrivateRoot, safe);
+        var legacyPrivate = Path.Combine(LegacyPrivateRoot, safe);
         var legacyPath = Path.Combine(LegacyUploadsRoot, safe);
 
         string? chosen = null;
         if (File.Exists(privatePath) && Path.GetFullPath(privatePath).StartsWith(PrivateRoot, StringComparison.OrdinalIgnoreCase))
             chosen = privatePath;
+        else if (File.Exists(legacyPrivate) && Path.GetFullPath(legacyPrivate).StartsWith(LegacyPrivateRoot, StringComparison.OrdinalIgnoreCase))
+            chosen = legacyPrivate;
         else if (File.Exists(legacyPath) && Path.GetFullPath(legacyPath).StartsWith(LegacyUploadsRoot, StringComparison.OrdinalIgnoreCase))
             chosen = legacyPath;
 

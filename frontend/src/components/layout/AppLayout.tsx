@@ -41,6 +41,7 @@ const MENU_ICONS: Record<string, string> = {
   audit: '☰',
   passes: '▣',
   verify: '✓',
+  emergency: '!',
 }
 
 export function AppLayout() {

@@ -5,6 +5,12 @@ namespace Tiaano.Vms.Api.Models;
 
 public class ApplicationUser : IdentityUser
 {
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    public Guid? SiteId { get; set; }
+    public Site? Site { get; set; }
+
     [MaxLength(150)]
     public string FullName { get; set; } = string.Empty;
 
@@ -25,6 +31,9 @@ public class ApplicationUser : IdentityUser
 public class Department
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
 
     [Required, MaxLength(150)]
     public string Name { get; set; } = string.Empty;
@@ -50,6 +59,9 @@ public class Department
 public class Employee
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
 
     [Required, MaxLength(150)]
     public string FullName { get; set; } = string.Empty;
@@ -84,6 +96,9 @@ public class VisitPurpose
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
     [Required, MaxLength(200)]
     public string Name { get; set; } = string.Empty;
 
@@ -99,6 +114,9 @@ public class VisitPurpose
 public class Location
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
 
     [Required, MaxLength(150)]
     public string Name { get; set; } = string.Empty;

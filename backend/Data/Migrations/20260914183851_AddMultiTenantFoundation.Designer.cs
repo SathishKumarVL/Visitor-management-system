@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Tiaano.Vms.Api.Data;
 
@@ -11,9 +12,11 @@ using Tiaano.Vms.Api.Data;
 namespace Tiaano.Vms.Api.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260914183851_AddMultiTenantFoundation")]
+    partial class AddMultiTenantFoundation
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -657,163 +660,6 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("NotificationOutbox");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.ApplicationRelease", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("AppliedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("DatabaseVersion")
-                        .HasMaxLength(40)
-                        .HasColumnType("nvarchar(40)");
-
-                    b.Property<string>("Notes")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<string>("Version")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("nvarchar(40)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Version");
-
-                    b.ToTable("ApplicationReleases");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.FeatureFlag", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ConfigurationJson")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Key")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<Guid?>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId", "Key");
-
-                    b.ToTable("FeatureFlags");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.ProductModule", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<bool>("IsCore")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("ModuleKey")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("nvarchar(80)");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(150)
-                        .HasColumnType("nvarchar(150)");
-
-                    b.Property<string>("Version")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("nvarchar(40)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ModuleKey")
-                        .IsUnique();
-
-                    b.ToTable("ProductModules");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.TenantLicense", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Edition")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("nvarchar(40)");
-
-                    b.Property<DateTime?>("ExpiresAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("GraceDaysAfterExpiry")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<int>("MaxSites")
-                        .HasColumnType("int");
-
-                    b.Property<int>("MaxUsers")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.ToTable("TenantLicenses");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.TenantModuleEntitlement", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime?>("ExpiresAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("ModuleKey")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("nvarchar(80)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId", "ModuleKey")
-                        .IsUnique();
-
-                    b.ToTable("TenantModuleEntitlements");
                 });
 
             modelBuilder.Entity("Tiaano.Vms.Api.Models.RefreshToken", b =>
@@ -1534,28 +1380,6 @@ namespace Tiaano.Vms.Api.Data.Migrations
                         .WithMany()
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.TenantLicense", b =>
-                {
-                    b.HasOne("Tiaano.Vms.Api.Models.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("Tiaano.Vms.Api.Models.Product.TenantModuleEntitlement", b =>
-                {
-                    b.HasOne("Tiaano.Vms.Api.Models.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("Tenant");

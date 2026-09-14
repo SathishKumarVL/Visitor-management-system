@@ -20,6 +20,7 @@ import { ExpectedVisitorsPage } from './pages/ExpectedVisitorsPage'
 import { VisitorPassesPage } from './pages/VisitorPassesPage'
 import { PassPrintPage } from './pages/PassPrintPage'
 import { VerifyVisitorPage } from './pages/VerifyVisitorPage'
+import { EmergencyModePage } from './pages/EmergencyModePage'
 import { FaceCheckoutPage } from './pages/FaceCheckoutPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
@@ -72,6 +73,7 @@ export default function App() {
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Security']} />}>
               <Route path="/security" element={<SecurityModePage />} />
+              <Route path="/emergency" element={<EmergencyModePage />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Host']} />}>

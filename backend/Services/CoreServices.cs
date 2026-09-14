@@ -16,11 +16,13 @@ public class AuditService : IAuditService
 {
     private readonly ApplicationDbContext _db;
     private readonly IHttpContextAccessor _http;
+    private readonly ITenantContext _tenant;
 
-    public AuditService(ApplicationDbContext db, IHttpContextAccessor http)
+    public AuditService(ApplicationDbContext db, IHttpContextAccessor http, ITenantContext tenant)
     {
         _db = db;
         _http = http;
+        _tenant = tenant;
     }
 
     public async Task LogAsync(string action, string entity, string? entityId, string? description, ClaimsPrincipal? user = null, string? ip = null)
@@ -30,6 +32,7 @@ public class AuditService : IAuditService
 
         _db.AuditLogs.Add(new AuditLog
         {
+            TenantId = TenantClaims.ResolveTenantId(user, _tenant),
             Action = action,
             Entity = entity,
             EntityId = entityId,
@@ -59,11 +62,13 @@ public class SettingsService : ISettingsService
 
     private readonly ApplicationDbContext _db;
     private readonly IAuditService _audit;
+    private readonly ITenantContext _tenant;
 
-    public SettingsService(ApplicationDbContext db, IAuditService audit)
+    public SettingsService(ApplicationDbContext db, IAuditService audit, ITenantContext tenant)
     {
         _db = db;
         _audit = audit;
+        _tenant = tenant;
     }
 
     public async Task<SettingsDto> GetAsync()
@@ -92,12 +97,13 @@ public class SettingsService : ISettingsService
 
     public async Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName)
     {
+        var tenantId = _tenant.TenantId ?? WellKnownTenants.TiaanoId;
         async Task Upsert(string key, string value)
         {
             var row = await _db.SystemSettings.FirstOrDefaultAsync(x => x.Key == key);
             if (row is null)
             {
-                _db.SystemSettings.Add(new SystemSetting { Key = key, Value = value, UpdatedBy = userName });
+                _db.SystemSettings.Add(new SystemSetting { TenantId = tenantId, Key = key, Value = value, UpdatedBy = userName });
             }
             else
             {

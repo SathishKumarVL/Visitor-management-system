@@ -7,6 +7,9 @@ public class Visitor
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
     [Required, MaxLength(50)]
     public string VisitorNumber { get; set; } = string.Empty;
 
@@ -35,6 +38,12 @@ public class Visitor
 public class VisitorVisit
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    public Guid? SiteId { get; set; }
+    public Site? Site { get; set; }
 
     public Guid VisitorId { get; set; }
     public Visitor Visitor { get; set; } = null!;
@@ -225,6 +234,8 @@ public class AuditLog
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    public Guid? TenantId { get; set; }
+
     [Required, MaxLength(100)]
     public string Action { get; set; } = string.Empty;
 
@@ -249,6 +260,9 @@ public class AuditLog
 public class SystemSetting
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
 
     [Required, MaxLength(100)]
     public string Key { get; set; } = string.Empty;

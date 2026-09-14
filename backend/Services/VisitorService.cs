@@ -124,6 +124,7 @@ public class VisitorService : IVisitorService
         {
             visitor = new Visitor
             {
+                TenantId = ResolveTenantId(user),
                 VisitorNumber = await NextVisitorNumberAsync(settings.VisitorIdPrefix),
                 FullName = request.VisitorName.Trim(),
                 CompanyName = request.CompanyName.Trim(),
@@ -137,6 +138,7 @@ public class VisitorService : IVisitorService
         var needsApproval = false; // Approvals disabled for all visitor flows.
         var visit = new VisitorVisit
         {
+            TenantId = ResolveTenantId(user),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected,
@@ -238,6 +240,7 @@ public class VisitorService : IVisitorService
         var settings = await _settings.GetAsync();
         var visitor = new Visitor
         {
+            TenantId = ResolveTenantId(user),
             VisitorNumber = await NextVisitorNumberAsync(settings.VisitorIdPrefix),
             FullName = request.VisitorName.Trim(),
             CompanyName = request.CompanyName.Trim(),
@@ -249,6 +252,7 @@ public class VisitorService : IVisitorService
 
         var visit = new VisitorVisit
         {
+            TenantId = ResolveTenantId(user),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             PreRegistrationReference = $"EXP-{DateTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
@@ -997,6 +1001,8 @@ public class VisitorService : IVisitorService
         var empIds = await _db.Employees.AsNoTracking().Where(e => e.UserId == userId).Select(e => e.Id).ToListAsync();
         return query.Where(v => empIds.Contains(v.HostEmployeeId));
     }
+
+    private static Guid ResolveTenantId(ClaimsPrincipal user) => TenantClaims.ResolveTenantId(user);
 
     private async Task EnsureCanViewVisitAsync(ClaimsPrincipal user, VisitorVisit visit)
     {

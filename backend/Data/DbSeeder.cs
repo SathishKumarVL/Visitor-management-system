@@ -21,13 +21,19 @@ public static class DbSeeder
         await context.Database.MigrateAsync();
         await EnsureColumnWidthsAsync(context);
 
+        var tenant = await EnsureDefaultTenantAsync(context);
+        var tenantId = tenant.Id;
+
         foreach (var role in AppRoles.All)
         {
             if (!await roleManager.RoleExistsAsync(role))
                 await roleManager.CreateAsync(new IdentityRole(role));
         }
 
-        if (!await context.Departments.AnyAsync())
+        // Backfill tenant ids for legacy rows (idempotent).
+        await BackfillTenantIdsAsync(context, tenantId);
+
+        if (!await context.Departments.IgnoreQueryFilters().AnyAsync())
         {
             var departments = new (string Name, string Code, int Order)[]
             {
@@ -49,6 +55,7 @@ public static class DbSeeder
             {
                 context.Departments.Add(new Department
                 {
+                    TenantId = tenantId,
                     Name = d.Name,
                     Code = d.Code,
                     SortOrder = d.Order,
@@ -58,7 +65,7 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        if (!await context.VisitPurposes.AnyAsync())
+        if (!await context.VisitPurposes.IgnoreQueryFilters().AnyAsync())
         {
             var purposes = new[]
             {
@@ -72,6 +79,7 @@ public static class DbSeeder
             {
                 context.VisitPurposes.Add(new VisitPurpose
                 {
+                    TenantId = tenantId,
                     Name = purposes[i],
                     SortOrder = i + 1,
                     CreatedBy = "system"
@@ -80,9 +88,9 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        await VisitPurposeDefaults.EnsureOthersPurposeAsync(context);
+        await VisitPurposeDefaults.EnsureOthersPurposeAsync(context, tenantId);
 
-        if (!await context.Locations.AnyAsync())
+        if (!await context.Locations.IgnoreQueryFilters().AnyAsync())
         {
             var locations = new (string Name, bool Plant, bool Other, int Order)[]
             {
@@ -101,6 +109,7 @@ public static class DbSeeder
             {
                 context.Locations.Add(new Location
                 {
+                    TenantId = tenantId,
                     Name = loc.Name,
                     RequiresPlantNumber = loc.Plant,
                     RequiresOtherText = loc.Other,
@@ -129,13 +138,13 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        if (!await context.SystemSettings.AnyAsync())
+        if (!await context.SystemSettings.IgnoreQueryFilters().AnyAsync())
         {
             var defaults = new Dictionary<string, string>
             {
                 ["CompanyName"] = "TIAANO",
                 ["LogoPath"] = "/branding/tiaano-logo.png",
-                ["VisitorIdPrefix"] = "TIA",
+                ["VisitorIdPrefix"] = "VMS",
                 ["VisitorPassValidityHours"] = "12",
                 ["ApprovalRequired"] = "false",
                 ["WalkInApprovalRequired"] = "false",
@@ -150,6 +159,7 @@ public static class DbSeeder
             {
                 context.SystemSettings.Add(new SystemSetting
                 {
+                    TenantId = tenantId,
                     Key = kv.Key,
                     Value = kv.Value,
                     UpdatedBy = "system"
@@ -161,10 +171,10 @@ public static class DbSeeder
         // Reception walk-ins must not wait for host approval — force off for existing DBs too.
         foreach (var key in new[] { "ApprovalRequired", "WalkInApprovalRequired" })
         {
-            var setting = await context.SystemSettings.FirstOrDefaultAsync(s => s.Key == key);
+            var setting = await context.SystemSettings.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Key == key && s.TenantId == tenantId);
             if (setting is null)
             {
-                context.SystemSettings.Add(new SystemSetting { Key = key, Value = "false", UpdatedBy = "system" });
+                context.SystemSettings.Add(new SystemSetting { TenantId = tenantId, Key = key, Value = "false", UpdatedBy = "system" });
             }
             else if (!string.Equals(setting.Value, "false", StringComparison.OrdinalIgnoreCase))
             {
@@ -176,7 +186,7 @@ public static class DbSeeder
         await context.SaveChangesAsync();
 
         // Clear any leftover pending-approval visits (approvals are disabled).
-        var pendingVisits = await context.VisitorVisits
+        var pendingVisits = await context.VisitorVisits.IgnoreQueryFilters()
             .Where(v => v.Status == VisitStatus.PendingApproval)
             .ToListAsync();
         if (pendingVisits.Count > 0)
@@ -190,34 +200,140 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        var adminDept = await context.Departments.FirstAsync(d => d.Code == "ADMIN");
-        var productionDept = await context.Departments.FirstAsync(d => d.Code == "PROD");
-        var mdDept = await context.Departments.FirstAsync(d => d.Code == "MD");
+        var adminDept = await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "ADMIN" && d.TenantId == tenantId);
+        var productionDept = await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "PROD" && d.TenantId == tenantId);
+        var mdDept = await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "MD" && d.TenantId == tenantId);
 
-        if (!await context.Employees.AnyAsync())
+        if (!await context.Employees.IgnoreQueryFilters().AnyAsync(e => e.TenantId == tenantId))
         {
             context.Employees.AddRange(
-                new Employee { FullName = "Ramesh Kumar", Email = "ramesh.host@tiaano.local", DepartmentId = productionDept.Id, Intercom = "201", Designation = "Production Manager", CreatedBy = "system" },
-                new Employee { FullName = "Priya Sharma", Email = "priya.host@tiaano.local", DepartmentId = adminDept.Id, Intercom = "101", Designation = "Admin Manager", CreatedBy = "system" },
-                new Employee { FullName = "Anil Mehta", Email = "anil.md@tiaano.local", DepartmentId = mdDept.Id, Intercom = "001", Designation = "Managing Director", CreatedBy = "system" },
-                new Employee { FullName = "Sneha Patel", Email = "sneha.qc@tiaano.local", DepartmentId = (await context.Departments.FirstAsync(d => d.Code == "QC")).Id, Intercom = "301", Designation = "QC Lead", CreatedBy = "system" }
+                new Employee { TenantId = tenantId, FullName = "Ramesh Kumar", Email = "ramesh.host@tiaano.local", DepartmentId = productionDept.Id, Intercom = "201", Designation = "Production Manager", CreatedBy = "system" },
+                new Employee { TenantId = tenantId, FullName = "Priya Sharma", Email = "priya.host@tiaano.local", DepartmentId = adminDept.Id, Intercom = "101", Designation = "Admin Manager", CreatedBy = "system" },
+                new Employee { TenantId = tenantId, FullName = "Anil Mehta", Email = "anil.md@tiaano.local", DepartmentId = mdDept.Id, Intercom = "001", Designation = "Managing Director", CreatedBy = "system" },
+                new Employee { TenantId = tenantId, FullName = "Sneha Patel", Email = "sneha.qc@tiaano.local", DepartmentId = (await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "QC" && d.TenantId == tenantId)).Id, Intercom = "301", Designation = "QC Lead", CreatedBy = "system" }
             );
             await context.SaveChangesAsync();
         }
 
         var seedPassword = SecretConfiguration.GetSeedPasswordForCreateOnly(config);
-        await EnsureUserAsync(userManager, context, "superadmin", "Super Administrator", "superadmin@tiaano.local", AppRoles.SuperAdmin, adminDept.Id, seedPassword, false);
-        await EnsureUserAsync(userManager, context, "admin", "System Admin", "admin@tiaano.local", AppRoles.Admin, adminDept.Id, seedPassword, true);
-        await EnsureUserAsync(userManager, context, "reception", "Reception Desk", "reception@tiaano.local", AppRoles.Reception, adminDept.Id, seedPassword, true);
-        await EnsureUserAsync(userManager, context, "security", "Security Desk", "security@tiaano.local", AppRoles.Security, adminDept.Id, seedPassword, true);
+        await EnsureUserAsync(userManager, context, tenantId, "superadmin", "Super Administrator", "superadmin@tiaano.local", AppRoles.SuperAdmin, adminDept.Id, seedPassword, false);
+        await EnsureUserAsync(userManager, context, tenantId, "admin", "System Admin", "admin@tiaano.local", AppRoles.Admin, adminDept.Id, seedPassword, true);
+        await EnsureUserAsync(userManager, context, tenantId, "reception", "Reception Desk", "reception@tiaano.local", AppRoles.Reception, adminDept.Id, seedPassword, true);
+        await EnsureUserAsync(userManager, context, tenantId, "security", "Security Desk", "security@tiaano.local", AppRoles.Security, adminDept.Id, seedPassword, true);
 
-        var hostUser = await EnsureUserAsync(userManager, context, "host", "Ramesh Kumar", "ramesh.host@tiaano.local", AppRoles.Host, productionDept.Id, seedPassword, true);
-        var hostEmp = await context.Employees.FirstOrDefaultAsync(e => e.Email == "ramesh.host@tiaano.local");
+        var hostUser = await EnsureUserAsync(userManager, context, tenantId, "host", "Ramesh Kumar", "ramesh.host@tiaano.local", AppRoles.Host, productionDept.Id, seedPassword, true);
+        var hostEmp = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.Email == "ramesh.host@tiaano.local" && e.TenantId == tenantId);
         if (hostEmp is not null && string.IsNullOrEmpty(hostEmp.UserId))
         {
             hostEmp.UserId = hostUser.Id;
             await context.SaveChangesAsync();
         }
+
+        await EnsureProductFoundationAsync(context, tenantId);
+    }
+
+    private static async Task EnsureProductFoundationAsync(ApplicationDbContext context, Guid tenantId)
+    {
+        if (!await context.ProductModules.AnyAsync())
+        {
+            context.ProductModules.AddRange(
+                new Models.Product.ProductModule { ModuleKey = "visitor-management", Name = "Visitor Management", IsCore = true, Version = "1.0.0" },
+                new Models.Product.ProductModule { ModuleKey = "emergency-management", Name = "Emergency Management", IsCore = false, Version = "0.1.0" },
+                new Models.Product.ProductModule { ModuleKey = "contractor-management", Name = "Contractor Management", IsCore = false, Version = "0.0.0" },
+                new Models.Product.ProductModule { ModuleKey = "analytics", Name = "Analytics", IsCore = false, Version = "0.0.0" }
+            );
+            await context.SaveChangesAsync();
+        }
+
+        if (!await context.TenantLicenses.AnyAsync(l => l.TenantId == tenantId))
+        {
+            context.TenantLicenses.Add(new Models.Product.TenantLicense
+            {
+                TenantId = tenantId,
+                Edition = "Professional",
+                MaxSites = 5,
+                MaxUsers = 100,
+                IsActive = true,
+                Status = "Active",
+                GraceDaysAfterExpiry = 30
+            });
+        }
+
+        foreach (var key in new[] { "visitor-management", "emergency-management" })
+        {
+            if (!await context.TenantModuleEntitlements.AnyAsync(m => m.TenantId == tenantId && m.ModuleKey == key))
+            {
+                context.TenantModuleEntitlements.Add(new Models.Product.TenantModuleEntitlement
+                {
+                    TenantId = tenantId,
+                    ModuleKey = key,
+                    IsEnabled = true
+                });
+            }
+        }
+
+        if (!await context.ApplicationReleases.AnyAsync(r => r.Version == "0.2.0-overnight"))
+        {
+            context.ApplicationReleases.Add(new Models.Product.ApplicationRelease
+            {
+                Version = "0.2.0-overnight",
+                DatabaseVersion = "AddProductizationFoundation",
+                Notes = "Overnight autonomous hardening: QR removed, secrets contained, media secured, tenant foundation, productization scaffold."
+            });
+        }
+
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task<Tenant> EnsureDefaultTenantAsync(ApplicationDbContext context)
+    {
+        var tenant = await context.Tenants.FirstOrDefaultAsync(t => t.Id == WellKnownTenants.TiaanoId)
+                     ?? await context.Tenants.FirstOrDefaultAsync(t => t.Code == WellKnownTenants.TiaanoCode);
+        if (tenant is null)
+        {
+            tenant = new Tenant
+            {
+                Id = WellKnownTenants.TiaanoId,
+                Code = WellKnownTenants.TiaanoCode,
+                Name = "TIAANO",
+                LogoPath = "/branding/tiaano-logo.png",
+                PrimaryColor = "#0F766E",
+                SecondaryColor = "#14B8A6",
+                IsActive = true
+            };
+            context.Tenants.Add(tenant);
+            await context.SaveChangesAsync();
+        }
+
+        if (!await context.Sites.AnyAsync(s => s.TenantId == tenant.Id))
+        {
+            context.Sites.Add(new Site
+            {
+                TenantId = tenant.Id,
+                Name = "Headquarters",
+                Code = "HQ",
+                IsDefault = true,
+                IsActive = true
+            });
+            await context.SaveChangesAsync();
+        }
+
+        return tenant;
+    }
+
+    private static async Task BackfillTenantIdsAsync(ApplicationDbContext context, Guid tenantId)
+    {
+        await context.Database.ExecuteSqlRawAsync("""
+            UPDATE AspNetUsers SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
+            UPDATE Departments SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE Employees SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE VisitPurposes SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE Locations SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE Visitors SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE VisitorVisits SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE SystemSettings SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE AuditLogs SET TenantId = {0} WHERE TenantId IS NULL;
+            """, tenantId);
     }
 
     private static async Task EnsureColumnWidthsAsync(ApplicationDbContext context)
@@ -242,6 +358,7 @@ public static class DbSeeder
     private static async Task<ApplicationUser> EnsureUserAsync(
         UserManager<ApplicationUser> userManager,
         ApplicationDbContext context,
+        Guid tenantId,
         string username,
         string fullName,
         string email,
@@ -250,7 +367,7 @@ public static class DbSeeder
         string? password,
         bool mustChangePassword)
     {
-        var user = await userManager.FindByNameAsync(username);
+        var user = await userManager.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.UserName == username);
         if (user is null)
         {
             if (string.IsNullOrWhiteSpace(password))
@@ -266,6 +383,7 @@ public static class DbSeeder
                 Email = email,
                 EmailConfirmed = true,
                 FullName = fullName,
+                TenantId = tenantId,
                 DepartmentId = departmentId,
                 IsActive = true,
                 MustChangePassword = mustChangePassword,
@@ -274,6 +392,11 @@ public static class DbSeeder
             var result = await userManager.CreateAsync(user, password);
             if (!result.Succeeded)
                 throw new InvalidOperationException($"Failed to create user {username}: {string.Join(", ", result.Errors.Select(e => e.Description))}");
+        }
+        else if (user.TenantId == Guid.Empty)
+        {
+            user.TenantId = tenantId;
+            await userManager.UpdateAsync(user);
         }
         // Existing users: never reset passwords on startup.
 
@@ -288,14 +411,21 @@ public static class VisitPurposeDefaults
 {
     public const string OthersName = "Others";
 
-    public static async Task<VisitPurpose> EnsureOthersPurposeAsync(ApplicationDbContext context)
+    public static Task<VisitPurpose> EnsureOthersPurposeAsync(ApplicationDbContext context) =>
+        EnsureOthersPurposeAsync(context, WellKnownTenants.TiaanoId);
+
+    public static async Task<VisitPurpose> EnsureOthersPurposeAsync(ApplicationDbContext context, Guid tenantId)
     {
-        var existing = await context.VisitPurposes.FirstOrDefaultAsync(p => p.Name == OthersName);
+        var existing = await context.VisitPurposes.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.Name == OthersName && p.TenantId == tenantId);
         if (existing != null) return existing;
 
-        var maxOrder = await context.VisitPurposes.MaxAsync(p => (int?)p.SortOrder) ?? 0;
+        var maxOrder = await context.VisitPurposes.IgnoreQueryFilters()
+            .Where(p => p.TenantId == tenantId)
+            .MaxAsync(p => (int?)p.SortOrder) ?? 0;
         var created = new VisitPurpose
         {
+            TenantId = tenantId,
             Name = OthersName,
             SortOrder = maxOrder + 1,
             IsActive = true,

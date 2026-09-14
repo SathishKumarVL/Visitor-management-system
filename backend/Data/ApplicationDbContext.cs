@@ -1,15 +1,22 @@
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Models.Product;
 
 namespace Tiaano.Vms.Api.Data;
 
 public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 {
-    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
+    private readonly ITenantContext? _tenant;
+
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, ITenantContext? tenant = null)
+        : base(options)
     {
+        _tenant = tenant;
     }
 
+    public DbSet<Tenant> Tenants => Set<Tenant>();
+    public DbSet<Site> Sites => Set<Site>();
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<VisitPurpose> VisitPurposes => Set<VisitPurpose>();
@@ -29,15 +36,35 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<ProductModule> ProductModules => Set<ProductModule>();
+    public DbSet<TenantModuleEntitlement> TenantModuleEntitlements => Set<TenantModuleEntitlement>();
+    public DbSet<TenantLicense> TenantLicenses => Set<TenantLicense>();
+    public DbSet<FeatureFlag> FeatureFlags => Set<FeatureFlag>();
+    public DbSet<ApplicationRelease> ApplicationReleases => Set<ApplicationRelease>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
 
+        builder.Entity<Tenant>(e =>
+        {
+            e.HasIndex(x => x.Code).IsUnique();
+            e.Property(x => x.Name).IsRequired();
+        });
+
+        builder.Entity<Site>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Code });
+            e.HasOne(x => x.Tenant).WithMany(t => t.Sites).HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
         builder.Entity<Department>(e =>
         {
-            e.HasIndex(x => x.Name);
+            e.HasIndex(x => new { x.TenantId, x.Name });
             e.Property(x => x.Name).IsRequired();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
         builder.Entity<Employee>(e =>
@@ -47,25 +74,32 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.User).WithMany(u => u.EmployeeProfiles).HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
         builder.Entity<ApplicationUser>(e =>
         {
             e.HasOne(x => x.Department).WithMany(d => d.Users).HasForeignKey(x => x.DepartmentId)
                 .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
         builder.Entity<Visitor>(e =>
         {
-            e.HasIndex(x => x.VisitorNumber).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.VisitorNumber }).IsUnique();
             e.HasIndex(x => x.FullName);
             e.HasIndex(x => x.Phone);
             e.HasIndex(x => x.CompanyName);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
         builder.Entity<VisitorVisit>(e =>
         {
-            e.HasIndex(x => x.VisitNumber).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.VisitNumber }).IsUnique();
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.VisitDate);
             e.HasIndex(x => x.PreRegistrationReference);
@@ -85,6 +119,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.NoAction);
             e.HasOne(x => x.CheckedOutByUser).WithMany().HasForeignKey(x => x.CheckedOutByUserId)
                 .OnDelete(DeleteBehavior.NoAction);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
         builder.Entity<VisitorVisitPurpose>(e =>
@@ -146,15 +183,29 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => x.Entity);
             e.HasIndex(x => x.Action);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
         builder.Entity<SystemSetting>(e =>
         {
-            e.HasIndex(x => x.Key).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
         });
 
-        builder.Entity<VisitPurpose>().HasIndex(x => x.Name);
-        builder.Entity<Location>().HasIndex(x => x.Name);
+        builder.Entity<VisitPurpose>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+        });
+
+        builder.Entity<Location>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+        });
 
         builder.Entity<RefreshToken>(e =>
         {
@@ -163,5 +214,19 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        builder.Entity<ProductModule>(e => e.HasIndex(x => x.ModuleKey).IsUnique());
+        builder.Entity<TenantModuleEntitlement>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.ModuleKey }).IsUnique();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<TenantLicense>(e =>
+        {
+            e.HasIndex(x => x.TenantId);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<FeatureFlag>(e => e.HasIndex(x => new { x.TenantId, x.Key }));
+        builder.Entity<ApplicationRelease>(e => e.HasIndex(x => x.Version));
     }
 }

@@ -19,6 +19,7 @@ export type MenuKey =
   | 'host'
   | 'passes'
   | 'verify'
+  | 'emergency'
 
 export interface MenuItem {
   key: MenuKey
@@ -37,6 +38,7 @@ export const MENU_ITEMS: MenuItem[] = [
   { key: 'expected', label: 'Expected Visitors', path: '/visitors/expected', roles: ['SuperAdmin', 'Admin', 'Reception', 'Host', 'Security'] },
   { key: 'passes', label: 'Visitor Passes', path: '/passes', roles: ['SuperAdmin', 'Admin', 'Reception', 'Security'] },
   { key: 'verify', label: 'Verify Visitor', path: '/verify', roles: ['SuperAdmin', 'Admin', 'Reception', 'Security'] },
+  { key: 'emergency', label: 'Emergency', path: '/emergency', roles: ['SuperAdmin', 'Admin', 'Security'] },
   { key: 'reports', label: 'Reports', path: '/reports', roles: ['SuperAdmin', 'Admin', 'Reception'] },
   { key: 'departments', label: 'Departments', path: '/masters/departments', roles: ['SuperAdmin', 'Admin'] },
   { key: 'hosts', label: 'Hosts', path: '/masters/hosts', roles: ['SuperAdmin', 'Admin'] },

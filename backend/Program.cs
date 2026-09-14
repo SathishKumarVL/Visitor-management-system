@@ -72,6 +72,7 @@ builder.Services.AddRateLimiter(options =>
 });
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ITenantContext, TenantContext>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
@@ -80,7 +81,7 @@ builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
-builder.Services.AddSingleton<IMediaStorageService, MediaStorageService>();
+builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -153,6 +154,7 @@ app.UseStaticFiles(new StaticFileOptions
 app.UseCors("Frontend");
 app.UseRateLimiter();
 app.UseAuthentication();
+app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseMiddleware<MustChangePasswordMiddleware>();
 app.UseAuthorization();
 app.MapControllers();

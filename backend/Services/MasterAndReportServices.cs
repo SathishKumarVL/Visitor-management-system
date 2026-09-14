@@ -35,12 +35,16 @@ public class MasterDataService : IMasterDataService
 {
     private readonly ApplicationDbContext _db;
     private readonly IAuditService _audit;
+    private readonly ITenantContext _tenant;
 
-    public MasterDataService(ApplicationDbContext db, IAuditService audit)
+    public MasterDataService(ApplicationDbContext db, IAuditService audit, ITenantContext tenant)
     {
         _db = db;
         _audit = audit;
+        _tenant = tenant;
     }
+
+    private Guid CurrentTenantId => _tenant.TenantId ?? WellKnownTenants.TiaanoId;
 
     public async Task<IReadOnlyList<MasterItemDto>> GetDepartmentsAsync(bool activeOnly = true)
     {
@@ -62,7 +66,7 @@ public class MasterDataService : IMasterDataService
         }
         else
         {
-            entity = new Department { CreatedBy = user };
+            entity = new Department { TenantId = CurrentTenantId, CreatedBy = user };
             _db.Departments.Add(entity);
         }
         entity.Name = request.Name.Trim();
@@ -107,7 +111,7 @@ public class MasterDataService : IMasterDataService
         }
         else
         {
-            entity = new Employee { CreatedBy = user };
+            entity = new Employee { TenantId = CurrentTenantId, CreatedBy = user };
             _db.Employees.Add(entity);
         }
         entity.FullName = request.FullName.Trim();
@@ -159,7 +163,7 @@ public class MasterDataService : IMasterDataService
             entity = await _db.VisitPurposes.FindAsync(id) ?? throw new InvalidOperationException("Purpose not found.");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
-        else { entity = new VisitPurpose { CreatedBy = user }; _db.VisitPurposes.Add(entity); }
+        else { entity = new VisitPurpose { TenantId = CurrentTenantId, CreatedBy = user }; _db.VisitPurposes.Add(entity); }
         entity.Name = request.Name.Trim(); entity.SortOrder = request.SortOrder; entity.IsActive = request.IsActive;
         await _db.SaveChangesAsync();
         return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder };
@@ -187,7 +191,7 @@ public class MasterDataService : IMasterDataService
             entity = await _db.Locations.FindAsync(id) ?? throw new InvalidOperationException("Location not found.");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
-        else { entity = new Location { CreatedBy = user }; _db.Locations.Add(entity); }
+        else { entity = new Location { TenantId = CurrentTenantId, CreatedBy = user }; _db.Locations.Add(entity); }
         entity.Name = request.Name.Trim();
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.IsActive;
@@ -502,12 +506,14 @@ public class UserAdminService : IUserAdminService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ApplicationDbContext _db;
     private readonly IAuditService _audit;
+    private readonly ITenantContext _tenant;
 
-    public UserAdminService(UserManager<ApplicationUser> userManager, ApplicationDbContext db, IAuditService audit)
+    public UserAdminService(UserManager<ApplicationUser> userManager, ApplicationDbContext db, IAuditService audit, ITenantContext tenant)
     {
         _userManager = userManager;
         _db = db;
         _audit = audit;
+        _tenant = tenant;
     }
 
     public async Task<IReadOnlyList<UserDto>> GetUsersAsync()
@@ -542,6 +548,7 @@ public class UserAdminService : IUserAdminService
             UserName = request.Username.Trim(),
             Email = request.Email.Trim(),
             FullName = request.FullName.Trim(),
+            TenantId = _tenant.TenantId ?? WellKnownTenants.TiaanoId,
             DepartmentId = request.DepartmentId,
             IsActive = true,
             MustChangePassword = true,
