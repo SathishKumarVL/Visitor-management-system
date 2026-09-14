@@ -4,8 +4,9 @@ import { apiErrorMessage, passApi } from '../lib/api'
 import type { PassDto } from '../types/api'
 import { Alert, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
-import { assetUrl, formatDateTime } from '../lib/utils'
+import { formatDateTime } from '../lib/utils'
 import { BrandLogo } from '../components/BrandLogo'
+import { SecureImage } from '../components/SecureImage'
 import { useSettingsStore } from '../store/settingsStore'
 
 export function PassPrintPage() {
@@ -76,7 +77,11 @@ export function PassPrintPage() {
           </div>
           <div className="flex flex-col items-center gap-3">
             {pass.photoUrl ? (
-              <img src={assetUrl(pass.photoUrl)} alt={pass.visitorName} className="h-28 w-28 rounded-2xl object-cover" />
+              <SecureImage
+                src={pass.photoUrl}
+                alt={pass.visitorName}
+                className="h-28 w-28 rounded-2xl object-cover"
+              />
             ) : (
               <div className="flex h-28 w-28 items-center justify-center rounded-2xl bg-mint text-xs text-ink-muted">
                 No photo

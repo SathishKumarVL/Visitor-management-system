@@ -30,6 +30,17 @@ export interface LoginResponse {
   token: string
   expiresAt: string
   user: UserDto
+  refreshToken?: string
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string
+  newPassword: string
+}
+
+export interface PublicBrandingDto {
+  companyName: string
+  logoPath: string
 }
 
 export interface MasterItemDto {

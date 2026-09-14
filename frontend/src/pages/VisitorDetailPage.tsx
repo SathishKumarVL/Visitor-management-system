@@ -5,9 +5,10 @@ import type { MasterItemDto, VisitorDetailDto } from '../types/api'
 import { Alert, Badge, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldLabel, TextSelect } from '../components/ui/Field'
-import { assetUrl, formatDate, formatDateTime, formatDuration, statusBadgeClass } from '../lib/utils'
+import { formatDate, formatDateTime, formatDuration, statusBadgeClass } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
+import { SecureImage } from '../components/SecureImage'
 
 export function VisitorDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -125,7 +126,11 @@ export function VisitorDetailPage() {
       <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
         <Panel className="text-center">
           {visitor.photoUrl ? (
-            <img src={assetUrl(visitor.photoUrl)} alt={visitor.visitorName} className="mx-auto h-48 w-48 rounded-lg object-cover" />
+            <SecureImage
+              src={visitor.photoUrl}
+              alt={visitor.visitorName}
+              className="mx-auto h-48 w-48 rounded-lg object-cover"
+            />
           ) : (
             <div className="mx-auto flex h-48 w-48 items-center justify-center rounded-lg bg-gray-100 text-gray-400">No photo</div>
           )}

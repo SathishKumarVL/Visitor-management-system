@@ -5,7 +5,7 @@ import type { VisitorListItemDto } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
-import { assetUrl } from '../lib/utils'
+import { SecureImage } from '../components/SecureImage'
 import {
   descriptorFromElement,
   descriptorFromImageUrl,
@@ -266,7 +266,7 @@ export function FaceCheckoutPage() {
             {message ? <div className="mt-3"><Alert tone="success">{message}</Alert></div> : null}
             {matched ? (
               <div className="mt-3 flex items-center gap-3 rounded-md border border-gray-100 p-3">
-                <img src={assetUrl(matched.photoUrl)} alt="" className="h-16 w-16 rounded object-cover" />
+                <SecureImage src={matched.photoUrl} alt="" className="h-16 w-16 rounded object-cover" />
                 <div>
                   <div className="font-semibold text-steel">{matched.visitorName}</div>
                   <div className="text-sm text-gray-500">{matched.companyName}</div>

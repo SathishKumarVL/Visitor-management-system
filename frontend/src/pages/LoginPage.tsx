@@ -34,7 +34,9 @@ export function LoginPage() {
     setError(null)
     try {
       const dest = await login(username.trim(), password, rememberMe)
-      navigate(params.get('redirect') || dest, { replace: true })
+      void loadSettings()
+      const redirect = params.get('redirect')
+      navigate(dest === '/change-password' ? dest : redirect || dest, { replace: true })
     } catch (err) {
       setError(apiErrorMessage(err, 'Invalid username or password.'))
     }

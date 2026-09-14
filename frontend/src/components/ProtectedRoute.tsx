@@ -12,6 +12,9 @@ export function ProtectedRoute({ roles }: { roles?: Role[] }) {
   if (!token || !user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
+  if (user.mustChangePassword && location.pathname !== '/change-password') {
+    return <Navigate to="/change-password" replace />
+  }
   if (roles && !hasAnyRole(user.roles, roles)) {
     return <Navigate to="/unauthorized" replace />
   }

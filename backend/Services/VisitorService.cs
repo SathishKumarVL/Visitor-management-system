@@ -14,7 +14,7 @@ public interface IVisitorService
 {
     Task<VisitorDetailDto> RegisterAsync(RegisterVisitorRequest request, ClaimsPrincipal user, string webRoot);
     Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user);
-    Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, int warningMinutes);
+    Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes);
     Task<VisitorDetailDto?> GetAsync(Guid visitId, ClaimsPrincipal user, string encryptionKey);
     Task<VisitorListItemDto> ApproveAsync(Guid visitId, ClaimsPrincipal user);
     Task<VisitorListItemDto> RejectAsync(Guid visitId, string reason, ClaimsPrincipal user);
@@ -39,6 +39,7 @@ public class VisitorService : IVisitorService
     private readonly IHostEnvironment _env;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<VisitorService> _logger;
+    private readonly IMediaStorageService _media;
     private static readonly Regex IndianPhone = new(@"^(\+91[\-\s]?)?[6-9]\d{9}$|^0\d{2,4}[\-\s]?\d{6,8}$", RegexOptions.Compiled);
 
     public VisitorService(
@@ -49,7 +50,8 @@ public class VisitorService : IVisitorService
         IConfiguration config,
         IHostEnvironment env,
         IServiceScopeFactory scopeFactory,
-        ILogger<VisitorService> logger)
+        ILogger<VisitorService> logger,
+        IMediaStorageService media)
     {
         _db = db;
         _settings = settings;
@@ -59,6 +61,7 @@ public class VisitorService : IVisitorService
         _env = env;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _media = media;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -276,9 +279,10 @@ public class VisitorService : IVisitorService
         return (await BuildDetailAsync(visit.Id, user, EncryptionKey(), includeAuditHistory: false))!;
     }
 
-    public async Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, int warningMinutes)
+    public async Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes)
     {
         var query = _db.VisitorVisits.AsNoTracking();
+        query = await ApplyHostScopeAsync(query, user);
         ApplyFilters(ref query, request);
 
         var total = await query.CountAsync();
@@ -304,8 +308,10 @@ public class VisitorService : IVisitorService
     {
         var visit = await DetailVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId);
         if (visit is null) return null;
+        await EnsureCanViewVisitAsync(user, visit);
 
-        var canViewFullId = user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin) || user.IsInRole(AppRoles.Security);
+        // Full decrypted ID numbers: SuperAdmin/Admin/Reception only. Security sees masked values.
+        var canViewFullId = user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin) || user.IsInRole(AppRoles.Reception);
         var doc = await _db.VisitorDocuments.AsNoTracking().Include(d => d.IdType)
             .Where(d => d.VisitorVisitId == visitId || d.VisitorId == visit.VisitorId)
             .OrderByDescending(d => d.CreatedAt)
@@ -787,7 +793,7 @@ public class VisitorService : IVisitorService
                 StatusLabel = v.Status.ToString(),
                 Purposes = v.Purposes,
                 Locations = v.Locations,
-                PhotoUrl = string.IsNullOrWhiteSpace(v.PhotoPath) ? null : $"/uploads/{Path.GetFileName(v.PhotoPath)}",
+                PhotoUrl = string.IsNullOrWhiteSpace(v.PhotoPath) ? null : _media.ToPublicApiPath(Path.GetFileName(v.PhotoPath)),
                 CheckInAt = v.CheckInAt,
                 CheckOutAt = v.CheckOutAt,
                 DurationMinutes = duration,
@@ -913,7 +919,7 @@ public class VisitorService : IVisitorService
             StatusLabel = visit.Status.ToString(),
             Purposes = visit.VisitPurposes.Select(p => p.VisitPurpose.Name).ToList(),
             Locations = visit.VisitLocations.Select(l => l.Location.Name).ToList(),
-            PhotoUrl = photo is null ? null : $"/uploads/{Path.GetFileName(photo.FilePath)}",
+            PhotoUrl = photo is null ? null : _media.ToPublicApiPath(Path.GetFileName(photo.FilePath)),
             CheckInAt = visit.CheckInAt,
             CheckOutAt = visit.CheckOutAt,
             DurationMinutes = duration,
@@ -949,14 +955,18 @@ public class VisitorService : IVisitorService
     private async Task SavePhotoAsync(Guid visitorId, Guid visitId, string base64, string webRoot, string? userName)
     {
         var raw = base64.Contains(',') ? base64.Split(',')[1] : base64;
-        var bytes = Convert.FromBase64String(raw);
-        if (bytes.Length > 5_000_000) throw new InvalidOperationException("Photo exceeds 5MB limit.");
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(raw);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Photo data is invalid.");
+        }
 
-        var uploads = Path.Combine(webRoot, "uploads");
-        Directory.CreateDirectory(uploads);
-        var fileName = $"{visitorId:N}_{DateTime.UtcNow:yyyyMMddHHmmss}.jpg";
-        var path = Path.Combine(uploads, fileName);
-        await File.WriteAllBytesAsync(path, bytes);
+        var fileName = await _media.SaveVisitorPhotoAsync(visitorId, bytes);
+        _ = _media.IsAllowedImage(bytes, out var contentType);
 
         var existing = await _db.VisitorPhotos.Where(p => p.VisitorId == visitorId && p.IsPrimary).ToListAsync();
         foreach (var p in existing) p.IsPrimary = false;
@@ -966,12 +976,42 @@ public class VisitorService : IVisitorService
             VisitorId = visitorId,
             VisitorVisitId = visitId,
             FilePath = fileName,
-            ContentType = "image/jpeg",
+            ContentType = contentType,
             FileSizeBytes = bytes.Length,
             IsPrimary = true,
             CreatedBy = userName
         });
         await _db.SaveChangesAsync();
+    }
+
+    private async Task<IQueryable<VisitorVisit>> ApplyHostScopeAsync(IQueryable<VisitorVisit> query, ClaimsPrincipal user)
+    {
+        if (user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin)
+            || user.IsInRole(AppRoles.Reception) || user.IsInRole(AppRoles.Security))
+            return query;
+
+        if (!user.IsInRole(AppRoles.Host))
+            throw new UnauthorizedAccessException("Not authorized to search visitors.");
+
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        var empIds = await _db.Employees.AsNoTracking().Where(e => e.UserId == userId).Select(e => e.Id).ToListAsync();
+        return query.Where(v => empIds.Contains(v.HostEmployeeId));
+    }
+
+    private async Task EnsureCanViewVisitAsync(ClaimsPrincipal user, VisitorVisit visit)
+    {
+        if (user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin)
+            || user.IsInRole(AppRoles.Reception) || user.IsInRole(AppRoles.Security))
+            return;
+
+        if (!user.IsInRole(AppRoles.Host))
+            throw new UnauthorizedAccessException("Not authorized to view this visitor.");
+
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        var isHost = await _db.Employees.AsNoTracking()
+            .AnyAsync(e => e.UserId == userId && e.Id == visit.HostEmployeeId);
+        if (!isHost)
+            throw new UnauthorizedAccessException("Hosts may only view their own visitors.");
     }
 
     private async Task<string> NextVisitorNumberAsync(string prefix)

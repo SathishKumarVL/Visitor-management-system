@@ -27,6 +27,7 @@ import { HostsPage } from './pages/HostsPage'
 import { UsersPage } from './pages/UsersPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AuditLogsPage } from './pages/AuditLogsPage'
+import { ChangePasswordPage } from './pages/ChangePasswordPage'
 
 export default function App() {
   const bootstrap = useAuthStore((s) => s.bootstrap)
@@ -53,6 +54,7 @@ export default function App() {
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<HomeRedirect />} />
+            <Route path="/change-password" element={<ChangePasswordPage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host']} />}>

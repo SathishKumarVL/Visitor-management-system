@@ -5,7 +5,8 @@ import type { PassDto } from '../types/api'
 import { Alert, PageHeader, Panel } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
-import { assetUrl, formatDateTime } from '../lib/utils'
+import { formatDateTime } from '../lib/utils'
+import { SecureImage } from '../components/SecureImage'
 
 function statusKey(status: string): string {
   return status.toLowerCase()
@@ -140,8 +141,8 @@ export function VerifyVisitorPage() {
               </div>
             </div>
             {pass.photoUrl ? (
-              <img
-                src={assetUrl(pass.photoUrl)}
+              <SecureImage
+                src={pass.photoUrl}
                 alt={pass.visitorName}
                 className="h-28 w-28 rounded-2xl object-cover"
               />

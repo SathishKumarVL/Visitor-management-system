@@ -21,8 +21,31 @@ public class LoginRequest
 public class LoginResponse
 {
     public string Token { get; set; } = string.Empty;
+    public string RefreshToken { get; set; } = string.Empty;
     public DateTime ExpiresAt { get; set; }
+    public DateTime RefreshExpiresAt { get; set; }
     public UserDto User { get; set; } = null!;
+}
+
+public class RefreshTokenRequest
+{
+    [Required]
+    public string RefreshToken { get; set; } = string.Empty;
+}
+
+public class ChangePasswordRequest
+{
+    [Required]
+    public string CurrentPassword { get; set; } = string.Empty;
+
+    [Required, MinLength(10)]
+    public string NewPassword { get; set; } = string.Empty;
+}
+
+public class PublicBrandingDto
+{
+    public string CompanyName { get; set; } = "TIAANO";
+    public string LogoPath { get; set; } = "/branding/tiaano-logo.png";
 }
 
 public class UserDto
@@ -54,7 +77,7 @@ public class CreateUserRequest
 
     public Guid? DepartmentId { get; set; }
 
-    [Required, MinLength(8)]
+    [Required, MinLength(10)]
     public string Password { get; set; } = string.Empty;
 }
 

@@ -1,4 +1,5 @@
 import * as faceapi from '@vladmandic/face-api'
+import { getStoredToken } from './api'
 import { assetUrl } from './utils'
 
 const MODEL_URL = '/models'
@@ -25,9 +26,32 @@ export function ensureFaceModelsLoaded(): Promise<void> {
 
 export type FaceDescriptor = Float32Array
 
+function isProtectedMedia(src: string): boolean {
+  return src.startsWith('/api/media') || src.startsWith('/uploads')
+}
+
+async function resolveImageSrc(url: string): Promise<{ src: string; revoke?: () => void }> {
+  if (isProtectedMedia(url)) {
+    const token = getStoredToken()
+    const headers: HeadersInit = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(url, { headers })
+    if (!res.ok) throw new Error(`Could not load face photo: ${url}`)
+    const blob = await res.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    return { src: objectUrl, revoke: () => URL.revokeObjectURL(objectUrl) }
+  }
+  return { src: assetUrl(url) }
+}
+
 export async function descriptorFromImageUrl(url: string): Promise<FaceDescriptor | null> {
-  const img = await loadImage(assetUrl(url))
-  return descriptorFromElement(img)
+  const resolved = await resolveImageSrc(url)
+  try {
+    const img = await loadImage(resolved.src)
+    return descriptorFromElement(img)
+  } finally {
+    resolved.revoke?.()
+  }
 }
 
 export async function descriptorFromElement(

@@ -1,6 +1,7 @@
-import axios, { type AxiosError } from 'axios'
+import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import type {
   ApiResponse,
+  ChangePasswordRequest,
   CreateEmployeeRequest,
   CreateUserRequest,
   DashboardDto,
@@ -11,6 +12,7 @@ import type {
   MasterUpsertRequest,
   PagedResult,
   PassDto,
+  PublicBrandingDto,
   RegisterVisitorRequest,
   SettingsDto,
   UpdateUserRequest,
@@ -22,6 +24,7 @@ import type {
 } from '../types/api'
 
 const TOKEN_KEY = 'tiaano_vms_token'
+const REFRESH_KEY = 'tiaano_vms_refresh'
 
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY)
@@ -34,9 +37,36 @@ export function storeToken(token: string, rememberMe: boolean) {
   store.setItem(TOKEN_KEY, token)
 }
 
+export function getStoredRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY) ?? sessionStorage.getItem(REFRESH_KEY)
+}
+
+export function storeRefreshToken(refreshToken: string, rememberMe: boolean) {
+  localStorage.removeItem(REFRESH_KEY)
+  sessionStorage.removeItem(REFRESH_KEY)
+  const store = rememberMe ? localStorage : sessionStorage
+  store.setItem(REFRESH_KEY, refreshToken)
+}
+
+export function clearRefreshToken() {
+  localStorage.removeItem(REFRESH_KEY)
+  sessionStorage.removeItem(REFRESH_KEY)
+}
+
+function prefersRememberMeStorage(): boolean {
+  return !!localStorage.getItem(TOKEN_KEY) || !!localStorage.getItem(REFRESH_KEY)
+}
+
+export function storeAuthTokens(token: string, refreshToken: string | undefined, rememberMe: boolean) {
+  storeToken(token, rememberMe)
+  if (refreshToken) storeRefreshToken(refreshToken, rememberMe)
+  else clearRefreshToken()
+}
+
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY)
   sessionStorage.removeItem(TOKEN_KEY)
+  clearRefreshToken()
 }
 
 export const api = axios.create({
@@ -53,19 +83,72 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+type RetriableConfig = InternalAxiosRequestConfig & { _retry?: boolean }
+
+let refreshPromise: Promise<string | null> | null = null
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = getStoredRefreshToken()
+  if (!refreshToken) return null
+
+  try {
+    const { data } = await axios.post<ApiResponse<LoginResponse>>(
+      '/api/auth/refresh',
+      { refreshToken },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 20000 },
+    )
+    if (!data.success || !data.data?.token) return null
+    storeAuthTokens(data.data.token, data.data.refreshToken ?? refreshToken, prefersRememberMeStorage())
+    return data.data.token
+  } catch {
+    return null
+  }
+}
+
+function redirectToLogin() {
+  clearToken()
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.assign(`/login?redirect=${encodeURIComponent(window.location.pathname)}`)
+  }
+}
+
 api.interceptors.response.use(
   (res) => res,
-  (error: AxiosError<ApiResponse<unknown>>) => {
+  async (error: AxiosError<ApiResponse<unknown>>) => {
     const status = error.response?.status
-    const url = error.config?.url ?? ''
-    const isLoginCall = url.includes('/auth/login')
-    if (status === 401 && !isLoginCall && getStoredToken()) {
-      clearToken()
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.assign(`/login?redirect=${encodeURIComponent(window.location.pathname)}`)
+    const original = error.config as RetriableConfig | undefined
+    const url = original?.url ?? ''
+    const isAuthBootstrap =
+      url.includes('/auth/login') || url.includes('/auth/refresh') || url.includes('/auth/logout')
+
+    if (status !== 401 || !original || isAuthBootstrap || original._retry) {
+      if (status === 401 && !isAuthBootstrap && getStoredToken() && !getStoredRefreshToken()) {
+        redirectToLogin()
       }
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+
+    if (!getStoredRefreshToken()) {
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
+    original._retry = true
+
+    if (!refreshPromise) {
+      refreshPromise = refreshAccessToken().finally(() => {
+        refreshPromise = null
+      })
+    }
+
+    const newToken = await refreshPromise
+    if (!newToken) {
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
+    original.headers.Authorization = `Bearer ${newToken}`
+    return api.request(original)
   },
 )
 
@@ -96,6 +179,14 @@ export const authApi = {
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/login', { username, password, rememberMe })),
   me: () => unwrap(api.get<ApiResponse<UserDto>>('/auth/me')),
   logout: () => api.post<ApiResponse<object>>('/auth/logout'),
+  changePassword: async (body: ChangePasswordRequest) => {
+    const { data } = await api.post<ApiResponse<object | null>>('/auth/change-password', body)
+    if (!data.success) {
+      throw new Error(data.message || data.errors?.join(', ') || 'Password change failed')
+    }
+  },
+  refresh: (refreshToken: string) =>
+    unwrap(api.post<ApiResponse<LoginResponse>>('/auth/refresh', { refreshToken })),
 }
 
 export const visitorsApi = {
@@ -170,6 +261,7 @@ export const mastersApi = {
 
 export const settingsApi = {
   get: () => unwrap(api.get<ApiResponse<SettingsDto>>('/settings')),
+  getBranding: () => unwrap(api.get<ApiResponse<PublicBrandingDto>>('/settings/branding')),
   update: (body: SettingsDto) => unwrap(api.put<ApiResponse<SettingsDto>>('/settings', body)),
 }
 

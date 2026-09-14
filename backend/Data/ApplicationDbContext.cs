@@ -28,6 +28,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -154,5 +155,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
         builder.Entity<VisitPurpose>().HasIndex(x => x.Name);
         builder.Entity<Location>().HasIndex(x => x.Name);
+
+        builder.Entity<RefreshToken>(e =>
+        {
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => x.UserId);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

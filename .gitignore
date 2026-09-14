@@ -26,6 +26,8 @@ appsettings.*.local.json
 !**/wwwroot/uploads/.gitkeep
 **/App_Data/mail-pickup/*
 !**/App_Data/mail-pickup/.gitkeep
+**/App_Data/media/**
+!**/.gitkeep
 uploads/*
 !uploads/.gitkeep
 *.eml

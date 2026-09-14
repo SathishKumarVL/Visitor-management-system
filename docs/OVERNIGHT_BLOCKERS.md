@@ -31,3 +31,10 @@ git gc --prune=now --aggressive
 **Severity:** High (data integrity)  
 **Why blocked:** Blindly rotating `Security:DataProtectionKey` would make existing `VisitorDocuments.IdNumberEncrypted` unreadable. Requires planned re-encryption migration.  
 **Required human action:** Approve key-versioning migration window after Phase 1B/2 foundations; keep current key in secret store until then.
+
+## B-004 — MailKit moderate advisory GHSA-9j88-vvj5-vhgr
+
+**Phase:** 1B  
+**Severity:** Medium  
+**Why blocked:** Latest available MailKit 4.15.1 still reports NU1902. No clean patched package at time of run.  
+**Mitigation:** SMTP TLS validation enforced; passwords not logged; outbox preserved. Revisit when upstream fixes land.

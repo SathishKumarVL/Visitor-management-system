@@ -1,7 +1,10 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Tiaano.Vms.Api.Configuration;
@@ -30,12 +33,14 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 builder.Services
     .AddIdentity<ApplicationUser, IdentityRole>(options =>
     {
-        options.Password.RequiredLength = 6;
+        options.Password.RequiredLength = 10;
         options.Password.RequireDigit = true;
         options.Password.RequireLowercase = true;
-        options.Password.RequireUppercase = false;
-        options.Password.RequireNonAlphanumeric = false;
+        options.Password.RequireUppercase = true;
+        options.Password.RequireNonAlphanumeric = true;
         options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        options.Lockout.AllowedForNewUsers = true;
         options.User.RequireUniqueEmail = true;
     })
     .AddEntityFrameworkStores<ApplicationDbContext>()
@@ -48,9 +53,24 @@ builder.Services.AddAuthentication(options =>
 }).AddJwtBearer(options =>
 {
     options.TokenValidationParameters = SecretConfiguration.CreateJwtValidationParameters(builder.Configuration, jwtKey);
+    options.MapInboundClaims = false;
 });
 
 builder.Services.AddAuthorization();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+});
+
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
@@ -60,6 +80,7 @@ builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
+builder.Services.AddSingleton<IMediaStorageService, MediaStorageService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -104,10 +125,13 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-Directory.CreateDirectory(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "uploads"));
-Directory.CreateDirectory(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "branding"));
+var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+var brandingRoot = Path.Combine(webRoot, "branding");
+Directory.CreateDirectory(brandingRoot);
+Directory.CreateDirectory(Path.Combine(app.Environment.ContentRootPath, "App_Data", "media", "visitors"));
 
 app.UseMiddleware<ExceptionMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
@@ -119,9 +143,17 @@ else
     app.UseHttpsRedirection();
 }
 
-app.UseStaticFiles();
+// Branding only — visitor media is NOT publicly served from wwwroot.
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(brandingRoot),
+    RequestPath = "/branding"
+});
+
 app.UseCors("Frontend");
+app.UseRateLimiter();
 app.UseAuthentication();
+app.UseMiddleware<MustChangePasswordMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 

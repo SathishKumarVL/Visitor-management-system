@@ -82,7 +82,8 @@ public static class SecretConfiguration
             ValidIssuer = config["Jwt:Issuer"] ?? throw new InvalidOperationException("Jwt:Issuer is required."),
             ValidAudience = config["Jwt:Audience"] ?? throw new InvalidOperationException("Jwt:Audience is required."),
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
-            ClockSkew = TimeSpan.FromMinutes(1)
+            ClockSkew = TimeSpan.FromMinutes(1),
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
             // Algorithm constrained by SigningCredentials (HmacSha256) at token creation.
         };
     }

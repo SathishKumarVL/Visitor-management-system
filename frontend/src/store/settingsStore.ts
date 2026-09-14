@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { settingsApi } from '../lib/api'
+import { getStoredToken, settingsApi } from '../lib/api'
 import type { SettingsDto } from '../types/api'
 import { assetUrl } from '../lib/utils'
 
@@ -26,17 +26,44 @@ interface SettingsState {
   update: (next: SettingsDto) => Promise<SettingsDto>
 }
 
-export const useSettingsStore = create<SettingsState>((set) => ({
+async function loadBrandingFallback(
+  set: (partial: Partial<SettingsState>) => void,
+  current: SettingsDto,
+) {
+  try {
+    const branding = await settingsApi.getBranding()
+    set({
+      settings: {
+        ...current,
+        companyName: branding.companyName,
+        logoPath: branding.logoPath,
+      },
+      logoSrc: assetUrl(branding.logoPath),
+      loaded: true,
+    })
+  } catch {
+    set({ loaded: true })
+  }
+}
+
+export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaults,
   logoSrc: assetUrl(defaults.logoPath),
   loaded: false,
   load: async () => {
-    try {
-      const settings = await settingsApi.get()
-      set({ settings, logoSrc: assetUrl(settings.logoPath), loaded: true })
-    } catch {
-      set({ loaded: true })
+    const token = getStoredToken()
+    if (token) {
+      try {
+        const settings = await settingsApi.get()
+        set({ settings, logoSrc: assetUrl(settings.logoPath), loaded: true })
+        return
+      } catch {
+        await loadBrandingFallback(set, get().settings)
+        return
+      }
     }
+
+    await loadBrandingFallback(set, get().settings)
   },
   update: async (next) => {
     const settings = await settingsApi.update(next)

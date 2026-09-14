@@ -43,6 +43,8 @@ public class TestApiFactory : WebApplicationFactory<Program>
         if (user is null) return;
         var token = await users.GeneratePasswordResetTokenAsync(user);
         await users.ResetPasswordAsync(user, token, TestSecrets.SeedPassword);
+        user.MustChangePassword = false;
+        await users.UpdateAsync(user);
     }
 }
 
@@ -229,6 +231,87 @@ public class TrackedConfigSecurityTests
         var text = File.ReadAllText(path);
         Assert.DoesNotContain("ResetPasswordAsync", text);
         Assert.Contains("never reset passwords", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Hardcoded_Encryption_Fallback_Absent()
+    {
+        var path = RepoFile("backend", "Services", "VisitorService.cs");
+        var text = File.ReadAllText(path);
+        Assert.DoesNotContain("TiaanoLocalDevKey-ChangeInProduction!", text);
+        Assert.DoesNotContain("?? \"admin123\"", text);
+    }
+
+    [Fact]
+    public void Visitor_Uploads_Not_Publicly_Mapped_In_Program()
+    {
+        var path = RepoFile("backend", "Program.cs");
+        var text = File.ReadAllText(path);
+        Assert.Contains("RequestPath = \"/branding\"", text);
+        Assert.DoesNotContain("UseStaticFiles();", text.Replace("UseStaticFiles(new StaticFileOptions", "STATIC_BRANDING"));
+        Assert.Contains("App_Data", text);
+    }
+}
+
+public class ApplicationSecurityTests : IClassFixture<TestApiFactory>
+{
+    private readonly TestApiFactory _factory;
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    public ApplicationSecurityTests(TestApiFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Settings_Full_Requires_Auth()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/settings");
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Settings_Branding_Is_Public()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/settings/branding");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.True(json.GetProperty("data").TryGetProperty("companyName", out _));
+        Assert.False(json.GetProperty("data").TryGetProperty("approvalRequired", out _));
+    }
+
+    [Fact]
+    public async Task Media_Requires_Auth()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/media/does-not-exist.jpg");
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Login_Returns_Refresh_Token()
+    {
+        await _factory.EnsureReceptionPasswordAsync();
+        var client = _factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = "reception",
+            password = TestSecrets.SeedPassword,
+            rememberMe = false
+        });
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("data").GetProperty("refreshToken").GetString()));
+    }
+
+    [Fact]
+    public async Task Public_Uploads_Path_Not_Served()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/uploads/anything.jpg");
+        Assert.True(
+            response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Unauthorized,
+            $"Unexpected status {response.StatusCode}");
     }
 }
 

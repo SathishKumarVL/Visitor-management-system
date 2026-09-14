@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
@@ -20,12 +21,39 @@ public class AuthController : ControllerBase
 
     [HttpPost("login")]
     [AllowAnonymous]
+    [EnableRateLimiting("login")]
     public async Task<ActionResult<ApiResponse<LoginResponse>>> Login([FromBody] LoginRequest request)
     {
-        var result = await _auth.LoginAsync(request);
+        var result = await _auth.LoginAsync(request, HttpContext.Connection.RemoteIpAddress?.ToString());
         if (result is null)
             return Unauthorized(new ApiResponse<LoginResponse>(false, null, "Invalid username or password."));
         return Ok(new ApiResponse<LoginResponse>(true, result));
+    }
+
+    [HttpPost("refresh")]
+    [AllowAnonymous]
+    [EnableRateLimiting("login")]
+    public async Task<ActionResult<ApiResponse<LoginResponse>>> Refresh([FromBody] RefreshTokenRequest request)
+    {
+        var result = await _auth.RefreshAsync(request.RefreshToken, HttpContext.Connection.RemoteIpAddress?.ToString());
+        if (result is null)
+            return Unauthorized(new ApiResponse<LoginResponse>(false, null, "Session expired. Please sign in again."));
+        return Ok(new ApiResponse<LoginResponse>(true, result));
+    }
+
+    [HttpPost("change-password")]
+    [Authorize]
+    public async Task<ActionResult<ApiResponse<object>>> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        try
+        {
+            await _auth.ChangePasswordAsync(User, request);
+            return Ok(new ApiResponse<object>(true, null, "Password updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
     }
 
     [HttpGet("me")]
@@ -39,8 +67,11 @@ public class AuthController : ControllerBase
 
     [HttpPost("logout")]
     [Authorize]
-    public ActionResult<ApiResponse<object>> Logout() =>
-        Ok(new ApiResponse<object>(true, null, "Logged out."));
+    public async Task<ActionResult<ApiResponse<object>>> Logout([FromBody] RefreshTokenRequest? request)
+    {
+        await _auth.LogoutAsync(User, request?.RefreshToken);
+        return Ok(new ApiResponse<object>(true, null, "Logged out."));
+    }
 }
 
 [ApiController]
@@ -65,7 +96,7 @@ public class VisitorsController : ControllerBase
     public async Task<ActionResult<ApiResponse<PagedResult<VisitorListItemDto>>>> Search([FromQuery] VisitorSearchRequest request)
     {
         var settings = await _settings.GetAsync();
-        var result = await _visitors.SearchAsync(request, settings.MaxVisitDurationWarningMinutes);
+        var result = await _visitors.SearchAsync(request, User, settings.MaxVisitDurationWarningMinutes);
         return Ok(new ApiResponse<PagedResult<VisitorListItemDto>>(true, result));
     }
 
@@ -431,8 +462,21 @@ public class SettingsController : ControllerBase
         _notifications = notifications;
     }
 
-    [HttpGet]
+    /// <summary>Public branding only — no operational/security settings.</summary>
+    [HttpGet("branding")]
     [AllowAnonymous]
+    public async Task<ActionResult<ApiResponse<PublicBrandingDto>>> GetBranding()
+    {
+        var s = await _settings.GetAsync();
+        return Ok(new ApiResponse<PublicBrandingDto>(true, new PublicBrandingDto
+        {
+            CompanyName = s.CompanyName,
+            LogoPath = s.LogoPath
+        }));
+    }
+
+    [HttpGet]
+    [Authorize]
     public async Task<ActionResult<ApiResponse<SettingsDto>>> Get() =>
         Ok(new ApiResponse<SettingsDto>(true, await _settings.GetAsync()));
 
