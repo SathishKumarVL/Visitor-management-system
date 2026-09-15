@@ -136,6 +136,9 @@ public class IdType
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
     [Required, MaxLength(100)]
     public string Name { get; set; } = string.Empty;
 
@@ -152,6 +155,9 @@ public class EntryGate
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
     [Required, MaxLength(100)]
     public string Name { get; set; } = string.Empty;
 
@@ -167,6 +173,9 @@ public class EntryGate
 public class ExitGate
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
 
     [Required, MaxLength(100)]
     public string Name { get; set; } = string.Empty;

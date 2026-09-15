@@ -16,10 +16,17 @@ public class MediaController : ControllerBase
     [HttpGet("{fileName}")]
     public async Task<IActionResult> Get(string fileName)
     {
-        var opened = await _media.OpenAsync(fileName);
-        if (opened is null) return NotFound();
-        var (stream, contentType) = opened.Value;
-        Response.Headers.CacheControl = "private, max-age=300";
-        return File(stream, contentType);
+        try
+        {
+            var opened = await _media.OpenAsync(fileName);
+            if (opened is null) return NotFound();
+            var (stream, contentType) = opened.Value;
+            Response.Headers.CacheControl = "private, max-age=300";
+            return File(stream, contentType);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
     }
 }

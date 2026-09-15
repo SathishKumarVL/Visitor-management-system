@@ -48,11 +48,17 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse?> LoginAsync(LoginRequest request, string? ipAddress)
     {
-        var user = await _userManager.Users.Include(u => u.Department)
+        var user = await _userManager.Users.IgnoreQueryFilters().Include(u => u.Department)
             .FirstOrDefaultAsync(u => u.UserName == request.Username);
         if (user is null || !user.IsActive)
         {
             await _audit.LogAsync("LoginFailed", "User", null, $"Failed login for '{request.Username}'");
+            return null;
+        }
+
+        if (user.TenantId == Guid.Empty)
+        {
+            await _audit.LogAsync("LoginFailed", "User", user.Id, "User has no tenant assignment");
             return null;
         }
 
@@ -88,9 +94,12 @@ public class AuthService : IAuthService
     {
         if (string.IsNullOrWhiteSpace(refreshToken)) return null;
         var hash = HashToken(refreshToken);
-        var existing = await _db.RefreshTokens.Include(t => t.User).ThenInclude(u => u!.Department)
+        var existing = await _db.RefreshTokens.IgnoreQueryFilters()
+            .Include(t => t.User).ThenInclude(u => u!.Department)
             .FirstOrDefaultAsync(t => t.TokenHash == hash);
         if (existing is null || !existing.IsActive || existing.User is null || !existing.User.IsActive)
+            return null;
+        if (existing.User.TenantId == Guid.Empty)
             return null;
 
         existing.RevokedAt = DateTime.UtcNow;
@@ -195,8 +204,8 @@ public class AuthService : IAuthService
         claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
         if (user.DepartmentId.HasValue)
             claims.Add(new Claim("departmentId", user.DepartmentId.Value.ToString()));
-        if (user.TenantId != Guid.Empty)
-            claims.Add(new Claim("tenantId", user.TenantId.ToString()));
+        // Tenant claim is mandatory for authenticated API access (middleware fails closed without it).
+        claims.Add(new Claim("tenantId", user.TenantId.ToString()));
         if (user.SiteId.HasValue)
             claims.Add(new Claim("siteId", user.SiteId.Value.ToString()));
 

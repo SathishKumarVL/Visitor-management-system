@@ -7,7 +7,6 @@ namespace Tiaano.Vms.Api.Services;
 public interface IMediaStorageService
 {
     string PrivateRoot { get; }
-    string LegacyUploadsRoot { get; }
     Task<string> SaveVisitorPhotoAsync(Guid visitorId, byte[] bytes, string? contentTypeHint = null);
     Task<(Stream Stream, string ContentType)?> OpenAsync(string fileName);
     string ToPublicApiPath(string storedFileName);
@@ -24,21 +23,17 @@ public sealed class MediaStorageService : IMediaStorageService
     {
         _env = env;
         _tenant = tenant;
-        Directory.CreateDirectory(PrivateRoot);
-        Directory.CreateDirectory(LegacyUploadsRoot);
-        Directory.CreateDirectory(LegacyPrivateRoot);
+        if (_tenant.TenantId is Guid id && id != Guid.Empty)
+            Directory.CreateDirectory(PrivateRoot);
     }
 
-    private Guid EffectiveTenantId => _tenant.TenantId is Guid id && id != Guid.Empty ? id : WellKnownTenants.TiaanoId;
+    private Guid EffectiveTenantId =>
+        _tenant.TenantId is Guid id && id != Guid.Empty
+            ? id
+            : throw new UnauthorizedAccessException("Tenant context is required for media access.");
 
     public string PrivateRoot =>
         Path.GetFullPath(Path.Combine(_env.ContentRootPath, "App_Data", "media", "tenants", EffectiveTenantId.ToString("N"), "visitors"));
-
-    public string LegacyPrivateRoot =>
-        Path.GetFullPath(Path.Combine(_env.ContentRootPath, "App_Data", "media", "visitors"));
-
-    public string LegacyUploadsRoot =>
-        Path.GetFullPath(Path.Combine(_env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot"), "uploads"));
 
     public string ToPublicApiPath(string storedFileName) =>
         $"/api/media/{Uri.EscapeDataString(Path.GetFileName(storedFileName))}";
@@ -48,21 +43,18 @@ public sealed class MediaStorageService : IMediaStorageService
         contentType = "application/octet-stream";
         if (bytes.Length < 12 || bytes.Length > 5_000_000) return false;
 
-        // JPEG
         if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
         {
             contentType = "image/jpeg";
             return true;
         }
 
-        // PNG
         if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47)
         {
             contentType = "image/png";
             return true;
         }
 
-        // WebP (RIFF....WEBP)
         if (bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46
             && bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50)
         {
@@ -78,6 +70,8 @@ public sealed class MediaStorageService : IMediaStorageService
         if (!IsAllowedImage(bytes, out var detectedType))
             throw new InvalidOperationException("Photo must be a valid JPEG, PNG, or WebP image under 5MB.");
 
+        Directory.CreateDirectory(PrivateRoot);
+
         var ext = detectedType switch
         {
             "image/png" => ".png",
@@ -87,7 +81,6 @@ public sealed class MediaStorageService : IMediaStorageService
 
         var safeName = $"{visitorId:N}_{DateTime.UtcNow:yyyyMMddHHmmss}_{Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant()}{ext}";
         var fullPath = Path.Combine(PrivateRoot, safeName);
-        // Path traversal guard
         if (!Path.GetFullPath(fullPath).StartsWith(PrivateRoot, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Invalid media path.");
 
@@ -95,30 +88,33 @@ public sealed class MediaStorageService : IMediaStorageService
         return safeName;
     }
 
+    /// <summary>
+    /// Opens media only from the current tenant's private root.
+    /// Shared/legacy roots are not used — prevents cross-tenant file reads by filename collision.
+    /// </summary>
     public Task<(Stream Stream, string ContentType)?> OpenAsync(string fileName)
     {
-        var safe = Path.GetFileName(fileName?.Trim() ?? string.Empty);
-        if (string.IsNullOrWhiteSpace(safe) || safe != (fileName?.Trim() ?? string.Empty))
+        if (_tenant.TenantId is not Guid || _tenant.TenantId == Guid.Empty)
+            return Task.FromResult<(Stream, string)?>(null);
+
+        var trimmed = fileName?.Trim() ?? string.Empty;
+        var safe = Path.GetFileName(trimmed);
+        // Reject path traversal / nested paths; filename must equal the provided value after GetFileName.
+        if (string.IsNullOrWhiteSpace(safe) || !string.Equals(safe, trimmed, StringComparison.Ordinal))
+            return Task.FromResult<(Stream, string)?>(null);
+
+        if (safe.Contains("..", StringComparison.Ordinal) || safe.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             return Task.FromResult<(Stream, string)?>(null);
 
         var privatePath = Path.Combine(PrivateRoot, safe);
-        var legacyPrivate = Path.Combine(LegacyPrivateRoot, safe);
-        var legacyPath = Path.Combine(LegacyUploadsRoot, safe);
+        var full = Path.GetFullPath(privatePath);
+        if (!full.StartsWith(PrivateRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
+            return Task.FromResult<(Stream, string)?>(null);
 
-        string? chosen = null;
-        if (File.Exists(privatePath) && Path.GetFullPath(privatePath).StartsWith(PrivateRoot, StringComparison.OrdinalIgnoreCase))
-            chosen = privatePath;
-        else if (File.Exists(legacyPrivate) && Path.GetFullPath(legacyPrivate).StartsWith(LegacyPrivateRoot, StringComparison.OrdinalIgnoreCase))
-            chosen = legacyPrivate;
-        else if (File.Exists(legacyPath) && Path.GetFullPath(legacyPath).StartsWith(LegacyUploadsRoot, StringComparison.OrdinalIgnoreCase))
-            chosen = legacyPath;
-
-        if (chosen is null) return Task.FromResult<(Stream, string)?>(null);
-
-        if (!ContentTypes.TryGetContentType(chosen, out var contentType))
+        if (!ContentTypes.TryGetContentType(full, out var contentType))
             contentType = "application/octet-stream";
 
-        Stream stream = new FileStream(chosen, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Stream stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read);
         return Task.FromResult<(Stream, string)?>((stream, contentType));
     }
 }

@@ -44,7 +44,10 @@ public class MasterDataService : IMasterDataService
         _tenant = tenant;
     }
 
-    private Guid CurrentTenantId => _tenant.TenantId ?? WellKnownTenants.TiaanoId;
+    private Guid CurrentTenantId =>
+        _tenant.TenantId is Guid id && id != Guid.Empty
+            ? id
+            : throw new UnauthorizedAccessException("Tenant context is required.");
 
     public async Task<IReadOnlyList<MasterItemDto>> GetDepartmentsAsync(bool activeOnly = true)
     {
@@ -151,7 +154,7 @@ public class MasterDataService : IMasterDataService
 
     public async Task<IReadOnlyList<MasterItemDto>> GetPurposesAsync(bool activeOnly = true)
     {
-        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db);
+        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, CurrentTenantId);
         return await GetSimpleAsync(_db.VisitPurposes, activeOnly);
     }
 
@@ -216,7 +219,7 @@ public class MasterDataService : IMasterDataService
             entity = await _db.IdTypes.FindAsync(id) ?? throw new InvalidOperationException("ID type not found.");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
-        else { entity = new IdType { CreatedBy = user }; _db.IdTypes.Add(entity); }
+        else { entity = new IdType { TenantId = CurrentTenantId, CreatedBy = user }; _db.IdTypes.Add(entity); }
         entity.Name = request.Name.Trim(); entity.SortOrder = request.SortOrder; entity.IsActive = request.IsActive;
         await _db.SaveChangesAsync();
         return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder };
@@ -241,7 +244,7 @@ public class MasterDataService : IMasterDataService
             entity = await _db.EntryGates.FindAsync(id) ?? throw new InvalidOperationException("Entry gate not found.");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
-        else { entity = new EntryGate { CreatedBy = user }; _db.EntryGates.Add(entity); }
+        else { entity = new EntryGate { TenantId = CurrentTenantId, CreatedBy = user }; _db.EntryGates.Add(entity); }
         entity.Name = request.Name.Trim(); entity.IsActive = request.IsActive; entity.IsDefault = request.IsDefault;
         await _db.SaveChangesAsync();
         return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, IsDefault = entity.IsDefault };
@@ -266,7 +269,7 @@ public class MasterDataService : IMasterDataService
             entity = await _db.ExitGates.FindAsync(id) ?? throw new InvalidOperationException("Exit gate not found.");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
-        else { entity = new ExitGate { CreatedBy = user }; _db.ExitGates.Add(entity); }
+        else { entity = new ExitGate { TenantId = CurrentTenantId, CreatedBy = user }; _db.ExitGates.Add(entity); }
         entity.Name = request.Name.Trim(); entity.IsActive = request.IsActive; entity.IsDefault = request.IsDefault;
         await _db.SaveChangesAsync();
         return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, IsDefault = entity.IsDefault };
@@ -507,13 +510,20 @@ public class UserAdminService : IUserAdminService
     private readonly ApplicationDbContext _db;
     private readonly IAuditService _audit;
     private readonly ITenantContext _tenant;
+    private readonly IEntitlementService _entitlements;
 
-    public UserAdminService(UserManager<ApplicationUser> userManager, ApplicationDbContext db, IAuditService audit, ITenantContext tenant)
+    public UserAdminService(
+        UserManager<ApplicationUser> userManager,
+        ApplicationDbContext db,
+        IAuditService audit,
+        ITenantContext tenant,
+        IEntitlementService entitlements)
     {
         _userManager = userManager;
         _db = db;
         _audit = audit;
         _tenant = tenant;
+        _entitlements = entitlements;
     }
 
     public async Task<IReadOnlyList<UserDto>> GetUsersAsync()
@@ -541,14 +551,18 @@ public class UserAdminService : IUserAdminService
 
     public async Task<UserDto> CreateAsync(CreateUserRequest request, string? actor)
     {
+        await _entitlements.EnsureCanCreateUserAsync();
         if (!AppRoles.All.Contains(request.Role))
             throw new InvalidOperationException("Invalid role.");
+        var tenantId = _tenant.TenantId is Guid id && id != Guid.Empty
+            ? id
+            : throw new UnauthorizedAccessException("Tenant context is required.");
         var user = new ApplicationUser
         {
             UserName = request.Username.Trim(),
             Email = request.Email.Trim(),
             FullName = request.FullName.Trim(),
-            TenantId = _tenant.TenantId ?? WellKnownTenants.TiaanoId,
+            TenantId = tenantId,
             DepartmentId = request.DepartmentId,
             IsActive = true,
             MustChangePassword = true,

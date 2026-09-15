@@ -120,21 +120,21 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        if (!await context.IdTypes.AnyAsync())
+        if (!await context.IdTypes.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId))
         {
             foreach (var (name, order) in new[] { ("Aadhaar", 1), ("PAN", 2), ("Driving License", 3), ("Passport", 4), ("Voter ID", 5), ("Company ID", 6) })
             {
-                context.IdTypes.Add(new IdType { Name = name, SortOrder = order, CreatedBy = "system" });
+                context.IdTypes.Add(new IdType { TenantId = tenantId, Name = name, SortOrder = order, CreatedBy = "system" });
             }
             await context.SaveChangesAsync();
         }
 
-        if (!await context.EntryGates.AnyAsync())
+        if (!await context.EntryGates.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId))
         {
-            context.EntryGates.Add(new EntryGate { Name = "Main Gate", IsDefault = true, CreatedBy = "system" });
-            context.EntryGates.Add(new EntryGate { Name = "Reception Entrance", CreatedBy = "system" });
-            context.ExitGates.Add(new ExitGate { Name = "Main Gate", IsDefault = true, CreatedBy = "system" });
-            context.ExitGates.Add(new ExitGate { Name = "Reception Exit", CreatedBy = "system" });
+            context.EntryGates.Add(new EntryGate { TenantId = tenantId, Name = "Main Gate", IsDefault = true, CreatedBy = "system" });
+            context.EntryGates.Add(new EntryGate { TenantId = tenantId, Name = "Reception Entrance", CreatedBy = "system" });
+            context.ExitGates.Add(new ExitGate { TenantId = tenantId, Name = "Main Gate", IsDefault = true, CreatedBy = "system" });
+            context.ExitGates.Add(new ExitGate { TenantId = tenantId, Name = "Reception Exit", CreatedBy = "system" });
             await context.SaveChangesAsync();
         }
 
@@ -305,7 +305,7 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        if (!await context.Sites.AnyAsync(s => s.TenantId == tenant.Id))
+        if (!await context.Sites.IgnoreQueryFilters().AnyAsync(s => s.TenantId == tenant.Id))
         {
             context.Sites.Add(new Site
             {
@@ -329,6 +329,9 @@ public static class DbSeeder
             UPDATE Employees SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE VisitPurposes SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE Locations SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
+            UPDATE IdTypes SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
+            UPDATE EntryGates SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
+            UPDATE ExitGates SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
             UPDATE Visitors SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE VisitorVisits SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE SystemSettings SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';

@@ -7,6 +7,7 @@ using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models.Enums;
+using Tiaano.Vms.Api.Security;
 using Tiaano.Vms.Api.Services;
 
 namespace Tiaano.Vms.Api.Controllers;
@@ -77,6 +78,7 @@ public class AuthController : ControllerBase
 [ApiController]
 [Route("api/visitors")]
 [Authorize]
+[RequireModule(ModuleKeys.VisitorManagement)]
 public class VisitorsController : ControllerBase
 {
     private readonly IVisitorService _visitors;
@@ -186,6 +188,7 @@ public class VisitorsController : ControllerBase
 [ApiController]
 [Route("api/approvals")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Host}")]
+[RequireModule(ModuleKeys.VisitorManagement)]
 public class ApprovalsController : ControllerBase
 {
     private readonly IVisitorService _visitors;
@@ -234,6 +237,7 @@ public class ApprovalsController : ControllerBase
 [ApiController]
 [Route("api/pass")]
 [Authorize]
+[RequireModule(ModuleKeys.VisitorManagement)]
 public class PassController : ControllerBase
 {
     private readonly IVisitorService _visitors;
@@ -282,6 +286,7 @@ public class PassController : ControllerBase
 [ApiController]
 [Route("api/dashboard")]
 [Authorize]
+[RequireModule(ModuleKeys.VisitorManagement)]
 public class DashboardController : ControllerBase
 {
     private readonly IVisitorService _visitors;
@@ -429,6 +434,10 @@ public class UsersController : ControllerBase
         {
             return Ok(new ApiResponse<UserDto>(true, await _users.CreateAsync(request, User.Identity?.Name)));
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<UserDto>(false, null, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<UserDto>(false, null, ex.Message));
@@ -467,7 +476,7 @@ public class SettingsController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<ApiResponse<PublicBrandingDto>>> GetBranding()
     {
-        var s = await _settings.GetAsync();
+        var s = await _settings.GetPublicBrandingAsync();
         return Ok(new ApiResponse<PublicBrandingDto>(true, new PublicBrandingDto
         {
             CompanyName = s.CompanyName,
@@ -503,6 +512,7 @@ public class TestEmailRequest
 [ApiController]
 [Route("api/reports")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+[RequireModule(ModuleKeys.VisitorManagement)]
 public class ReportsController : ControllerBase
 {
     private readonly IReportService _reports;

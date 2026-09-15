@@ -57,6 +57,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.TenantId, x.Code });
             e.HasOne(x => x.Tenant).WithMany(t => t.Sites).HasForeignKey(x => x.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<Department>(e =>
@@ -64,7 +65,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.Property(x => x.Name).IsRequired();
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            // Fail closed: when a scoped tenant context exists without TenantId, return no rows (never all tenants).
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<Employee>(e =>
@@ -75,7 +77,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasOne(x => x.User).WithMany(u => u.EmployeeProfiles).HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<ApplicationUser>(e =>
@@ -84,7 +86,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<Visitor>(e =>
@@ -94,7 +96,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.Phone);
             e.HasIndex(x => x.CompanyName);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<VisitorVisit>(e =>
@@ -121,7 +123,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.NoAction);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<VisitorVisitPurpose>(e =>
@@ -183,28 +185,49 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => x.Entity);
             e.HasIndex(x => x.Action);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && (x.TenantId == null || x.TenantId == _tenant.TenantId)));
         });
 
         builder.Entity<SystemSetting>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<VisitPurpose>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<Location>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || _tenant.TenantId == null || x.TenantId == _tenant.TenantId);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<IdType>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<EntryGate>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<ExitGate>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<RefreshToken>(e =>

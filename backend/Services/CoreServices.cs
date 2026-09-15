@@ -30,9 +30,10 @@ public class AuditService : IAuditService
         user ??= _http.HttpContext?.User;
         ip ??= _http.HttpContext?.Connection.RemoteIpAddress?.ToString();
 
+        var resolvedTenant = TenantClaims.ResolveTenantId(user, _tenant);
         _db.AuditLogs.Add(new AuditLog
         {
-            TenantId = TenantClaims.ResolveTenantId(user, _tenant),
+            TenantId = resolvedTenant == Guid.Empty ? null : resolvedTenant,
             Action = action,
             Entity = entity,
             EntityId = entityId,
@@ -49,6 +50,7 @@ public class AuditService : IAuditService
 public interface ISettingsService
 {
     Task<SettingsDto> GetAsync();
+    Task<SettingsDto> GetPublicBrandingAsync();
     Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName);
     Task<string> GetValueAsync(string key, string fallback);
 }
@@ -56,8 +58,7 @@ public interface ISettingsService
 public class SettingsService : ISettingsService
 {
     private static readonly object CacheLock = new();
-    private static SettingsDto? _cache;
-    private static DateTime _cacheAtUtc = DateTime.MinValue;
+    private static readonly Dictionary<Guid, (SettingsDto Dto, DateTime AtUtc)> Cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
     private readonly ApplicationDbContext _db;
@@ -71,33 +72,60 @@ public class SettingsService : ISettingsService
         _tenant = tenant;
     }
 
+    private Guid EffectiveTenantId =>
+        _tenant.TenantId is Guid id && id != Guid.Empty
+            ? id
+            : throw new UnauthorizedAccessException("Tenant context is required for settings.");
+
     public async Task<SettingsDto> GetAsync()
     {
+        var tenantId = EffectiveTenantId;
         lock (CacheLock)
         {
-            if (_cache is not null && DateTime.UtcNow - _cacheAtUtc < CacheTtl)
-                return _cache;
+            if (Cache.TryGetValue(tenantId, out var hit) && DateTime.UtcNow - hit.AtUtc < CacheTtl)
+                return hit.Dto;
         }
 
         var map = await _db.SystemSettings.AsNoTracking().ToDictionaryAsync(x => x.Key, x => x.Value);
         var dto = Map(map);
         lock (CacheLock)
         {
-            _cache = dto;
-            _cacheAtUtc = DateTime.UtcNow;
+            Cache[tenantId] = (dto, DateTime.UtcNow);
+        }
+        return dto;
+    }
+
+    /// <summary>Public branding for anonymous login screen — default tenant only, explicit scope.</summary>
+    public async Task<SettingsDto> GetPublicBrandingAsync()
+    {
+        var tenantId = WellKnownTenants.TiaanoId;
+        lock (CacheLock)
+        {
+            if (Cache.TryGetValue(tenantId, out var hit) && DateTime.UtcNow - hit.AtUtc < CacheTtl)
+                return hit.Dto;
+        }
+
+        var map = await _db.SystemSettings.IgnoreQueryFilters().AsNoTracking()
+            .Where(x => x.TenantId == tenantId)
+            .ToDictionaryAsync(x => x.Key, x => x.Value);
+        var dto = Map(map);
+        lock (CacheLock)
+        {
+            Cache[tenantId] = (dto, DateTime.UtcNow);
         }
         return dto;
     }
 
     public async Task<string> GetValueAsync(string key, string fallback)
     {
+        _ = EffectiveTenantId;
         var item = await _db.SystemSettings.AsNoTracking().FirstOrDefaultAsync(x => x.Key == key);
         return item?.Value ?? fallback;
     }
 
     public async Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName)
     {
-        var tenantId = _tenant.TenantId ?? WellKnownTenants.TiaanoId;
+        var tenantId = EffectiveTenantId;
         async Task Upsert(string key, string value)
         {
             var row = await _db.SystemSettings.FirstOrDefaultAsync(x => x.Key == key);
@@ -129,8 +157,7 @@ public class SettingsService : ISettingsService
         await _audit.LogAsync("SettingsChanged", "SystemSetting", null, "System settings updated");
         lock (CacheLock)
         {
-            _cache = null;
-            _cacheAtUtc = DateTime.MinValue;
+            Cache.Remove(tenantId);
         }
         return await GetAsync();
     }

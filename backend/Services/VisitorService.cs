@@ -40,6 +40,7 @@ public class VisitorService : IVisitorService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<VisitorService> _logger;
     private readonly IMediaStorageService _media;
+    private readonly ITenantContext _tenant;
     private static readonly Regex IndianPhone = new(@"^(\+91[\-\s]?)?[6-9]\d{9}$|^0\d{2,4}[\-\s]?\d{6,8}$", RegexOptions.Compiled);
 
     public VisitorService(
@@ -51,7 +52,8 @@ public class VisitorService : IVisitorService
         IHostEnvironment env,
         IServiceScopeFactory scopeFactory,
         ILogger<VisitorService> logger,
-        IMediaStorageService media)
+        IMediaStorageService media,
+        ITenantContext tenant)
     {
         _db = db;
         _settings = settings;
@@ -62,6 +64,7 @@ public class VisitorService : IVisitorService
         _scopeFactory = scopeFactory;
         _logger = logger;
         _media = media;
+        _tenant = tenant;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -69,7 +72,7 @@ public class VisitorService : IVisitorService
     public async Task<VisitorDetailDto> RegisterAsync(RegisterVisitorRequest request, ClaimsPrincipal user, string webRoot)
     {
         ValidateRegistration(request);
-        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db);
+        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, TenantClaims.RequireTenantId(user, _tenant));
         if (!string.IsNullOrWhiteSpace(request.PurposeNotes))
         {
             request.PurposeNotes = request.PurposeNotes.Trim();
@@ -1002,7 +1005,7 @@ public class VisitorService : IVisitorService
         return query.Where(v => empIds.Contains(v.HostEmployeeId));
     }
 
-    private static Guid ResolveTenantId(ClaimsPrincipal user) => TenantClaims.ResolveTenantId(user);
+    private Guid ResolveTenantId(ClaimsPrincipal user) => TenantClaims.RequireTenantId(user, _tenant);
 
     private async Task EnsureCanViewVisitAsync(ClaimsPrincipal user, VisitorVisit visit)
     {
@@ -1122,6 +1125,7 @@ public class VisitorService : IVisitorService
 
         var created = new Employee
         {
+            TenantId = TenantClaims.RequireTenantId(null, _tenant),
             FullName = name,
             DepartmentId = departmentId,
             IsActive = true,

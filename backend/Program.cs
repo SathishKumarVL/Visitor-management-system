@@ -60,15 +60,22 @@ builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("login", httpContext =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 10,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0
-            }));
+    if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+    {
+        options.AddPolicy("login", _ => RateLimitPartition.GetNoLimiter("dev"));
+    }
+    else
+    {
+        options.AddPolicy("login", httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0
+                }));
+    }
 });
 
 builder.Services.AddHttpContextAccessor();
@@ -82,6 +89,7 @@ builder.Services.AddScoped<IMasterDataService, MasterDataService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
+builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
