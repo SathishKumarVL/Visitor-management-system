@@ -54,9 +54,22 @@ Visitor passes display a Visit Number (e.g. `VMS-2026-000184`). QR codes are not
 - `GET/POST/PUT /api/masters/departments|hosts|purposes|locations|id-types|entry-gates|exit-gates`
 - `POST /api/masters/{type}/{id}/deactivate`
 - `GET/POST/PUT /api/users`
-- `GET/PUT /api/settings`
-- `GET /api/dashboard`
-- `GET /api/reports/visitors?format=json|excel|pdf|csv`
+- `GET /api/settings` (auth) · `GET /api/settings/branding` (public branding only)
+- `GET /api/dashboard` (requires `visitor-management`)
+- `GET /api/reports/visitors?format=json|excel|pdf|csv` (requires `visitor-management`)
 - `GET /api/audit`
+- `GET /api/media/{fileName}` (auth; tenant-private storage only)
+- `GET /api/system/health|version|license`
+
+## Emergency / Analytics (entitlement-gated)
+
+| Method | Path | Module required |
+|--------|------|-----------------|
+| GET | `/api/emergency/inside` | `emergency-management` |
+| GET | `/api/analytics/summary` | `analytics` |
+
+Disabled or expired modules return **403**. Missing tenant claim on authenticated requests returns **401**.
+
+Tenant context is taken from the JWT only — `X-Tenant-Id` and forged payload tenant fields are ignored.
 
 Swagger UI (Development only): `/swagger`

@@ -95,5 +95,17 @@ Until that exists: keep the existing encryption key in the secret store even if 
 
 ## What Phase 1A does **not** cover
 
-Public uploads, settings auth, rate limiting, MFA, refresh tokens, multi-tenancy, licensing.
+MFA, full site-scoped authorization, SaaS-ready licensing portal, and remaining blockers B-002/B-003/B-004.
 QR functionality has been removed from the product.
+
+## Tenant isolation & entitlements (hardening slice)
+
+See `docs/TENANT_ISOLATION_REVIEW.md`.
+
+- Tenant ID from JWT only; inactive/missing tenant → 401
+- EF filters fail closed when tenant context is unset
+- Settings cache keyed by tenant
+- Media served only from the current tenant private root
+- Module entitlements enforced on the API (`RequireModule`)
+- Login rate limit active outside Development
+

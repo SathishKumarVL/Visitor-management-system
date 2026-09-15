@@ -21,30 +21,36 @@ TIAANO is the first tenant (`WellKnownTenants.TiaanoId`), not hardcoded business
 ## Multi-tenancy
 
 - `Tenant` / `Site` entities
-- `TenantId` on users, masters, visitors, visits, settings
-- Per-request `ITenantContext` bound from JWT claims (never from client-supplied headers alone)
-- EF global query filters assist isolation; authorization still validates host/role scope
+- `TenantId` on users, masters (including IdTypes/EntryGates/ExitGates), visitors, visits, settings
+- Per-request `ITenantContext` bound from JWT `tenantId` claim only (client headers ignored)
+- Authenticated requests without a valid active tenant claim fail closed (401)
+- EF global query filters fail closed: missing tenant context returns **no rows** (never all tenants)
+- Site claim is advisory foundation only — full site-scoped authorization is not yet enforced
+
+**This is a multi-tenant foundation, not a claim of SaaS-ready isolation for every edge case.**
 
 ## Security highlights
 
 - Secrets via User Secrets / environment / future vault providers
 - Fail-closed required crypto configuration
-- Authenticated private visitor media (`/api/media`)
+- Authenticated private visitor media (`/api/media`) under `App_Data/media/tenants/{tenantId}/visitors/` only
 - Refresh tokens + short-lived access JWT
 - MustChangePassword gate
-- Login rate limiting
+- Login rate limiting (disabled in Development for local testing)
 
-## Productization foundation
+## Productization / entitlements
 
-Tables/entities for:
+Backend-authoritative module checks via `[RequireModule]`:
 
-- Product modules
-- Tenant entitlements
-- Licenses (edition, limits, graceful expiry)
-- Feature flags
-- Application release history
+| Module key | Enforced on |
+|------------|-------------|
+| `visitor-management` | Visitors, approvals, passes, dashboard, reports |
+| `emergency-management` | `GET /api/emergency/inside` |
+| `analytics` | `GET /api/analytics/summary` |
 
-Backend must enforce entitlements; frontend hiding is UX only.
+Also enforced: license expiry (past grace), revoked license, MaxUsers on user create.
+
+Frontend feature hiding is UX only — not security.
 
 ## API
 
