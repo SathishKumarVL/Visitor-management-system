@@ -9,6 +9,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
+using Tiaano.Vms.Api.Maintenance;
 using Tiaano.Vms.Api.Middleware;
 using Tiaano.Vms.Api.Models;
 using Tiaano.Vms.Api.Security;
@@ -137,6 +138,10 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Operator commands run against the built container and exit without serving traffic.
+if (ResetPasswordCommand.ShouldRun(args))
+    return await ResetPasswordCommand.RunAsync(app.Services, args);
+
 var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 var brandingRoot = Path.Combine(webRoot, "branding");
 Directory.CreateDirectory(brandingRoot);
@@ -173,5 +178,6 @@ app.MapControllers();
 await DbSeeder.SeedAsync(app.Services);
 
 app.Run();
+return 0;
 
 public partial class Program { }
