@@ -392,6 +392,57 @@ public class PassDto
     public string Status { get; set; } = string.Empty;
 }
 
+public class EmergencyRosterDto
+{
+    public int TotalInside { get; set; }
+    public int VisitorsInside { get; set; }
+
+    /// <summary>False while the system has no employee presence data; the UI must not imply otherwise.</summary>
+    public bool EmployeeTrackingAvailable { get; set; }
+
+    public int Verified { get; set; }
+    public int Evacuated { get; set; }
+    public int Missing { get; set; }
+    public int Unaccounted { get; set; }
+    public IReadOnlyList<EmergencyRosterItemDto> Items { get; set; } = [];
+}
+
+public class EmergencyRosterItemDto
+{
+    public Guid VisitId { get; set; }
+    public string VisitNumber { get; set; } = string.Empty;
+    public string VisitorName { get; set; } = string.Empty;
+    public string CompanyName { get; set; } = string.Empty;
+    public string HostName { get; set; } = string.Empty;
+    public string DepartmentName { get; set; } = string.Empty;
+    public IReadOnlyList<string> Locations { get; set; } = [];
+    public string? PhotoUrl { get; set; }
+    public DateTime? CheckInAt { get; set; }
+    public string StatusLabel { get; set; } = string.Empty;
+    public int NumberOfPersons { get; set; }
+    public EmergencyRollCallStatus RollCallStatus { get; set; }
+    public DateTime? RollCallAt { get; set; }
+}
+
+public class EmergencyRollCallRequest
+{
+    [Required]
+    public Guid VisitId { get; set; }
+
+    [Required]
+    public EmergencyRollCallStatus Status { get; set; }
+
+    [MaxLength(300)]
+    public string? Notes { get; set; }
+}
+
+public class EmergencyRollCallResultDto
+{
+    public Guid VisitId { get; set; }
+    public EmergencyRollCallStatus RollCallStatus { get; set; }
+    public DateTime RollCallAt { get; set; }
+}
+
 public class ReportRequest
 {
     public string ReportType { get; set; } = "daily";

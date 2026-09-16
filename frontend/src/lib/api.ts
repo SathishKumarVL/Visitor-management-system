@@ -5,6 +5,9 @@ import type {
   CreateEmployeeRequest,
   CreateUserRequest,
   DashboardDto,
+  EmergencyRollCallResultDto,
+  EmergencyRollCallStatus,
+  EmergencyRosterDto,
   EmployeeDto,
   ExpectedVisitorRequest,
   FaceSearchMatchDto,
@@ -285,6 +288,18 @@ export const reportsApi = {
     })
     return res.data as Blob
   },
+}
+
+export const emergencyApi = {
+  roster: () => unwrap(api.get<ApiResponse<EmergencyRosterDto>>('/emergency/roster')),
+  rollCall: (visitId: string, status: EmergencyRollCallStatus, notes?: string) =>
+    unwrap(
+      api.post<ApiResponse<EmergencyRollCallResultDto>>('/emergency/roll-call', {
+        visitId,
+        status,
+        notes: notes ?? null,
+      }),
+    ),
 }
 
 export const auditApi = {

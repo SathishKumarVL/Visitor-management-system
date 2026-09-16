@@ -41,6 +41,15 @@ public enum IdVerificationStatus
     Failed = 3
 }
 
+/// <summary>Outcome recorded for one person during an emergency roll call.</summary>
+public enum EmergencyRollCallStatus
+{
+    Unknown = 0,
+    Verified = 1,
+    Evacuated = 2,
+    Missing = 3
+}
+
 public enum VisitorType
 {
     WalkIn = 0,

@@ -36,6 +36,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
+    public DbSet<EmergencyRollCallEvent> EmergencyRollCallEvents => Set<EmergencyRollCallEvent>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<ProductModule> ProductModules => Set<ProductModule>();
     public DbSet<TenantModuleEntitlement> TenantModuleEntitlements => Set<TenantModuleEntitlement>();
@@ -163,6 +164,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         {
             e.HasIndex(x => new { x.TenantId, x.Model });
             e.HasOne(x => x.Visitor).WithMany().HasForeignKey(x => x.VisitorId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<EmergencyRollCallEvent>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.VisitorVisitId, x.RecordedAt });
+            e.HasOne(x => x.VisitorVisit).WithMany().HasForeignKey(x => x.VisitorVisitId)
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);

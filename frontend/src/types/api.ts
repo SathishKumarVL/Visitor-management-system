@@ -95,6 +95,49 @@ export interface VisitorListItemDto {
   numberOfPersons?: number
 }
 
+/** Mirrors the backend EmergencyRollCallStatus enum; serialised as its numeric value. */
+export const EmergencyRollCall = {
+  Unknown: 0,
+  Verified: 1,
+  Evacuated: 2,
+  Missing: 3,
+} as const
+
+export type EmergencyRollCallStatus = (typeof EmergencyRollCall)[keyof typeof EmergencyRollCall]
+
+export interface EmergencyRosterItemDto {
+  visitId: string
+  visitNumber: string
+  visitorName: string
+  companyName: string
+  hostName: string
+  departmentName: string
+  locations: string[]
+  photoUrl?: string | null
+  checkInAt?: string | null
+  statusLabel: string
+  numberOfPersons: number
+  rollCallStatus: EmergencyRollCallStatus
+  rollCallAt?: string | null
+}
+
+export interface EmergencyRosterDto {
+  totalInside: number
+  visitorsInside: number
+  employeeTrackingAvailable: boolean
+  verified: number
+  evacuated: number
+  missing: number
+  unaccounted: number
+  items: EmergencyRosterItemDto[]
+}
+
+export interface EmergencyRollCallResultDto {
+  visitId: string
+  rollCallStatus: EmergencyRollCallStatus
+  rollCallAt: string
+}
+
 export interface ApprovalHistoryDto {
   id: string
   status: number | string

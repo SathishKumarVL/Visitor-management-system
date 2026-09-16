@@ -314,6 +314,31 @@ public class SystemSetting
     public string? UpdatedBy { get; set; }
 }
 
+/// <summary>
+/// Append-only roll-call log for an evacuation. Emergency marshalling is an operational event,
+/// not a property of the visit, so nothing here rewrites the visit's own history.
+/// </summary>
+public class EmergencyRollCallEvent
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    public Guid VisitorVisitId { get; set; }
+    public VisitorVisit VisitorVisit { get; set; } = null!;
+
+    public EmergencyRollCallStatus Status { get; set; }
+
+    public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
+
+    [MaxLength(450)]
+    public string? RecordedByUserId { get; set; }
+
+    [MaxLength(300)]
+    public string? Notes { get; set; }
+}
+
 public class NotificationOutbox
 {
     public Guid Id { get; set; } = Guid.NewGuid();

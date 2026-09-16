@@ -499,6 +499,118 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         }
     }
 
+    // -------------------------------------------------------- emergency mode
+
+    [Fact]
+    public async Task Emergency_Roster_Counts_People_Inside_And_Does_Not_Claim_Employee_Tracking()
+    {
+        await SetApprovalRequiredAsync(false);
+        var reception = await LoginAsync("reception");
+        var visitId = VisitId(await RegisterAsync(reception, "Roster Visitor"));
+        (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+
+        var security = await LoginAsync("security");
+        var response = await security.GetAsync("/api/emergency/roster");
+        response.EnsureSuccessStatusCode();
+        var data = (await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+
+        Assert.True(data.GetProperty("totalInside").GetInt32() >= 1);
+        Assert.False(data.GetProperty("employeeTrackingAvailable").GetBoolean());
+        Assert.Contains(data.GetProperty("items").EnumerateArray(),
+            i => i.GetProperty("visitId").GetGuid() == visitId);
+    }
+
+    [Fact]
+    public async Task Emergency_RollCall_Is_Persisted_Audited_And_Leaves_The_Visit_Untouched()
+    {
+        await SetApprovalRequiredAsync(false);
+        var reception = await LoginAsync("reception");
+        var visitId = VisitId(await RegisterAsync(reception, "Roll Call Visitor"));
+        (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+
+        var security = await LoginAsync("security");
+        var mark = await security.PostAsJsonAsync("/api/emergency/roll-call", new
+        {
+            visitId,
+            status = (int)EmergencyRollCallStatus.Evacuated
+        });
+        Assert.True(mark.IsSuccessStatusCode, await mark.Content.ReadAsStringAsync());
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var events = await db.EmergencyRollCallEvents.IgnoreQueryFilters()
+            .Where(e => e.VisitorVisitId == visitId)
+            .ToListAsync();
+        Assert.Single(events);
+        Assert.Equal(EmergencyRollCallStatus.Evacuated, events[0].Status);
+        Assert.False(string.IsNullOrWhiteSpace(events[0].RecordedByUserId));
+
+        // The emergency mark is an event, not a change to the visit's own lifecycle state.
+        Assert.Equal(VisitStatus.Inside, await StatusOfAsync(visitId));
+
+        var audited = await db.AuditLogs.IgnoreQueryFilters()
+            .AnyAsync(a => a.EntityId == visitId.ToString() && a.Action == "EmergencyRollCallMarked");
+        Assert.True(audited);
+    }
+
+    [Fact]
+    public async Task Emergency_RollCall_Keeps_Every_Mark_And_Reports_The_Latest()
+    {
+        await SetApprovalRequiredAsync(false);
+        var reception = await LoginAsync("reception");
+        var visitId = VisitId(await RegisterAsync(reception, "Remarked Visitor"));
+        (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+
+        var security = await LoginAsync("security");
+        foreach (var status in new[] { EmergencyRollCallStatus.Missing, EmergencyRollCallStatus.Verified })
+        {
+            var response = await security.PostAsJsonAsync("/api/emergency/roll-call", new { visitId, status = (int)status });
+            response.EnsureSuccessStatusCode();
+        }
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var events = await db.EmergencyRollCallEvents.IgnoreQueryFilters()
+            .Where(e => e.VisitorVisitId == visitId)
+            .ToListAsync();
+
+        // Corrections append rather than overwrite, so the roll call stays auditable.
+        Assert.Equal(2, events.Count);
+
+        var roster = await security.GetAsync("/api/emergency/roster");
+        roster.EnsureSuccessStatusCode();
+        var item = (await roster.Content.ReadFromJsonAsync<JsonElement>(JsonOptions))
+            .GetProperty("data").GetProperty("items").EnumerateArray()
+            .First(i => i.GetProperty("visitId").GetGuid() == visitId);
+        Assert.Equal((int)EmergencyRollCallStatus.Verified, item.GetProperty("rollCallStatus").GetInt32());
+    }
+
+    [Fact]
+    public async Task Emergency_RollCall_Rejects_A_Visitor_Who_Is_Not_Inside()
+    {
+        await SetApprovalRequiredAsync(false);
+        var reception = await LoginAsync("reception");
+        var visitId = VisitId(await RegisterAsync(reception, "Not Inside Roll Call Visitor"));
+
+        var security = await LoginAsync("security");
+        var response = await security.PostAsJsonAsync("/api/emergency/roll-call", new
+        {
+            visitId,
+            status = (int)EmergencyRollCallStatus.Verified
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Emergency_Roster_Requires_An_Operational_Role()
+    {
+        var host = await LoginAsync("host");
+        var response = await host.GetAsync("/api/emergency/roster");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
     // ------------------------------------------------------------ audit trail
 
     [Fact]
