@@ -223,6 +223,7 @@ export interface RegisterVisitorRequest {
   idTypeId?: string | null
   idNumber?: string | null
   expectedVisitId?: string | null
+  recognizedVisitorId?: string | null
   numberOfPersons?: number
   faceDescriptor?: number[] | null
 }

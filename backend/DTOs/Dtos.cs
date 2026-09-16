@@ -225,6 +225,12 @@ public class RegisterVisitorRequest
     public string? IdNumber { get; set; }
     public Guid? ExpectedVisitId { get; set; }
 
+    /// <summary>
+    /// Visitor the operator confirmed from the face match. The visit is still new; this only keeps the
+    /// return visit attached to the existing visitor instead of creating a duplicate record.
+    /// </summary>
+    public Guid? RecognizedVisitorId { get; set; }
+
     /// <summary>Optional face template captured with the photo, used to recognise return visits.</summary>
     public float[]? FaceDescriptor { get; set; }
 }

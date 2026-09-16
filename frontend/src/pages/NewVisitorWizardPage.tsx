@@ -412,6 +412,7 @@ export function NewVisitorWizardPage() {
       notes: draft.notes.trim() || null,
       isWalkIn: draft.isWalkIn,
       expectedVisitId: draft.expectedVisitId,
+      recognizedVisitorId: draft.recognizedVisitorId,
       photoBase64: draft.photoBase64 || null,
       idTypeId: draft.idTypeId || null,
       idNumber: draft.idNumber || null,

@@ -134,6 +134,19 @@ public class VisitorService : IVisitorService
             expected.UpdatedAt = DateTime.UtcNow;
             expected.UpdatedBy = user.Identity?.Name;
         }
+        else if (request.RecognizedVisitorId.HasValue)
+        {
+            // Face match the operator confirmed: reuse the visitor so the return visit joins their
+            // history. The query filter keeps this from reaching across tenants or sites.
+            visitor = await _db.Visitors.FirstOrDefaultAsync(v => v.Id == request.RecognizedVisitorId.Value)
+                ?? throw new InvalidOperationException("Recognised visitor record not found.");
+            visitor.FullName = request.VisitorName.Trim();
+            visitor.CompanyName = request.CompanyName.Trim();
+            visitor.Phone = request.Telephone?.Trim();
+            visitor.Email = request.Email?.Trim();
+            visitor.UpdatedAt = DateTime.UtcNow;
+            visitor.UpdatedBy = user.Identity?.Name;
+        }
         else
         {
             visitor = new Visitor
@@ -1052,10 +1065,14 @@ public class VisitorService : IVisitorService
     {
         if (descriptor.Length != FaceRecognition.Dimensions) return;
 
-        var existing = await _db.VisitorFaceDescriptors
+        // Keep a rolling window of recent captures: matching against several poses is far more reliable
+        // than against the newest one alone. Only the overflow is discarded.
+        var stale = await _db.VisitorFaceDescriptors
             .Where(f => f.VisitorId == visitorId && f.Model == FaceRecognition.ModelId)
+            .OrderByDescending(f => f.CreatedAt)
+            .Skip(FaceRecognition.MaxTemplatesPerVisitor - 1)
             .ToListAsync();
-        _db.VisitorFaceDescriptors.RemoveRange(existing);
+        _db.VisitorFaceDescriptors.RemoveRange(stale);
 
         _db.VisitorFaceDescriptors.Add(new VisitorFaceDescriptor
         {

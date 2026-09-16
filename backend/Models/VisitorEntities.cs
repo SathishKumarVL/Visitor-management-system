@@ -188,8 +188,19 @@ public static class FaceRecognition
     public const string ModelId = "faceapi-128";
     public const int Dimensions = 128;
 
-    /// <summary>Stricter than check-out matching: a false positive here would prefill another visitor's details.</summary>
-    public const double RegistrationMatchThreshold = 0.45;
+    /// <summary>
+    /// Euclidean distance below which two templates are treated as the same person. The recognition net
+    /// is calibrated for 0.6; we stay under that because a false positive prefills another visitor's
+    /// details, but going much lower rejects genuine returning visitors whose lighting or pose changed.
+    /// The operator still confirms every match before it is applied.
+    /// </summary>
+    public const double RegistrationMatchThreshold = 0.55;
+
+    /// <summary>
+    /// Templates kept per visitor. Several captures across different lighting and poses recognise a
+    /// returning visitor far more reliably than the single most recent one.
+    /// </summary>
+    public const int MaxTemplatesPerVisitor = 5;
 }
 
 public class VisitorDocument
