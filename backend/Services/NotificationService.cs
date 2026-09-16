@@ -20,23 +20,36 @@ public class NotificationService : INotificationService
     private readonly IConfiguration _config;
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<NotificationService> _logger;
+    private readonly ITenantContext _tenant;
 
     public NotificationService(
         ApplicationDbContext db,
         IConfiguration config,
         IWebHostEnvironment env,
-        ILogger<NotificationService> logger)
+        ILogger<NotificationService> logger,
+        ITenantContext tenant)
     {
         _db = db;
         _config = config;
         _env = env;
         _logger = logger;
+        _tenant = tenant;
     }
+
+    /// <summary>
+    /// Tenant that owns every row this service queues. Queuing without a tenant is refused so a
+    /// delivery worker can never pick the row up and guess which tenant's configuration to use.
+    /// </summary>
+    private Guid QueueingTenantId =>
+        _tenant.TenantId is Guid id && id != Guid.Empty
+            ? id
+            : throw new UnauthorizedAccessException("Tenant context is required to queue a notification.");
 
     public async Task NotifyAsync(string channel, string recipient, string subject, string body)
     {
         var row = new NotificationOutbox
         {
+            TenantId = QueueingTenantId,
             Channel = channel,
             Recipient = recipient,
             Subject = subject,
@@ -66,6 +79,7 @@ public class NotificationService : INotificationService
 
         var row = new NotificationOutbox
         {
+            TenantId = QueueingTenantId,
             Channel = "Email",
             Recipient = email.Trim(),
             Subject = subject,
@@ -84,6 +98,7 @@ public class NotificationService : INotificationService
 
         var row = new NotificationOutbox
         {
+            TenantId = QueueingTenantId,
             Channel = "Email",
             Recipient = recipient.Trim(),
             Subject = "Tiaano VMS SMTP test",

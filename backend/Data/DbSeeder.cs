@@ -336,6 +336,7 @@ public static class DbSeeder
             UPDATE VisitorVisits SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE SystemSettings SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE AuditLogs SET TenantId = {0} WHERE TenantId IS NULL;
+            UPDATE NotificationOutbox SET TenantId = {0} WHERE TenantId IS NULL;
             """, tenantId);
     }
 

@@ -169,6 +169,15 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
+        builder.Entity<NotificationOutbox>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.IsSent });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            // Fail closed: a queued notification is only visible to the tenant that queued it.
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
         builder.Entity<Approval>(e =>
         {
             e.HasIndex(x => x.Status);

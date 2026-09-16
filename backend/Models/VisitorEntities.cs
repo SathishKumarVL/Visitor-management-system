@@ -318,6 +318,14 @@ public class NotificationOutbox
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    /// <summary>
+    /// Owning tenant, stamped at queue time. A delivery worker must resolve sender configuration
+    /// from this value rather than from whatever tenant happens to be ambient when it runs.
+    /// Nullable only so pre-existing rows survive the migration; new rows always carry a tenant.
+    /// </summary>
+    public Guid? TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
     [Required, MaxLength(50)]
     public string Channel { get; set; } = "Internal";
 

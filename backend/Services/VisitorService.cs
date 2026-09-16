@@ -548,11 +548,15 @@ public class VisitorService : IVisitorService
             : DateTime.Now;
 
         // Send thank-you mail in the background so checkout never waits on SMTP.
+        // The tenant is captured here and re-seeded into the background scope: that scope has no
+        // request to resolve it from, and an unseeded scope must never fall back to another tenant.
+        var notificationTenantId = visit.TenantId;
         _ = Task.Run(async () =>
         {
             try
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
+                scope.ServiceProvider.GetRequiredService<ITenantContext>().Set(notificationTenantId);
                 var mail = scope.ServiceProvider.GetRequiredService<INotificationService>();
                 await mail.SendVisitorThankYouEmailAsync(visitorName, visitorEmail, visitMomentLocal);
             }
@@ -1190,11 +1194,13 @@ public class VisitorService : IVisitorService
     {
         var date = DateTime.Now.ToString("yyyyMMdd");
         var patternPrefix = $"{prefix}-V-{date}-";
-        var existing = await _db.Visitors.AsNoTracking()
+        var latest = await _db.Visitors.AsNoTracking()
             .Where(v => v.VisitorNumber.StartsWith(patternPrefix))
+            .OrderByDescending(v => v.VisitorNumber)
             .Select(v => v.VisitorNumber)
-            .ToListAsync();
-        return $"{patternPrefix}{(MaxNumericSuffix(existing, patternPrefix) + 1):D4}";
+            .FirstOrDefaultAsync();
+        var next = latest is null ? 1 : MaxNumericSuffix([latest], patternPrefix) + 1;
+        return $"{patternPrefix}{next:D4}";
     }
 
     /// <summary>
@@ -1226,6 +1232,12 @@ public class VisitorService : IVisitorService
     /// Persists a new visit, re-issuing the visit number if a concurrent registration claimed it first.
     /// The (TenantId, VisitNumber) unique index is the source of truth; this only removes the operator-visible failure.
     /// </summary>
+    /// <summary>
+    /// Persists a new visit with its human-readable numbers allocated under a per-tenant lock.
+    /// "Read the highest number, add one" is only safe if concurrent registrations cannot read the
+    /// same highest number, so allocation and insert happen inside one transaction holding that lock.
+    /// The unique indexes stay the final authority; the retry covers numbers created outside this path.
+    /// </summary>
     private async Task SaveNewVisitAsync(VisitorVisit visit, Visitor? newVisitor, string prefix)
     {
         const int maxAttempts = 5;
@@ -1233,27 +1245,48 @@ public class VisitorService : IVisitorService
         {
             try
             {
-                await _db.SaveChangesAsync();
+                var strategy = _db.Database.CreateExecutionStrategy();
+                await strategy.ExecuteAsync(async () =>
+                {
+                    await using var tx = await _db.Database.BeginTransactionAsync();
+                    await AcquireNumberAllocationLockAsync(visit.TenantId, prefix);
+
+                    visit.VisitNumber = await NextVisitNumberAsync(prefix);
+                    if (newVisitor is not null)
+                        newVisitor.VisitorNumber = await NextVisitorNumberAsync(prefix);
+
+                    await _db.SaveChangesAsync();
+                    await tx.CommitAsync();
+                });
                 return;
             }
-            catch (DbUpdateException ex) when (attempt < maxAttempts && IsDuplicateNumber(ex, out var visitNumberClash))
+            catch (DbUpdateException ex) when (attempt < maxAttempts && IsDuplicateNumber(ex))
             {
-                if (visitNumberClash)
-                    visit.VisitNumber = await NextVisitNumberAsync(prefix);
-                else if (newVisitor is not null)
-                    newVisitor.VisitorNumber = await NextVisitorNumberAsync(prefix);
-                else
-                    throw;
+                // Fall through and allocate again on the next attempt.
             }
         }
     }
 
-    private static bool IsDuplicateNumber(DbUpdateException ex, out bool visitNumberClash)
+    /// <summary>
+    /// Serialises number allocation for one tenant and year. The lock is owned by the surrounding
+    /// transaction, so it is always released on commit or rollback. Providers without application
+    /// locks fall back to the unique index plus retry.
+    /// </summary>
+    private async Task AcquireNumberAllocationLockAsync(Guid tenantId, string prefix)
+    {
+        if (!_db.Database.IsSqlServer()) return;
+
+        var resource = $"vms-number:{tenantId}:{VisitNumberPrefix(prefix)}";
+        await _db.Database.ExecuteSqlRawAsync(
+            "EXEC sp_getapplock @Resource = {0}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000",
+            resource);
+    }
+
+    private static bool IsDuplicateNumber(DbUpdateException ex)
     {
         var message = ex.InnerException?.Message ?? ex.Message;
-        visitNumberClash = message.Contains("IX_VisitorVisits_TenantId_VisitNumber", StringComparison.OrdinalIgnoreCase);
-        var visitorNumberClash = message.Contains("IX_Visitors_TenantId_VisitorNumber", StringComparison.OrdinalIgnoreCase);
-        return visitNumberClash || visitorNumberClash;
+        return message.Contains("IX_VisitorVisits_TenantId_VisitNumber", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("IX_Visitors_TenantId_VisitorNumber", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int MaxNumericSuffix(IEnumerable<string> values, string patternPrefix)

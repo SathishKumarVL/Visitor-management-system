@@ -11,6 +11,7 @@ using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.Middleware;
 using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Security;
 using Tiaano.Vms.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -60,20 +61,20 @@ builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+    if (RateLimitPolicy.IsLoginRateLimitRelaxed(builder.Environment.EnvironmentName))
     {
-        options.AddPolicy("login", _ => RateLimitPartition.GetNoLimiter("dev"));
+        options.AddPolicy(RateLimitPolicy.LoginPolicyName, _ => RateLimitPartition.GetNoLimiter("dev"));
     }
     else
     {
-        options.AddPolicy("login", httpContext =>
+        options.AddPolicy(RateLimitPolicy.LoginPolicyName, httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(
                 httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions
                 {
-                    PermitLimit = 10,
-                    Window = TimeSpan.FromMinutes(1),
-                    QueueLimit = 0
+                    PermitLimit = RateLimitPolicy.LoginPermitLimit,
+                    Window = RateLimitPolicy.LoginWindow,
+                    QueueLimit = RateLimitPolicy.LoginQueueLimit
                 }));
     }
 });
