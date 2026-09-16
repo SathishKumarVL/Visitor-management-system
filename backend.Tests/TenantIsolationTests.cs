@@ -299,35 +299,103 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
         Assert.True(traversal.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest);
     }
 
-    [Fact]
-    public async Task TenantA_Report_Does_Not_Contain_TenantB_Visits()
+    // ------------------------------------------------------ report isolation
+
+    /// <summary>Strings that only ever belong to Tenant B's seeded visit.</summary>
+    private static readonly string[] TenantBMarkers = ["Secret Visitor B", "OtherCorp", "TB-2026-", "Host B"];
+
+    private static string ReportUrl(string format) =>
+        $"/api/reports/visitors?reportType=daterange&format={format}" +
+        $"&dateFrom={DateTime.Today.AddDays(-30):yyyy-MM-dd}&dateTo={DateTime.Today.AddDays(1):yyyy-MM-dd}";
+
+    private async Task<byte[]> FetchReportAsync(HttpClient client, string format)
+    {
+        var response = await client.GetAsync(ReportUrl(format));
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsByteArrayAsync();
+    }
+
+    /// <summary>
+    /// Every export format is checked the same way: the extractor must find Tenant B's markers in
+    /// Tenant B's own export, which proves the extractor works, and must find none of them in
+    /// Tenant A's export. Without the positive control an empty extraction would look like a pass.
+    /// </summary>
+    private async Task AssertFormatIsolatedAsync(string format, Func<byte[], string> extract)
     {
         await EnsureTenantBAsync();
         await EnsureReceptionAsync();
-        var (client, _) = await LoginAsync("reception", TestSecrets.SeedPassword);
 
-        var response = await client.GetAsync(
-            $"/api/reports/visitors?reportType=daterange&dateFrom={DateTime.Today.AddDays(-7):yyyy-MM-dd}&dateTo={DateTime.Today:yyyy-MM-dd}");
-        response.EnsureSuccessStatusCode();
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("Secret Visitor B", body);
-        Assert.DoesNotContain("TB-2026-000001", body);
-        Assert.DoesNotContain("OtherCorp", body);
+        var (tenantB, _) = await LoginAsync(TenantBAdmin, TenantBPassword);
+        var tenantBText = extract(await FetchReportAsync(tenantB, format));
+        Assert.Contains("Secret Visitor B", tenantBText);
+
+        var (tenantA, _) = await LoginAsync("reception", TestSecrets.SeedPassword);
+        var tenantAText = extract(await FetchReportAsync(tenantA, format));
+        foreach (var marker in TenantBMarkers)
+            Assert.DoesNotContain(marker, tenantAText, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task TenantA_Csv_Export_Does_Not_Contain_TenantB()
+    public Task Report_Json_Is_Tenant_Isolated() =>
+        AssertFormatIsolatedAsync("json", ReportText.FromPlainText);
+
+    [Fact]
+    public Task Report_Csv_Is_Tenant_Isolated() =>
+        AssertFormatIsolatedAsync("csv", ReportText.FromPlainText);
+
+    [Fact]
+    public Task Report_Excel_Is_Tenant_Isolated() =>
+        AssertFormatIsolatedAsync("excel", ReportText.FromXlsx);
+
+    [Fact]
+    public Task Report_Pdf_Is_Tenant_Isolated() =>
+        AssertFormatIsolatedAsync("pdf", ReportText.FromPdf);
+
+    [Fact]
+    public async Task Report_Totals_And_Counts_Exclude_Other_Tenants()
+    {
+        await EnsureTenantBAsync();
+        await EnsureReceptionAsync();
+
+        int expectedTenantARows;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            expectedTenantARows = await db.VisitorVisits.IgnoreQueryFilters()
+                .CountAsync(v => v.TenantId != TenantBId
+                    && v.VisitDate >= DateOnly.FromDateTime(DateTime.Today.AddDays(-30))
+                    && v.VisitDate <= DateOnly.FromDateTime(DateTime.Today.AddDays(1)));
+        }
+
+        var (client, _) = await LoginAsync("reception", TestSecrets.SeedPassword);
+        var response = await client.GetAsync(ReportUrl("json"));
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        var data = json.GetProperty("data");
+
+        // The declared total must match the row array and must not count Tenant B's visit.
+        var total = data.GetProperty("total").GetInt32();
+        Assert.Equal(data.GetProperty("rows").GetArrayLength(), total);
+        Assert.Equal(expectedTenantARows, total);
+    }
+
+    [Fact]
+    public async Task Report_Filenames_Leak_No_Tenant_Data()
     {
         await EnsureTenantBAsync();
         await EnsureReceptionAsync();
         var (client, _) = await LoginAsync("reception", TestSecrets.SeedPassword);
 
-        var response = await client.GetAsync(
-            $"/api/reports/visitors?reportType=daterange&format=csv&dateFrom={DateTime.Today.AddDays(-30):yyyy-MM-dd}&dateTo={DateTime.Today:yyyy-MM-dd}");
-        response.EnsureSuccessStatusCode();
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("Secret Visitor B", body);
-        Assert.DoesNotContain("TB-2026-", body);
+        foreach (var format in new[] { "csv", "excel", "pdf" })
+        {
+            var response = await client.GetAsync(ReportUrl(format));
+            response.EnsureSuccessStatusCode();
+            var fileName = response.Content.Headers.ContentDisposition?.FileNameStar
+                ?? response.Content.Headers.ContentDisposition?.FileName
+                ?? "";
+            foreach (var marker in TenantBMarkers)
+                Assert.DoesNotContain(marker, fileName, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
