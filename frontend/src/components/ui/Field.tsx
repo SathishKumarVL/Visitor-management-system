@@ -1,5 +1,5 @@
 import { cn } from '../../lib/utils'
-import { useState, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { forwardRef, useState, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 const fieldBase =
   'min-h-12 w-full max-w-full rounded-xl border border-border bg-white px-3.5 text-base text-ink shadow-sm placeholder:text-gray-300 transition duration-200 focus:border-primary focus:ring-2 focus:ring-primary/20 sm:min-h-12'
@@ -12,9 +12,12 @@ export function FieldLabel({ children, htmlFor }: { children: React.ReactNode; h
   )
 }
 
-export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(fieldBase, className)} {...props} />
-}
+/** Ref-forwarding so callers can move focus to a field, e.g. after a validation error. */
+export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function TextInput({ className, ...props }, ref) {
+    return <input ref={ref} className={cn(fieldBase, className)} {...props} />
+  },
+)
 
 export function PasswordInput({ className, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
   const [visible, setVisible] = useState(false)

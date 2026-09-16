@@ -9,6 +9,16 @@ import { formatDateTime, formatDuration, statusBadgeClass } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
 
+type SortKey = 'longest' | 'recent' | 'name' | 'company' | 'host'
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'longest', label: 'Longest on site' },
+  { value: 'recent', label: 'Most recent arrival' },
+  { value: 'name', label: 'Visitor name' },
+  { value: 'company', label: 'Company' },
+  { value: 'host', label: 'Host' },
+]
+
 export function CurrentlyInsidePage() {
   const [params] = useSearchParams()
   const checkoutMode = params.get('action') === 'checkout'
@@ -23,6 +33,7 @@ export function CurrentlyInsidePage() {
   const [exitGates, setExitGates] = useState<MasterItemDto[]>([])
   const [exitGateId, setExitGateId] = useState('')
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SortKey>('longest')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -43,14 +54,35 @@ export function CurrentlyInsidePage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return items
-    return items.filter(
-      (v) =>
-        v.visitorName.toLowerCase().includes(q) ||
-        (v.companyName ?? '').toLowerCase().includes(q) ||
-        (v.hostName ?? '').toLowerCase().includes(q),
-    )
-  }, [items, query])
+    const matches = q
+      ? items.filter(
+          (v) =>
+            v.visitorName.toLowerCase().includes(q) ||
+            (v.companyName ?? '').toLowerCase().includes(q) ||
+            (v.hostName ?? '').toLowerCase().includes(q) ||
+            v.visitNumber.toLowerCase().includes(q) ||
+            v.locations.some((l) => l.toLowerCase().includes(q)),
+        )
+      : items
+
+    const sorted = [...matches]
+    sorted.sort((a, b) => {
+      switch (sort) {
+        case 'name':
+          return a.visitorName.localeCompare(b.visitorName)
+        case 'company':
+          return (a.companyName ?? '').localeCompare(b.companyName ?? '')
+        case 'host':
+          return (a.hostName ?? '').localeCompare(b.hostName ?? '')
+        case 'recent':
+          // Shortest time on site first, i.e. most recent arrival.
+          return (a.durationMinutes ?? 0) - (b.durationMinutes ?? 0)
+        default:
+          return (b.durationMinutes ?? 0) - (a.durationMinutes ?? 0)
+      }
+    })
+    return sorted
+  }, [items, query, sort])
 
   async function checkout(id: string) {
     setBusyId(id)
@@ -80,21 +112,34 @@ export function CurrentlyInsidePage() {
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink-muted">Total inside</p>
           <p className="mt-1 text-4xl font-semibold text-ink">{items.length}</p>
         </Panel>
-        <Panel>
-          <FieldLabel htmlFor="insideSearch">Search</FieldLabel>
-          <TextInput
-            id="insideSearch"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Name, company, or host"
-          />
+        <Panel className="grid gap-3 sm:grid-cols-[2fr_1fr]">
+          <div>
+            <FieldLabel htmlFor="insideSearch">Search</FieldLabel>
+            <TextInput
+              id="insideSearch"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Name, company, host, location, or visit number"
+            />
+          </div>
+          <div>
+            <FieldLabel htmlFor="insideSort">Sort by</FieldLabel>
+            <TextSelect id="insideSort" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </TextSelect>
+          </div>
         </Panel>
       </div>
 
       {canCheckout ? (
         <Panel className="mb-4 max-w-sm">
-          <FieldLabel>Exit gate</FieldLabel>
-          <TextSelect value={exitGateId} onChange={(e) => setExitGateId(e.target.value)}>
+          <FieldLabel htmlFor="insideExitGate">Exit gate</FieldLabel>
+          <TextSelect id="insideExitGate" value={exitGateId} onChange={(e) => setExitGateId(e.target.value)}>
             <option value="">Default</option>
             {exitGates.map((g) => (
               <option key={g.id} value={g.id}>
@@ -105,16 +150,18 @@ export function CurrentlyInsidePage() {
         </Panel>
       ) : null}
 
-      {error ? (
-        <div className="mb-4">
-          <Alert tone="error">{error}</Alert>
-        </div>
-      ) : null}
-      {message ? (
-        <div className="mb-4">
-          <Alert tone="success">{message}</Alert>
-        </div>
-      ) : null}
+      <div aria-live="polite" aria-atomic="true">
+        {error ? (
+          <div className="mb-4">
+            <Alert tone="error">{error}</Alert>
+          </div>
+        ) : null}
+        {message ? (
+          <div className="mb-4">
+            <Alert tone="success">{message}</Alert>
+          </div>
+        ) : null}
+      </div>
       {loading ? <Spinner /> : null}
       {!loading && filtered.length === 0 ? (
         <EmptyState
@@ -136,8 +183,11 @@ export function CurrentlyInsidePage() {
                   {v.isLongStay ? <Badge className="bg-red-100 text-danger ring-1 ring-red-200">Long stay</Badge> : null}
                 </div>
                 <p className="mt-1 text-sm text-ink-muted">
-                  {v.companyName} · {v.hostName} · In since {formatDateTime(v.checkInAt)} ·{' '}
-                  {formatDuration(v.durationMinutes)}
+                  {v.companyName} · Host {v.hostName}
+                  {v.locations.length ? ` · ${v.locations.join(', ')}` : ''}
+                </p>
+                <p className="mt-0.5 text-sm text-ink-muted">
+                  {v.visitNumber} · In since {formatDateTime(v.checkInAt)} · {formatDuration(v.durationMinutes)}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
