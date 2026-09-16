@@ -178,6 +178,31 @@ public class RegisterVisitorRequest
     public Guid? IdTypeId { get; set; }
     public string? IdNumber { get; set; }
     public Guid? ExpectedVisitId { get; set; }
+
+    /// <summary>Optional face template captured with the photo, used to recognise return visits.</summary>
+    public float[]? FaceDescriptor { get; set; }
+}
+
+public class FaceSearchRequest
+{
+    [Required]
+    public float[] Descriptor { get; set; } = Array.Empty<float>();
+}
+
+public class FaceSearchMatchDto
+{
+    public Guid VisitorId { get; set; }
+    public string VisitorNumber { get; set; } = string.Empty;
+    public string VisitorName { get; set; } = string.Empty;
+    public string CompanyName { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? PhotoUrl { get; set; }
+    public DateOnly? LastVisitDate { get; set; }
+    public int TotalVisits { get; set; }
+
+    /// <summary>Euclidean distance — lower is a closer match. Surfaced for operator transparency.</summary>
+    public double Distance { get; set; }
 }
 
 public class ExpectedVisitorRequest

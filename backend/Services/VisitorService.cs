@@ -27,6 +27,7 @@ public interface IVisitorService
     Task<PassDto> ReprintPassAsync(Guid visitId, ClaimsPrincipal user, string webRoot);
     Task<PassDto?> LookupByVisitNumberAsync(string visitNumber, string webRoot);
     Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes);
+    Task<FaceSearchMatchDto?> FaceSearchAsync(float[] descriptor, ClaimsPrincipal user);
 }
 
 public class VisitorService : IVisitorService
@@ -191,6 +192,9 @@ public class VisitorService : IVisitorService
 
         if (!string.IsNullOrWhiteSpace(request.PhotoBase64))
             await SavePhotoAsync(visitor.Id, visit.Id, request.PhotoBase64, webRoot, user.Identity?.Name);
+
+        if (request.FaceDescriptor is { Length: > 0 })
+            await SaveFaceDescriptorAsync(visitor.Id, request.FaceDescriptor, user);
 
         if (request.IdTypeId.HasValue && !string.IsNullOrWhiteSpace(request.IdNumber))
         {
@@ -957,6 +961,127 @@ public class VisitorService : IVisitorService
             PhotoUrl = item.PhotoUrl,
             Status = item.StatusLabel
         };
+    }
+
+    /// <summary>
+    /// Finds the closest stored face template within the caller's tenant.
+    /// Templates are streamed rather than materialised so large tenants stay bounded in memory.
+    /// </summary>
+    public async Task<FaceSearchMatchDto?> FaceSearchAsync(float[] descriptor, ClaimsPrincipal user)
+    {
+        _ = ResolveTenantId(user);
+
+        if (descriptor is null || descriptor.Length != FaceRecognition.Dimensions)
+            throw new InvalidOperationException("A valid face capture is required.");
+
+        Guid? bestVisitorId = null;
+        var bestDistance = double.MaxValue;
+
+        var candidates = _db.VisitorFaceDescriptors.AsNoTracking()
+            .Where(f => f.Model == FaceRecognition.ModelId && f.Dimensions == FaceRecognition.Dimensions)
+            .OrderByDescending(f => f.CreatedAt)
+            .Select(f => new { f.VisitorId, f.Descriptor })
+            .AsAsyncEnumerable();
+
+        await foreach (var candidate in candidates)
+        {
+            var stored = FromBytes(candidate.Descriptor);
+            if (stored.Length != descriptor.Length) continue;
+
+            var distance = EuclideanDistance(descriptor, stored);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestVisitorId = candidate.VisitorId;
+            }
+        }
+
+        if (bestVisitorId is null || bestDistance > FaceRecognition.RegistrationMatchThreshold)
+        {
+            await _audit.LogAsync("FaceSearchNoMatch", "Visitor", null, "Face capture did not match a known visitor");
+            return null;
+        }
+
+        var visitor = await _db.Visitors.AsNoTracking()
+            .Where(v => v.Id == bestVisitorId.Value)
+            .Select(v => new
+            {
+                v.Id,
+                v.VisitorNumber,
+                v.FullName,
+                v.CompanyName,
+                v.Phone,
+                v.Email,
+                TotalVisits = v.Visits.Count,
+                LastVisitDate = v.Visits.OrderByDescending(x => x.VisitDate).Select(x => (DateOnly?)x.VisitDate).FirstOrDefault(),
+                PhotoPath = v.Photos.Where(p => p.IsPrimary).Select(p => p.FilePath).FirstOrDefault()
+            })
+            .FirstOrDefaultAsync();
+
+        // Tenant query filter removed the visitor: treat as no match rather than leaking existence.
+        if (visitor is null) return null;
+
+        await _audit.LogAsync("FaceSearchMatched", "Visitor", visitor.Id.ToString(), "Returning visitor recognised from face capture");
+
+        return new FaceSearchMatchDto
+        {
+            VisitorId = visitor.Id,
+            VisitorNumber = visitor.VisitorNumber,
+            VisitorName = visitor.FullName,
+            CompanyName = visitor.CompanyName,
+            Phone = visitor.Phone,
+            Email = visitor.Email,
+            PhotoUrl = visitor.PhotoPath is null ? null : _media.ToPublicApiPath(Path.GetFileName(visitor.PhotoPath)),
+            LastVisitDate = visitor.LastVisitDate,
+            TotalVisits = visitor.TotalVisits,
+            Distance = Math.Round(bestDistance, 4)
+        };
+    }
+
+    private async Task SaveFaceDescriptorAsync(Guid visitorId, float[] descriptor, ClaimsPrincipal user)
+    {
+        if (descriptor.Length != FaceRecognition.Dimensions) return;
+
+        var existing = await _db.VisitorFaceDescriptors
+            .Where(f => f.VisitorId == visitorId && f.Model == FaceRecognition.ModelId)
+            .ToListAsync();
+        _db.VisitorFaceDescriptors.RemoveRange(existing);
+
+        _db.VisitorFaceDescriptors.Add(new VisitorFaceDescriptor
+        {
+            TenantId = ResolveTenantId(user),
+            VisitorId = visitorId,
+            Descriptor = ToBytes(descriptor),
+            Dimensions = descriptor.Length,
+            Model = FaceRecognition.ModelId,
+            CreatedBy = user.Identity?.Name
+        });
+        await _db.SaveChangesAsync();
+    }
+
+    private static byte[] ToBytes(float[] values)
+    {
+        var bytes = new byte[values.Length * sizeof(float)];
+        Buffer.BlockCopy(values, 0, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    private static float[] FromBytes(byte[] bytes)
+    {
+        var values = new float[bytes.Length / sizeof(float)];
+        Buffer.BlockCopy(bytes, 0, values, 0, bytes.Length);
+        return values;
+    }
+
+    private static double EuclideanDistance(float[] a, float[] b)
+    {
+        double sum = 0;
+        for (var i = 0; i < a.Length; i++)
+        {
+            var diff = a[i] - b[i];
+            sum += diff * diff;
+        }
+        return Math.Sqrt(sum);
     }
 
     private async Task SavePhotoAsync(Guid visitorId, Guid visitId, string base64, string webRoot, string? userName)

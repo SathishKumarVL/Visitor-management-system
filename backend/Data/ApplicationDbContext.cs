@@ -30,6 +30,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<VisitorVisitLocation> VisitorVisitLocations => Set<VisitorVisitLocation>();
     public DbSet<VisitorPhoto> VisitorPhotos => Set<VisitorPhoto>();
     public DbSet<VisitorDocument> VisitorDocuments => Set<VisitorDocument>();
+    public DbSet<VisitorFaceDescriptor> VisitorFaceDescriptors => Set<VisitorFaceDescriptor>();
     public DbSet<Approval> Approvals => Set<Approval>();
     public DbSet<VisitorPass> VisitorPasses => Set<VisitorPass>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -156,6 +157,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.IdType).WithMany().HasForeignKey(x => x.IdTypeId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<VisitorFaceDescriptor>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Model });
+            e.HasOne(x => x.Visitor).WithMany().HasForeignKey(x => x.VisitorId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<Approval>(e =>

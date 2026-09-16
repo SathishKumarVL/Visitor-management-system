@@ -141,6 +141,23 @@ public class VisitorsController : ControllerBase
         return Ok(new ApiResponse<VisitorDetailDto>(true, result));
     }
 
+    /// <summary>Recognises a returning visitor from a live face capture. Scoped to the caller's tenant.</summary>
+    [HttpPost("face-search")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<FaceSearchMatchDto>>> FaceSearch([FromBody] FaceSearchRequest request)
+    {
+        try
+        {
+            var match = await _visitors.FaceSearchAsync(request.Descriptor, User);
+            return Ok(new ApiResponse<FaceSearchMatchDto>(true, match,
+                match is null ? "No matching visitor found." : "Returning visitor recognised."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<FaceSearchMatchDto>(false, null, ex.Message));
+        }
+    }
+
     [HttpGet("inside")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<VisitorListItemDto>>>> Inside()
     {

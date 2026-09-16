@@ -156,6 +156,20 @@ export interface RegisterVisitorRequest {
   idNumber?: string | null
   expectedVisitId?: string | null
   numberOfPersons?: number
+  faceDescriptor?: number[] | null
+}
+
+export interface FaceSearchMatchDto {
+  visitorId: string
+  visitorNumber: string
+  visitorName: string
+  companyName: string
+  phone?: string | null
+  email?: string | null
+  photoUrl?: string | null
+  lastVisitDate?: string | null
+  totalVisits: number
+  distance: number
 }
 
 export interface ExpectedVisitorRequest {
@@ -302,4 +316,6 @@ export interface VisitorWizardDraft {
   idNumber: string
   isWalkIn: boolean
   expectedVisitId: string | null
+  faceDescriptor: number[] | null
+  recognizedVisitorId: string | null
 }

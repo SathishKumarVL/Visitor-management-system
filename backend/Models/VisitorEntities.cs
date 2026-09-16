@@ -155,6 +155,43 @@ public class VisitorPhoto
     public string? CreatedBy { get; set; }
 }
 
+/// <summary>
+/// Biometric face template (not an image) used to recognise returning visitors.
+/// Tenant-scoped explicitly because this is sensitive personal data.
+/// </summary>
+public class VisitorFaceDescriptor
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    public Guid VisitorId { get; set; }
+    public Visitor Visitor { get; set; } = null!;
+
+    /// <summary>Little-endian float32 vector. 128 dimensions for face-api.js recognition net.</summary>
+    [Required, MaxLength(2048)]
+    public byte[] Descriptor { get; set; } = Array.Empty<byte>();
+
+    public int Dimensions { get; set; }
+
+    /// <summary>Model identifier so templates from different models are never compared.</summary>
+    [Required, MaxLength(50)]
+    public string Model { get; set; } = FaceRecognition.ModelId;
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string? CreatedBy { get; set; }
+}
+
+public static class FaceRecognition
+{
+    public const string ModelId = "faceapi-128";
+    public const int Dimensions = 128;
+
+    /// <summary>Stricter than check-out matching: a false positive here would prefill another visitor's details.</summary>
+    public const double RegistrationMatchThreshold = 0.45;
+}
+
 public class VisitorDocument
 {
     public Guid Id { get; set; } = Guid.NewGuid();

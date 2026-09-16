@@ -502,6 +502,56 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
+    public async Task Face_Search_Does_Not_Match_Across_Tenants()
+    {
+        await EnsureTenantBAsync();
+        await EnsureReceptionAsync();
+
+        // Enrol a distinctive face template against a Tenant B visitor.
+        var descriptor = new float[128];
+        for (var i = 0; i < descriptor.Length; i++) descriptor[i] = 0.37f;
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var visitorId = await db.Visitors.IgnoreQueryFilters()
+                .Where(v => v.TenantId == TenantBId).Select(v => v.Id).FirstAsync();
+
+            if (!await db.VisitorFaceDescriptors.IgnoreQueryFilters().AnyAsync(f => f.VisitorId == visitorId))
+            {
+                var bytes = new byte[descriptor.Length * sizeof(float)];
+                Buffer.BlockCopy(descriptor, 0, bytes, 0, bytes.Length);
+                db.VisitorFaceDescriptors.Add(new VisitorFaceDescriptor
+                {
+                    TenantId = TenantBId,
+                    VisitorId = visitorId,
+                    Descriptor = bytes,
+                    Dimensions = descriptor.Length,
+                    Model = FaceRecognition.ModelId,
+                    CreatedBy = "test"
+                });
+                await db.SaveChangesAsync();
+            }
+        }
+
+        // Tenant A submits the identical template — must not resolve Tenant B's visitor.
+        var (client, _) = await LoginAsync("reception", TestSecrets.SeedPassword);
+        var response = await client.PostAsJsonAsync("/api/visitors/face-search", new { descriptor });
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+
+        var data = json.GetProperty("data");
+        Assert.True(data.ValueKind == JsonValueKind.Null, "Tenant A must not match a Tenant B face template.");
+
+        // Tenant B submitting the same template does resolve its own visitor (positive control).
+        var (clientB, _) = await LoginAsync(TenantBAdmin, TenantBPassword);
+        var ownResponse = await clientB.PostAsJsonAsync("/api/visitors/face-search", new { descriptor });
+        ownResponse.EnsureSuccessStatusCode();
+        var ownJson = await ownResponse.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        Assert.Equal("Secret Visitor B", ownJson.GetProperty("data").GetProperty("visitorName").GetString());
+    }
+
+    [Fact]
     public async Task Forged_Tenant_Header_Does_Not_Switch_Tenant()
     {
         await EnsureTenantBAsync();

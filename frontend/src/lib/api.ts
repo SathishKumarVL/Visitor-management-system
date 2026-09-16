@@ -7,6 +7,7 @@ import type {
   DashboardDto,
   EmployeeDto,
   ExpectedVisitorRequest,
+  FaceSearchMatchDto,
   LoginResponse,
   MasterItemDto,
   MasterUpsertRequest,
@@ -204,6 +205,8 @@ export const visitorsApi = {
     unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, { entryGateId })),
   checkOut: (id: string, exitGateId?: string) =>
     unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, { exitGateId })),
+  faceSearch: (descriptor: number[]) =>
+    unwrap(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { descriptor })),
 }
 
 export const approvalsApi = {
