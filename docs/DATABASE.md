@@ -27,7 +27,9 @@ Database name (dev default): `TiaanoVms`
 | VisitorPasses | Issued pass records (legacy PassCode retained; Visit Number is the public identifier) |
 | AuditLogs | Immutable audit trail |
 | SystemSettings | Configurable settings (unique per TenantId + Key) |
-| NotificationOutbox | Notification abstraction queue |
+| NotificationOutbox | Notification abstraction queue (tenant-scoped; nullable `TenantId` for pre-existing rows) |
+| EmergencyRollCallEvents | Append-only evacuation roll call; never mutates the visit |
+| VisitorFaceDescriptors | Face templates for returning-visitor recognition |
 | Tenants / Sites | Multi-tenant foundation |
 | ProductModules / TenantModuleEntitlements / TenantLicenses | Productization scaffold |
 | FeatureFlags / ApplicationReleases | Flags + release history |

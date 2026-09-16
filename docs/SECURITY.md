@@ -109,3 +109,25 @@ See `docs/TENANT_ISOLATION_REVIEW.md`.
 - Module entitlements enforced on the API (`RequireModule`)
 - Login rate limit active outside Development
 
+## Core workflow hardening slice
+
+See `docs/CORE_WORKFLOW_REVIEW.md`.
+
+- Visitor lifecycle transitions are enforced server-side, not in the wizard: rejected, cancelled
+  and pending-approval visits cannot be checked in, only a visitor inside can be checked out,
+  and neither check-in nor check-out can be repeated.
+- Approval is tenant configuration rather than a hardcoded bypass. Decisions record the actor,
+  timestamp and reason, and a host may only decide on their own visits.
+- Visit numbers are allocated inside a transaction holding a per-tenant application lock, so
+  concurrent registrations cannot collide on the public identifier.
+- `NotificationOutbox` rows carry their owning tenant and sit behind a fail-closed query filter.
+  Queuing without a tenant context is refused, and the background checkout email re-seeds the
+  tenant into its own scope instead of running unscoped.
+- Login rate limiting is decided by `RateLimitPolicy.IsLoginRateLimitRelaxed`: an exact,
+  case-sensitive match on `Development` or `Testing`. Everything else, including an unset
+  environment, stays limited. Unit tests fail if `Program.cs` reverts to an inline check.
+- Emergency roll-call marks are appended as audited, tenant-scoped events and never rewrite a
+  visit record.
+- Report tenant isolation is verified for JSON, CSV, Excel and PDF, each with a positive control
+  proving the extractor would have caught a leak.
+

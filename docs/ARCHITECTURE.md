@@ -14,7 +14,13 @@ Modular monolith:
 ## Layers
 
 1. **Core platform** — auth, tenancy, licensing, media, audit, settings, upgrades
-2. **Visitor Management module** — registration, check-in/out, passes, reports, emergency roster
+2. **Visitor Management module** — registration, approval, check-in/out, passes, reports, emergency roster
+
+The visitor lifecycle is a server-enforced state machine. `VisitorService.EnsureCheckInAllowed`
+and `EnsureCheckOutAllowed` are the single gate for every entry and exit transition, and whether
+a visit needs approval is read from tenant settings rather than compiled in. Emergency roll call
+is modelled as an append-only event stream (`EmergencyRollCallEvents`) so operational marshalling
+never rewrites visit history. See `docs/CORE_WORKFLOW_REVIEW.md` for the full state map.
 
 TIAANO is the first tenant (`WellKnownTenants.TiaanoId`), not hardcoded business logic in reusable modules.
 
@@ -45,7 +51,7 @@ Backend-authoritative module checks via `[RequireModule]`:
 | Module key | Enforced on |
 |------------|-------------|
 | `visitor-management` | Visitors, approvals, passes, dashboard, reports |
-| `emergency-management` | `GET /api/emergency/inside` |
+| `emergency-management` | `/api/emergency/inside`, `/api/emergency/roster`, `/api/emergency/roll-call` |
 | `analytics` | `GET /api/analytics/summary` |
 
 Also enforced: license expiry (past grace), revoked license, MaxUsers on user create.
