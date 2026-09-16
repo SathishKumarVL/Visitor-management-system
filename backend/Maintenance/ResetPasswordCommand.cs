@@ -8,10 +8,13 @@ namespace Tiaano.Vms.Api.Maintenance;
 /// Operator command for recovering an account when nobody knows its password. Identity stores only a
 /// one-way hash, so a lost password can be replaced but never read back.
 ///
-/// Usage: dotnet run --project backend -- reset-password &lt;username&gt;
+/// Usage: dotnet run --project backend -- reset-password &lt;username&gt; [--password &lt;pw&gt;] [--allow-weak]
 ///
-/// The new password is typed at the console and never appears in arguments, so it stays out of shell
-/// history and process listings.
+/// By default the new password is typed at the console so it stays out of shell history and process
+/// listings, and it must satisfy the configured Identity policy.
+///
+/// --allow-weak writes the hash directly, skipping the policy validators. It exists only to recover a
+/// local development machine; a password accepted this way must never reach a deployed environment.
 /// </summary>
 public static class ResetPasswordCommand
 {
@@ -24,11 +27,14 @@ public static class ResetPasswordCommand
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine($"Usage: dotnet run --project backend -- {Verb} <username>");
+            Console.Error.WriteLine(
+                $"Usage: dotnet run --project backend -- {Verb} <username> [--password <pw>] [--allow-weak]");
             return 2;
         }
 
         var username = args[1].Trim();
+        var allowWeak = args.Any(a => string.Equals(a, "--allow-weak", StringComparison.OrdinalIgnoreCase));
+        var inlinePassword = ReadOption(args, "--password");
 
         using var scope = services.CreateScope();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
@@ -43,26 +49,51 @@ public static class ResetPasswordCommand
             return 1;
         }
 
-        var password = ReadHidden($"New password for {username}: ");
+        string password;
+        if (inlinePassword is not null)
+        {
+            password = inlinePassword;
+        }
+        else
+        {
+            password = ReadHidden($"New password for {username}: ");
+            if (string.IsNullOrEmpty(password))
+            {
+                Console.Error.WriteLine("Aborted: empty password.");
+                return 1;
+            }
+
+            if (ReadHidden("Confirm password: ") != password)
+            {
+                Console.Error.WriteLine("Aborted: passwords did not match.");
+                return 1;
+            }
+        }
+
         if (string.IsNullOrEmpty(password))
         {
             Console.Error.WriteLine("Aborted: empty password.");
             return 1;
         }
 
-        if (ReadHidden("Confirm password: ") != password)
+        if (allowWeak)
         {
-            Console.Error.WriteLine("Aborted: passwords did not match.");
-            return 1;
+            // Hash directly so the configured policy validators are skipped.
+            var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher<ApplicationUser>>();
+            user.PasswordHash = hasher.HashPassword(user, password);
+            user.SecurityStamp = Guid.NewGuid().ToString();
+            Console.WriteLine("WARNING: password policy bypassed (--allow-weak). Local development only.");
         }
-
-        var token = await users.GeneratePasswordResetTokenAsync(user);
-        var result = await users.ResetPasswordAsync(user, token, password);
-        if (!result.Succeeded)
+        else
         {
-            foreach (var error in result.Errors)
-                Console.Error.WriteLine($"  - {error.Description}");
-            return 1;
+            var token = await users.GeneratePasswordResetTokenAsync(user);
+            var result = await users.ResetPasswordAsync(user, token, password);
+            if (!result.Succeeded)
+            {
+                foreach (var error in result.Errors)
+                    Console.Error.WriteLine($"  - {error.Description}");
+                return 1;
+            }
         }
 
         // Clear the things that would otherwise still block sign-in.
@@ -77,6 +108,14 @@ public static class ResetPasswordCommand
         var roles = await users.GetRolesAsync(user);
         Console.WriteLine($"Password reset for '{username}' (roles: {string.Join(", ", roles)}).");
         return 0;
+    }
+
+    private static string? ReadOption(string[] args, string name)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+                return args[i + 1];
+        return null;
     }
 
     private static string ReadHidden(string prompt)
