@@ -169,15 +169,19 @@ public class VisitorFaceDescriptor
     public Guid VisitorId { get; set; }
     public Visitor Visitor { get; set; } = null!;
 
-    /// <summary>Little-endian float32 vector. 128 dimensions for face-api.js recognition net.</summary>
-    [Required, MaxLength(2048)]
+    /// <summary>
+    /// Little-endian float32 vector: 512 dimensions for ArcFace, 128 for legacy face-api templates.
+    /// Sized beyond ArcFace's 2048 bytes so a future model does not require a schema change, but kept
+    /// under SQL Server's 8000-byte limit so the column stays in-row rather than becoming a BLOB.
+    /// </summary>
+    [Required, MaxLength(4096)]
     public byte[] Descriptor { get; set; } = Array.Empty<byte>();
 
     public int Dimensions { get; set; }
 
     /// <summary>Model identifier so templates from different models are never compared.</summary>
     [Required, MaxLength(50)]
-    public string Model { get; set; } = FaceRecognition.ModelId;
+    public string Model { get; set; } = string.Empty;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public string? CreatedBy { get; set; }
@@ -185,16 +189,13 @@ public class VisitorFaceDescriptor
 
 public static class FaceRecognition
 {
-    public const string ModelId = "faceapi-128";
-    public const int Dimensions = 128;
-
     /// <summary>
-    /// Euclidean distance below which two templates are treated as the same person. The recognition net
-    /// is calibrated for 0.6; we stay under that because a false positive prefills another visitor's
-    /// details, but going much lower rejects genuine returning visitors whose lighting or pose changed.
-    /// The operator still confirms every match before it is applied.
+    /// Templates produced in the browser by face-api.js before recognition moved server-side. Rows
+    /// tagged with this model are never compared against ArcFace vectors — the two embedding spaces
+    /// are unrelated — so historic data is simply ignored until the visitor re-enrols.
     /// </summary>
-    public const double RegistrationMatchThreshold = 0.55;
+    public const string LegacyModelId = "faceapi-128";
+    public const int LegacyDimensions = 128;
 
     /// <summary>
     /// Templates kept per visitor. Several captures across different lighting and poses recognise a

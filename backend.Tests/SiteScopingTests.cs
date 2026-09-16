@@ -32,6 +32,12 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     private const string NorthVisitorName = "North Site Visitor";
     private const string SouthVisitorName = "South Site Visitor";
 
+    /// <summary>
+    /// Narrowed to the two fixture visitors. Listing everything would let visitors created by other
+    /// tests push the fixtures off the first page and fail these assertions for the wrong reason.
+    /// </summary>
+    private const string FixtureQuery = "/api/visitors?page=1&pageSize=100&query=Site%20Visitor";
+
     public SiteScopingTests(TestApiFactory factory) => _factory = factory;
 
     private sealed record Fixture(Guid TenantId, Guid NorthSiteId, Guid SouthSiteId, Guid NorthVisitId, Guid SouthVisitId);
@@ -204,7 +210,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
 
-        var body = await BodyAsync(await client.GetAsync("/api/visitors?page=1&pageSize=100"));
+        var body = await BodyAsync(await client.GetAsync(FixtureQuery));
 
         Assert.Contains(NorthVisitorName, body);
         Assert.DoesNotContain(SouthVisitorName, body);
@@ -251,7 +257,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         await EnsureFixtureAsync();
         var client = await LoginAsync(RoamingUser);
 
-        var body = await BodyAsync(await client.GetAsync("/api/visitors?page=1&pageSize=100"));
+        var body = await BodyAsync(await client.GetAsync(FixtureQuery));
 
         Assert.Contains(NorthVisitorName, body);
         Assert.Contains(SouthVisitorName, body);

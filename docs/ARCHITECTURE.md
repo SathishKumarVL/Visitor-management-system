@@ -63,6 +63,33 @@ Frontend feature hiding is UX only — not security.
 Current routes remain under `/api/...` (treated as v1).  
 Future breaking changes should introduce `/api/v2/...` without removing v1 prematurely.
 
+## Face recognition
+
+Recognition runs entirely on the server (`backend/Services/Face/`). The browser only uploads the
+captured image; it never computes or submits a face template. That matters because a template the
+client supplies is a credential — anyone able to post one could claim an arbitrary visitor's identity.
+
+| Stage | Implementation |
+| --- | --- |
+| Detection | SCRFD (`det_10g.onnx`), 640×640 letterboxed input, three FPN levels |
+| Alignment | Umeyama similarity transform onto the canonical ArcFace landmarks, warped to 112×112 |
+| Embedding | ArcFace (`w600k_r50.onnx`), 512 dimensions, L2-normalised |
+| Matching | Cosine similarity, threshold `FaceRecognition:MatchThreshold` (default 0.42) |
+
+Both models run through ONNX Runtime on CPU. `InsightFaceService` is a singleton because the sessions
+hold roughly 180 MB of weights and are thread-safe for concurrent inference; loading is deferred to
+first use, so a deployment without the weights degrades to "unavailable" instead of failing to start.
+
+Templates live in `VisitorFaceDescriptors`, tagged with the model that produced them so generations
+are never cross-compared. Up to `FaceRecognition.MaxTemplatesPerVisitor` recent captures are kept per
+visitor — matching against several poses is markedly more reliable than against the newest alone.
+Templates from the earlier browser-side face-api.js implementation remain in the table under
+`faceapi-128` and are ignored; those visitors re-enrol on their next registration.
+
+Two entry points use it: `POST /api/visitors/face-search` recognises a returning visitor during
+registration, and `POST /api/visitors/face-identify-inside` recognises someone currently inside for
+face-driven check-out. The operator confirms every registration match before it is applied.
+
 ## Storage
 
 Visitor media:

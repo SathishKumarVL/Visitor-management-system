@@ -6,14 +6,15 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Services.Face;
 using Xunit;
 
 namespace Tiaano.Vms.Api.Tests;
 
 /// <summary>
-/// Recognising a returning visitor from their face. Two captures of one person are never bit-identical,
-/// so these tests enrol a template and then search with a deliberately drifted copy: the distance is
-/// held just outside the old 0.45 cutoff to prove genuine revisits are no longer rejected.
+/// Recognising a returning visitor, exercised over HTTP. Face templates are derived on the server
+/// from the uploaded photo, so these tests post images and never a vector — which is also the point:
+/// there is no longer an endpoint that accepts a client-supplied template.
 /// </summary>
 public class FaceRevisitTests : IClassFixture<TestApiFactory>
 {
@@ -21,31 +22,6 @@ public class FaceRevisitTests : IClassFixture<TestApiFactory>
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public FaceRevisitTests(TestApiFactory factory) => _factory = factory;
-
-    /// <summary>A unit-length template, seeded so each test owns a face nothing else will collide with.</summary>
-    private static float[] Template(int seed)
-    {
-        var rng = new Random(seed);
-        var v = new float[FaceRecognition.Dimensions];
-        double norm = 0;
-        for (var i = 0; i < v.Length; i++)
-        {
-            v[i] = (float)(rng.NextDouble() * 2 - 1);
-            norm += (double)v[i] * v[i];
-        }
-        norm = Math.Sqrt(norm);
-        for (var i = 0; i < v.Length; i++) v[i] = (float)(v[i] / norm);
-        return v;
-    }
-
-    /// <summary>Same face, different capture: shifts the template by an exact euclidean distance.</summary>
-    private static float[] Drift(float[] source, double distance)
-    {
-        var step = (float)(distance / Math.Sqrt(source.Length));
-        var drifted = new float[source.Length];
-        for (var i = 0; i < source.Length; i++) drifted[i] = source[i] + step;
-        return drifted;
-    }
 
     private async Task<HttpClient> LoginAsync(string username)
     {
@@ -91,7 +67,7 @@ public class FaceRevisitTests : IClassFixture<TestApiFactory>
     }
 
     private async Task<JsonElement> RegisterAsync(
-        HttpClient client, string name, float[]? descriptor, Guid? recognizedVisitorId = null)
+        HttpClient client, string name, string? photoBase64, Guid? recognizedVisitorId = null)
     {
         var (departmentId, hostId, purposeId) = await RefsAsync();
         var response = await client.PostAsJsonAsync("/api/visitors", new
@@ -107,84 +83,99 @@ public class FaceRevisitTests : IClassFixture<TestApiFactory>
             numberOfPersons = 1,
             isWalkIn = true,
             recognizedVisitorId,
-            faceDescriptor = descriptor
+            photoBase64
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
         return json.GetProperty("data");
     }
 
-    private async Task<JsonElement> FaceSearchAsync(HttpClient client, float[] descriptor)
+    private async Task<JsonElement> FaceSearchAsync(HttpClient client, string photoBase64)
     {
-        var response = await client.PostAsJsonAsync("/api/visitors/face-search", new { descriptor });
+        var response = await client.PostAsJsonAsync("/api/visitors/face-search", new { photoBase64 });
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
         return json.GetProperty("data");
     }
 
-    /// <summary>The regression: a second capture of an enrolled face used to fall outside the cutoff.</summary>
     [Fact]
-    public async Task Enrolled_Face_Is_Recognised_When_The_Next_Capture_Drifts()
+    public async Task Registering_With_A_Photo_Enrols_A_Face_Template()
     {
         var reception = await LoginAsync("reception");
-        var enrolled = Template(seed: 8101);
+        var photo = TestPhotos.Base64($"enrol-{Guid.NewGuid():N}");
 
-        await RegisterAsync(reception, "Face Drift Visitor", enrolled);
+        var visit = await RegisterAsync(reception, "Face Enrol Visitor", photo);
+        var visitorId = visit.GetProperty("visitorId").GetGuid();
 
-        var match = await FaceSearchAsync(reception, Drift(enrolled, 0.50));
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var embedder = _factory.Services.GetRequiredService<IFaceEmbeddingService>();
 
-        Assert.Equal(JsonValueKind.Object, match.ValueKind);
-        Assert.Equal("Face Drift Visitor", match.GetProperty("visitorName").GetString());
+        var template = await db.VisitorFaceDescriptors.IgnoreQueryFilters()
+            .SingleAsync(f => f.VisitorId == visitorId);
+
+        Assert.Equal(embedder.ModelId, template.Model);
+        Assert.Equal(embedder.Dimensions, template.Dimensions);
     }
 
-    /// <summary>A different person must still be rejected, so the looser cutoff is not a free pass.</summary>
     [Fact]
-    public async Task Different_Face_Is_Still_Rejected()
+    public async Task Enrolled_Face_Is_Recognised_On_The_Next_Visit()
     {
         var reception = await LoginAsync("reception");
-        await RegisterAsync(reception, "Face Baseline Visitor", Template(seed: 8202));
+        var photo = TestPhotos.Base64($"return-{Guid.NewGuid():N}");
 
-        var stranger = await FaceSearchAsync(reception, Template(seed: 9303));
+        await RegisterAsync(reception, "Face Return Visitor", photo);
+
+        var match = await FaceSearchAsync(reception, photo);
+
+        Assert.Equal(JsonValueKind.Object, match.ValueKind);
+        Assert.Equal("Face Return Visitor", match.GetProperty("visitorName").GetString());
+        Assert.True(match.GetProperty("similarity").GetDouble() > 0.6);
+    }
+
+    [Fact]
+    public async Task A_Different_Face_Is_Not_Matched()
+    {
+        var reception = await LoginAsync("reception");
+        await RegisterAsync(reception, "Face Baseline Visitor", TestPhotos.Base64($"baseline-{Guid.NewGuid():N}"));
+
+        var stranger = await FaceSearchAsync(reception, TestPhotos.Base64($"stranger-{Guid.NewGuid():N}"));
 
         Assert.Equal(JsonValueKind.Null, stranger.ValueKind);
     }
 
-    /// <summary>A confirmed match must join the existing visitor's history rather than fork a new record.</summary>
+    /// <summary>A confirmed match must join the existing visitor's history rather than fork a record.</summary>
     [Fact]
     public async Task Confirmed_Match_Reuses_The_Visitor_Instead_Of_Duplicating()
     {
         var reception = await LoginAsync("reception");
-        var enrolled = Template(seed: 8404);
+        var photo = TestPhotos.Base64($"reuse-{Guid.NewGuid():N}");
 
-        await RegisterAsync(reception, "Face Return Visitor", enrolled);
-        var match = await FaceSearchAsync(reception, Drift(enrolled, 0.40));
+        await RegisterAsync(reception, "Face Reuse Visitor", photo);
+        var match = await FaceSearchAsync(reception, photo);
         var visitorId = match.GetProperty("visitorId").GetGuid();
 
-        var second = await RegisterAsync(reception, "Face Return Visitor", enrolled, recognizedVisitorId: visitorId);
+        await RegisterAsync(reception, "Face Reuse Visitor", photo, recognizedVisitorId: visitorId);
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var visits = await db.VisitorVisits.IgnoreQueryFilters()
-            .CountAsync(v => v.VisitorId == visitorId);
 
-        Assert.NotEqual(Guid.Empty, second.GetProperty("visitId").GetGuid());
-        Assert.Equal(2, visits);
-        Assert.Equal(1, await db.Visitors.IgnoreQueryFilters()
-            .CountAsync(v => v.Id == visitorId));
+        Assert.Equal(2, await db.VisitorVisits.IgnoreQueryFilters().CountAsync(v => v.VisitorId == visitorId));
+        Assert.Equal(1, await db.Visitors.IgnoreQueryFilters().CountAsync(v => v.Id == visitorId));
     }
 
-    /// <summary>Each visit adds a template, bounded so one visitor cannot grow without limit.</summary>
     [Fact]
     public async Task Repeat_Visits_Accumulate_Templates_Up_To_The_Cap()
     {
         var reception = await LoginAsync("reception");
-        var enrolled = Template(seed: 8505);
+        var identity = $"cap-{Guid.NewGuid():N}";
 
-        var first = await RegisterAsync(reception, "Face Template Visitor", enrolled);
+        var first = await RegisterAsync(reception, "Face Template Visitor", TestPhotos.Base64(identity));
         var visitorId = first.GetProperty("visitorId").GetGuid();
 
+        // Each visit contributes a distinct capture, so the rolling window is what bounds the total.
         for (var i = 0; i < FaceRecognition.MaxTemplatesPerVisitor + 2; i++)
-            await RegisterAsync(reception, "Face Template Visitor", Drift(enrolled, 0.01 * (i + 1)), visitorId);
+            await RegisterAsync(reception, "Face Template Visitor", TestPhotos.Base64($"{identity}-{i}"), visitorId);
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -192,5 +183,16 @@ public class FaceRevisitTests : IClassFixture<TestApiFactory>
             .CountAsync(f => f.VisitorId == visitorId);
 
         Assert.Equal(FaceRecognition.MaxTemplatesPerVisitor, templates);
+    }
+
+    /// <summary>Registration must still succeed when the photo yields no usable face.</summary>
+    [Fact]
+    public async Task Unusable_Photo_Does_Not_Block_Registration()
+    {
+        var reception = await LoginAsync("reception");
+
+        var visit = await RegisterAsync(reception, "Face Optional Visitor", photoBase64: null);
+
+        Assert.NotEqual(Guid.Empty, visit.GetProperty("visitId").GetGuid());
     }
 }

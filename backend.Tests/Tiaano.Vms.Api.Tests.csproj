@@ -22,4 +22,9 @@
     <ProjectReference Include="..\backend\Tiaano.Vms.Api.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Synthetic StyleGAN2 faces used by the recognition tests: no real person's biometrics. -->
+    <None Include="TestAssets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -10,6 +10,7 @@ using Tiaano.Vms.Api.Models;
 using Tiaano.Vms.Api.Models.Enums;
 using Tiaano.Vms.Api.Models.Product;
 using Tiaano.Vms.Api.Services;
+using Tiaano.Vms.Api.Services.Face;
 using Xunit;
 
 namespace Tiaano.Vms.Api.Tests;
@@ -575,9 +576,11 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
         await EnsureTenantBAsync();
         await EnsureReceptionAsync();
 
-        // Enrol a distinctive face template against a Tenant B visitor.
-        var descriptor = new float[128];
-        for (var i = 0; i < descriptor.Length; i++) descriptor[i] = 0.37f;
+        // Enrol a face template against a Tenant B visitor, derived from the photo the same way the
+        // server would derive it during registration.
+        var photoBase64 = TestPhotos.Base64("tenant-b-secret-visitor");
+        var embedder = _factory.Services.GetRequiredService<IFaceEmbeddingService>();
+        var template = embedder.Embed(Convert.FromBase64String(photoBase64)).Vector;
 
         using (var scope = _factory.Services.CreateScope())
         {
@@ -585,35 +588,38 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
             var visitorId = await db.Visitors.IgnoreQueryFilters()
                 .Where(v => v.TenantId == TenantBId).Select(v => v.Id).FirstAsync();
 
-            if (!await db.VisitorFaceDescriptors.IgnoreQueryFilters().AnyAsync(f => f.VisitorId == visitorId))
+            // Scoped to the active model: a leftover legacy template from an earlier run is ignored by
+            // the search, so its presence must not suppress seeding the one this test needs.
+            if (!await db.VisitorFaceDescriptors.IgnoreQueryFilters()
+                    .AnyAsync(f => f.VisitorId == visitorId && f.Model == embedder.ModelId))
             {
-                var bytes = new byte[descriptor.Length * sizeof(float)];
-                Buffer.BlockCopy(descriptor, 0, bytes, 0, bytes.Length);
+                var bytes = new byte[template.Length * sizeof(float)];
+                Buffer.BlockCopy(template, 0, bytes, 0, bytes.Length);
                 db.VisitorFaceDescriptors.Add(new VisitorFaceDescriptor
                 {
                     TenantId = TenantBId,
                     VisitorId = visitorId,
                     Descriptor = bytes,
-                    Dimensions = descriptor.Length,
-                    Model = FaceRecognition.ModelId,
+                    Dimensions = template.Length,
+                    Model = embedder.ModelId,
                     CreatedBy = "test"
                 });
                 await db.SaveChangesAsync();
             }
         }
 
-        // Tenant A submits the identical template — must not resolve Tenant B's visitor.
+        // Tenant A submits the identical photo — must not resolve Tenant B's visitor.
         var (client, _) = await LoginAsync("reception", TestSecrets.SeedPassword);
-        var response = await client.PostAsJsonAsync("/api/visitors/face-search", new { descriptor });
+        var response = await client.PostAsJsonAsync("/api/visitors/face-search", new { photoBase64 });
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
 
         var data = json.GetProperty("data");
         Assert.True(data.ValueKind == JsonValueKind.Null, "Tenant A must not match a Tenant B face template.");
 
-        // Tenant B submitting the same template does resolve its own visitor (positive control).
+        // Tenant B submitting the same photo does resolve its own visitor (positive control).
         var (clientB, _) = await LoginAsync(TenantBAdmin, TenantBPassword);
-        var ownResponse = await clientB.PostAsJsonAsync("/api/visitors/face-search", new { descriptor });
+        var ownResponse = await clientB.PostAsJsonAsync("/api/visitors/face-search", new { photoBase64 });
         ownResponse.EnsureSuccessStatusCode();
         var ownJson = await ownResponse.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
         Assert.Equal("Secret Visitor B", ownJson.GetProperty("data").GetProperty("visitorName").GetString());

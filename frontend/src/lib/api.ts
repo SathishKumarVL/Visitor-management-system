@@ -10,6 +10,7 @@ import type {
   EmergencyRosterDto,
   EmployeeDto,
   ExpectedVisitorRequest,
+  FaceCheckoutMatchDto,
   FaceSearchMatchDto,
   LoginResponse,
   MasterItemDto,
@@ -210,8 +211,10 @@ export const visitorsApi = {
     unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, { entryGateId })),
   checkOut: (id: string, exitGateId?: string) =>
     unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, { exitGateId })),
-  faceSearch: (descriptor: number[]) =>
-    unwrap(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { descriptor })),
+  faceSearch: (photoBase64: string) =>
+    unwrap(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { photoBase64 })),
+  faceIdentifyInside: (photoBase64: string) =>
+    unwrap(api.post<ApiResponse<FaceCheckoutMatchDto | null>>('/visitors/face-identify-inside', { photoBase64 })),
 }
 
 export const approvalsApi = {

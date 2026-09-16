@@ -1,26 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiErrorMessage, visitorsApi } from '../lib/api'
-import type { VisitorListItemDto } from '../types/api'
+import type { FaceCheckoutMatchDto, VisitorListItemDto } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 import { SecureImage } from '../components/SecureImage'
-import {
-  descriptorFromElement,
-  descriptorFromImageUrl,
-  ensureFaceModelsLoaded,
-  matchDescriptor,
-  type FaceDescriptor,
-} from '../lib/faceMatch'
-
-type Enrolled = {
-  visitId: string
-  visitorName: string
-  companyName: string
-  photoUrl: string
-  descriptor: FaceDescriptor
-}
 
 export function FaceCheckoutPage() {
   const navigate = useNavigate()
@@ -29,14 +14,12 @@ export function FaceCheckoutPage() {
   const [loading, setLoading] = useState(true)
   const [cameraReady, setCameraReady] = useState(false)
   const [capturing, setCapturing] = useState(false)
-  const [enrolled, setEnrolled] = useState<Enrolled[]>([])
-  const [skippedNoFace, setSkippedNoFace] = useState(0)
-  const [statusText, setStatusText] = useState('Preparing face models…')
+  const [statusText, setStatusText] = useState('Loading currently inside visitors…')
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [matched, setMatched] = useState<Enrolled | null>(null)
+  const [matched, setMatched] = useState<FaceCheckoutMatchDto | null>(null)
   const [filter, setFilter] = useState('')
-  const [manualInside, setManualInside] = useState<VisitorListItemDto[]>([])
+  const [inside, setInside] = useState<VisitorListItemDto[]>([])
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -65,52 +48,19 @@ export function FaceCheckoutPage() {
     }
   }, [])
 
-  const loadInsideFaces = useCallback(async () => {
+  const loadInside = useCallback(async () => {
     setLoading(true)
     setError(null)
     setMessage(null)
     setMatched(null)
-    setStatusText('Loading currently inside visitors…')
     try {
-      await ensureFaceModelsLoaded()
-      const inside = await visitorsApi.inside()
-      setManualInside(inside)
-      const withPhoto = inside.filter((v) => !!v.photoUrl)
-      const results = await Promise.all(
-        withPhoto.map(async (v) => {
-          try {
-            const descriptor = await descriptorFromImageUrl(v.photoUrl!)
-            if (!descriptor) return { kind: 'skip' as const }
-            return {
-              kind: 'ok' as const,
-              item: {
-                visitId: v.visitId,
-                visitorName: v.visitorName,
-                companyName: v.companyName,
-                photoUrl: v.photoUrl!,
-                descriptor,
-              },
-            }
-          } catch {
-            return { kind: 'skip' as const }
-          }
-        }),
+      const list = await visitorsApi.inside()
+      setInside(list)
+      setStatusText(
+        list.length === 0
+          ? 'No visitors are currently inside.'
+          : `Ready — ${list.length} visitor(s) inside. Press Capture to check out.`,
       )
-      const next: Enrolled[] = []
-      let noFace = 0
-      for (const r of results) {
-        if (r.kind === 'ok') next.push(r.item)
-        else noFace += 1
-      }
-      setEnrolled(next)
-      setSkippedNoFace(noFace + (inside.length - withPhoto.length))
-      if (inside.length === 0) {
-        setStatusText('No visitors are currently inside.')
-      } else if (next.length === 0) {
-        setStatusText('Inside visitors found, but no usable face photos. Use manual check-out.')
-      } else {
-        setStatusText(`Ready — ${next.length} face(s) loaded. Press Capture to check out.`)
-      }
     } catch (e) {
       setError(apiErrorMessage(e, 'Could not load currently inside visitors.'))
     } finally {
@@ -120,60 +70,56 @@ export function FaceCheckoutPage() {
 
   useEffect(() => {
     void (async () => {
-      await loadInsideFaces()
+      await loadInside()
       await startCamera()
     })()
     return () => stopCamera()
-  }, [loadInsideFaces, startCamera, stopCamera])
+  }, [loadInside, startCamera, stopCamera])
 
   async function captureAndCheckOut() {
-    if (!videoRef.current || capturing) return
+    const video = videoRef.current
+    if (!video || capturing) return
     setError(null)
     setMessage(null)
     setMatched(null)
 
-    if (enrolled.length === 0) {
-      setError('No currently inside visitors with face photos. Check in a visitor first, then try again.')
+    if (inside.length === 0) {
+      setError('Nobody is currently inside. Check in a visitor first, then try again.')
+      return
+    }
+
+    if (video.readyState < 2) {
+      setError('Camera is not ready yet. Wait a moment and try Capture again.')
       return
     }
 
     setCapturing(true)
     setStatusText('Capturing and matching face…')
     try {
-      if (videoRef.current.readyState < 2) {
-        setError('Camera is not ready yet. Wait a moment and try Capture again.')
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth || 640
+      canvas.height = video.videoHeight || 480
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        setError('Could not read the camera frame. Try again.')
         return
       }
-      const live = await descriptorFromElement(videoRef.current)
-      if (!live) {
-        setError('No face detected. Look straight at the camera and press Capture again.')
-        setStatusText('No face detected — try again')
-        return
-      }
+      ctx.drawImage(video, 0, 0)
 
-      const hit = matchDescriptor(
-        live,
-        enrolled.map((e) => ({ id: e.visitId, label: e.visitorName, descriptor: e.descriptor })),
-      )
+      // Detection, alignment and matching all happen on the server against the stored templates.
+      const hit = await visitorsApi.faceIdentifyInside(canvas.toDataURL('image/jpeg', 0.85))
       if (!hit) {
-        setError('Face did not match any currently inside visitor. Try again or use manual check-out.')
+        setError('Face did not match anyone currently inside. Try again or use manual check-out.')
         setStatusText('No match — press Capture to retry')
         return
       }
 
-      const person = enrolled.find((e) => e.visitId === hit.id)
-      if (!person) {
-        setError('Matched visitor could not be resolved. Refresh the inside list and try again.')
-        return
-      }
-
-      setMatched(person)
-      setStatusText(`Matched ${person.visitorName} — checking out…`)
-      await visitorsApi.checkOut(person.visitId)
-      setMessage(`Checked out: ${person.visitorName}. Out time recorded.`)
+      setMatched(hit)
+      setStatusText(`Matched ${hit.visitorName} — checking out…`)
+      await visitorsApi.checkOut(hit.visitId)
+      setMessage(`Checked out: ${hit.visitorName}. Out time recorded.`)
       setStatusText('Check-out complete — press Capture for the next visitor')
-      setEnrolled((list) => list.filter((e) => e.visitId !== person.visitId))
-      setManualInside((list) => list.filter((v) => v.visitId !== person.visitId))
+      setInside((list) => list.filter((v) => v.visitId !== hit.visitId))
     } catch (e) {
       setError(apiErrorMessage(e, 'Check-out failed after face capture.'))
       setMatched(null)
@@ -188,8 +134,7 @@ export function FaceCheckoutPage() {
     try {
       await visitorsApi.checkOut(visitId)
       setMessage(`Checked out: ${name}. Out time recorded.`)
-      setEnrolled((list) => list.filter((e) => e.visitId !== visitId))
-      setManualInside((list) => list.filter((v) => v.visitId !== visitId))
+      setInside((list) => list.filter((v) => v.visitId !== visitId))
       setMatched(null)
       if (!cameraReady) await startCamera()
       else setStatusText('Ready — press Capture to check out')
@@ -198,7 +143,7 @@ export function FaceCheckoutPage() {
     }
   }
 
-  const filtered = manualInside.filter((v) => {
+  const filtered = inside.filter((v) => {
     const q = filter.trim().toLowerCase()
     if (!q) return true
     return (
@@ -221,7 +166,7 @@ export function FaceCheckoutPage() {
             <Button
               variant="ghost"
               onClick={() => {
-                void loadInsideFaces()
+                void loadInside()
               }}
             >
               Refresh inside list
@@ -230,7 +175,7 @@ export function FaceCheckoutPage() {
         }
       />
 
-      {loading ? <Spinner label="Loading face recognition…" /> : null}
+      {loading ? <Spinner label="Loading currently inside visitors…" /> : null}
 
       {!loading ? (
         <div className="grid gap-4 lg:grid-cols-2">
@@ -239,11 +184,6 @@ export function FaceCheckoutPage() {
               <video ref={videoRef} className="aspect-video w-full object-cover" muted playsInline />
             </div>
             <p className="mt-3 text-sm text-gray-600">{statusText}</p>
-            {skippedNoFace > 0 ? (
-              <p className="mt-1 text-xs text-gray-500">
-                {skippedNoFace} inside visitor(s) skipped (missing photo or no face in photo).
-              </p>
-            ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
               {!cameraReady ? (
                 <Button variant="secondary" onClick={() => void startCamera()}>Start camera</Button>
@@ -266,10 +206,13 @@ export function FaceCheckoutPage() {
             {message ? <div className="mt-3"><Alert tone="success">{message}</Alert></div> : null}
             {matched ? (
               <div className="mt-3 flex items-center gap-3 rounded-md border border-gray-100 p-3">
-                <SecureImage src={matched.photoUrl} alt="" className="h-16 w-16 rounded object-cover" />
+                <SecureImage src={matched.photoUrl || ''} alt="" className="h-16 w-16 rounded object-cover" />
                 <div>
                   <div className="font-semibold text-steel">{matched.visitorName}</div>
                   <div className="text-sm text-gray-500">{matched.companyName}</div>
+                  <div className="text-xs text-gray-400">
+                    {matched.visitNumber} · match {(matched.similarity * 100).toFixed(0)}%
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -306,7 +249,8 @@ export function FaceCheckoutPage() {
               </ul>
             )}
             <p className="mt-4 text-xs text-gray-500">
-              Tip: Face match uses the photo taken at registration. Visitors must be checked in (Currently Inside) before face check-out.
+              Tip: Face match uses the template enrolled at registration. Visitors registered before
+              face recognition was enabled will not match until they register again.
             </p>
           </Panel>
         </div>

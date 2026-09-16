@@ -14,6 +14,7 @@ using Tiaano.Vms.Api.Middleware;
 using Tiaano.Vms.Api.Models;
 using Tiaano.Vms.Api.Security;
 using Tiaano.Vms.Api.Services;
+using Tiaano.Vms.Api.Services.Face;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -94,6 +95,11 @@ builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 builder.Services.AddScoped<IEmergencyService, EmergencyService>();
 builder.Services.AddScoped<ISiteService, SiteService>();
+
+// Singleton: the ONNX sessions hold ~180 MB of weights and are thread-safe for concurrent inference.
+builder.Services.Configure<FaceRecognitionOptions>(
+    builder.Configuration.GetSection(FaceRecognitionOptions.SectionName));
+builder.Services.AddSingleton<IFaceEmbeddingService, InsightFaceService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

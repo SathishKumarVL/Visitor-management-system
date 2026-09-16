@@ -34,6 +34,10 @@ uploads/*
 *.log
 *.bundle
 
+## Face recognition model weights (fetched by scripts/fetch-face-models.ps1)
+backend/MlModels/*
+!backend/MlModels/.gitkeep
+
 ## Test / coverage
 **/TestResults/
 **/coverage/

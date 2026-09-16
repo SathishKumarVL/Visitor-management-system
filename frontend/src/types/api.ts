@@ -225,7 +225,6 @@ export interface RegisterVisitorRequest {
   expectedVisitId?: string | null
   recognizedVisitorId?: string | null
   numberOfPersons?: number
-  faceDescriptor?: number[] | null
 }
 
 export interface FaceSearchMatchDto {
@@ -238,7 +237,19 @@ export interface FaceSearchMatchDto {
   photoUrl?: string | null
   lastVisitDate?: string | null
   totalVisits: number
-  distance: number
+  /** Cosine similarity — higher is a closer match. */
+  similarity: number
+}
+
+export interface FaceCheckoutMatchDto {
+  visitId: string
+  visitorId: string
+  visitorName: string
+  companyName: string
+  visitNumber: string
+  photoUrl?: string | null
+  checkInAt?: string | null
+  similarity: number
 }
 
 export interface ExpectedVisitorRequest {
@@ -391,6 +402,5 @@ export interface VisitorWizardDraft {
   idNumber: string
   isWalkIn: boolean
   expectedVisitId: string | null
-  faceDescriptor: number[] | null
   recognizedVisitorId: string | null
 }

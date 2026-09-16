@@ -1,9 +1,12 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Tiaano.Vms.Api.Services.Face;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -33,6 +36,14 @@ public class TestApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Seed:DefaultPassword", TestSecrets.SeedPassword);
         builder.UseSetting("Smtp:Enabled", "false");
         builder.UseSetting("Smtp:IgnoreSslErrors", "false");
+
+        // Recognition quality is proven against the real weights in ArcFacePipelineTests; the HTTP
+        // tests only need embedding to be deterministic and not cost 180 MB of model loading.
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IFaceEmbeddingService>();
+            services.AddSingleton<IFaceEmbeddingService, StubFaceEmbeddingService>();
+        });
     }
 
     public async Task EnsureReceptionPasswordAsync()

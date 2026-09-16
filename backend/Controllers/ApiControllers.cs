@@ -148,13 +148,31 @@ public class VisitorsController : ControllerBase
     {
         try
         {
-            var match = await _visitors.FaceSearchAsync(request.Descriptor, User);
+            var match = await _visitors.FaceSearchAsync(request.PhotoBase64, User);
             return Ok(new ApiResponse<FaceSearchMatchDto>(true, match,
                 match is null ? "No matching visitor found." : "Returning visitor recognised."));
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<FaceSearchMatchDto>(false, null, ex.Message));
+        }
+    }
+
+    /// <summary>Recognises a visitor who is currently inside so they can be checked out by face.</summary>
+    [HttpPost("face-identify-inside")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Security}")]
+    public async Task<ActionResult<ApiResponse<FaceCheckoutMatchDto>>> FaceIdentifyInside(
+        [FromBody] FaceSearchRequest request)
+    {
+        try
+        {
+            var match = await _visitors.FaceIdentifyInsideAsync(request.PhotoBase64, User);
+            return Ok(new ApiResponse<FaceCheckoutMatchDto>(true, match,
+                match is null ? "No matching visitor is currently inside." : "Visitor recognised."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<FaceCheckoutMatchDto>(false, null, ex.Message));
         }
     }
 

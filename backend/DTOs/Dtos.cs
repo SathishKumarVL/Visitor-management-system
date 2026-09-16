@@ -231,14 +231,16 @@ public class RegisterVisitorRequest
     /// </summary>
     public Guid? RecognizedVisitorId { get; set; }
 
-    /// <summary>Optional face template captured with the photo, used to recognise return visits.</summary>
-    public float[]? FaceDescriptor { get; set; }
 }
 
 public class FaceSearchRequest
 {
+    /// <summary>
+    /// Base64 image, with or without a data URL prefix. The face template is derived on the server;
+    /// clients never submit embeddings, so a caller cannot craft one that matches a chosen visitor.
+    /// </summary>
     [Required]
-    public float[] Descriptor { get; set; } = Array.Empty<float>();
+    public string PhotoBase64 { get; set; } = string.Empty;
 }
 
 public class FaceSearchMatchDto
@@ -253,8 +255,21 @@ public class FaceSearchMatchDto
     public DateOnly? LastVisitDate { get; set; }
     public int TotalVisits { get; set; }
 
-    /// <summary>Euclidean distance — lower is a closer match. Surfaced for operator transparency.</summary>
-    public double Distance { get; set; }
+    /// <summary>Cosine similarity — higher is a closer match. Surfaced for operator transparency.</summary>
+    public double Similarity { get; set; }
+}
+
+/// <summary>A visitor currently inside, recognised from a live capture at the exit desk.</summary>
+public class FaceCheckoutMatchDto
+{
+    public Guid VisitId { get; set; }
+    public Guid VisitorId { get; set; }
+    public string VisitorName { get; set; } = string.Empty;
+    public string CompanyName { get; set; } = string.Empty;
+    public string VisitNumber { get; set; } = string.Empty;
+    public string? PhotoUrl { get; set; }
+    public DateTime? CheckInAt { get; set; }
+    public double Similarity { get; set; }
 }
 
 public class ExpectedVisitorRequest

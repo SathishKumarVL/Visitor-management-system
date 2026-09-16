@@ -52,14 +52,30 @@ cd backend
 dotnet ef database update
 ```
 
-### 5. Start API
+### 5. Fetch the face recognition models
+
+Face recognition runs on the server using InsightFace weights (SCRFD for detection, ArcFace for
+embeddings). They are about 180 MB and are deliberately not committed, so fetch them once per machine:
+
+```powershell
+./scripts/fetch-face-models.ps1
+```
+
+This downloads the `buffalo_l` pack into `backend/MlModels` and keeps only the two models the
+application loads: `det_10g.onnx` and `w600k_r50.onnx`.
+
+The API starts and runs normally without them — registration simply enrols no face template, and the
+face lookup endpoints report that recognition is unavailable. To switch the feature off deliberately,
+set `FaceRecognition:Enabled` to `false`.
+
+### 6. Start API
 
 ```powershell
 cd backend
 dotnet run --launch-profile http
 ```
 
-### 6. Start UI
+### 7. Start UI
 
 ```powershell
 cd frontend
@@ -69,7 +85,7 @@ npm run dev
 
 Open http://localhost:5173
 
-### 7. Verify
+### 8. Verify
 
 1. Login as `reception` using the password you configured in `Seed:DefaultPassword` (User Secrets)
 2. Open Reception Mode → New Visitor

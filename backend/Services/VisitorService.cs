@@ -7,6 +7,7 @@ using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models;
 using Tiaano.Vms.Api.Models.Enums;
+using Tiaano.Vms.Api.Services.Face;
 
 namespace Tiaano.Vms.Api.Services;
 
@@ -27,7 +28,8 @@ public interface IVisitorService
     Task<PassDto> ReprintPassAsync(Guid visitId, ClaimsPrincipal user, string webRoot);
     Task<PassDto?> LookupByVisitNumberAsync(string visitNumber, string webRoot);
     Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes);
-    Task<FaceSearchMatchDto?> FaceSearchAsync(float[] descriptor, ClaimsPrincipal user);
+    Task<FaceSearchMatchDto?> FaceSearchAsync(string photoBase64, ClaimsPrincipal user);
+    Task<FaceCheckoutMatchDto?> FaceIdentifyInsideAsync(string photoBase64, ClaimsPrincipal user);
 }
 
 public class VisitorService : IVisitorService
@@ -43,6 +45,7 @@ public class VisitorService : IVisitorService
     private readonly IMediaStorageService _media;
     private readonly ITenantContext _tenant;
     private readonly ISiteService _sites;
+    private readonly IFaceEmbeddingService _faces;
     private static readonly Regex IndianPhone = new(@"^(\+91[\-\s]?)?[6-9]\d{9}$|^0\d{2,4}[\-\s]?\d{6,8}$", RegexOptions.Compiled);
 
     public VisitorService(
@@ -56,7 +59,8 @@ public class VisitorService : IVisitorService
         ILogger<VisitorService> logger,
         IMediaStorageService media,
         ITenantContext tenant,
-        ISiteService sites)
+        ISiteService sites,
+        IFaceEmbeddingService faces)
     {
         _db = db;
         _settings = settings;
@@ -69,6 +73,7 @@ public class VisitorService : IVisitorService
         _media = media;
         _tenant = tenant;
         _sites = sites;
+        _faces = faces;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -217,10 +222,10 @@ public class VisitorService : IVisitorService
         await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix);
 
         if (!string.IsNullOrWhiteSpace(request.PhotoBase64))
+        {
             await SavePhotoAsync(visitor.Id, visit.Id, request.PhotoBase64, webRoot, user.Identity?.Name);
-
-        if (request.FaceDescriptor is { Length: > 0 })
-            await SaveFaceDescriptorAsync(visitor.Id, request.FaceDescriptor, user);
+            await EnrolFaceAsync(visitor.Id, request.PhotoBase64, user);
+        }
 
         if (request.IdTypeId.HasValue && !string.IsNullOrWhiteSpace(request.IdNumber))
         {
@@ -990,18 +995,22 @@ public class VisitorService : IVisitorService
     /// Finds the closest stored face template within the caller's tenant.
     /// Templates are streamed rather than materialised so large tenants stay bounded in memory.
     /// </summary>
-    public async Task<FaceSearchMatchDto?> FaceSearchAsync(float[] descriptor, ClaimsPrincipal user)
+    public async Task<FaceSearchMatchDto?> FaceSearchAsync(string photoBase64, ClaimsPrincipal user)
     {
         _ = ResolveTenantId(user);
 
-        if (descriptor is null || descriptor.Length != FaceRecognition.Dimensions)
-            throw new InvalidOperationException("A valid face capture is required.");
+        if (!_faces.IsAvailable)
+            throw new InvalidOperationException("Face recognition is not configured on this server.");
+
+        // Embedding happens here, from the uploaded image. The client never supplies a template, so a
+        // caller cannot craft a vector that matches an arbitrary visitor.
+        var probe = EmbedPhoto(photoBase64);
 
         Guid? bestVisitorId = null;
-        var bestDistance = double.MaxValue;
+        var bestSimilarity = double.MinValue;
 
         var candidates = _db.VisitorFaceDescriptors.AsNoTracking()
-            .Where(f => f.Model == FaceRecognition.ModelId && f.Dimensions == FaceRecognition.Dimensions)
+            .Where(f => f.Model == _faces.ModelId && f.Dimensions == _faces.Dimensions)
             .OrderByDescending(f => f.CreatedAt)
             .Select(f => new { f.VisitorId, f.Descriptor })
             .AsAsyncEnumerable();
@@ -1009,17 +1018,17 @@ public class VisitorService : IVisitorService
         await foreach (var candidate in candidates)
         {
             var stored = FromBytes(candidate.Descriptor);
-            if (stored.Length != descriptor.Length) continue;
+            if (stored.Length != probe.Vector.Length) continue;
 
-            var distance = EuclideanDistance(descriptor, stored);
-            if (distance < bestDistance)
+            var similarity = _faces.Similarity(probe.Vector, stored);
+            if (similarity > bestSimilarity)
             {
-                bestDistance = distance;
+                bestSimilarity = similarity;
                 bestVisitorId = candidate.VisitorId;
             }
         }
 
-        if (bestVisitorId is null || bestDistance > FaceRecognition.RegistrationMatchThreshold)
+        if (bestVisitorId is null || bestSimilarity < _faces.MatchThreshold)
         {
             await _audit.LogAsync("FaceSearchNoMatch", "Visitor", null, "Face capture did not match a known visitor");
             return null;
@@ -1057,18 +1066,142 @@ public class VisitorService : IVisitorService
             PhotoUrl = visitor.PhotoPath is null ? null : _media.ToPublicApiPath(Path.GetFileName(visitor.PhotoPath)),
             LastVisitDate = visitor.LastVisitDate,
             TotalVisits = visitor.TotalVisits,
-            Distance = Math.Round(bestDistance, 4)
+            Similarity = Math.Round(bestSimilarity, 4)
         };
+    }
+
+    /// <summary>
+    /// Recognises a visitor who is currently inside, for face-driven check-out.
+    /// </summary>
+    /// <remarks>
+    /// Restricted to visitors with an open visit, which is both the correct behaviour and a much
+    /// smaller candidate set than the whole tenant. Tenant and site filters still apply through the
+    /// query, so a site-bound guard only ever matches people inside their own site.
+    /// </remarks>
+    public async Task<FaceCheckoutMatchDto?> FaceIdentifyInsideAsync(string photoBase64, ClaimsPrincipal user)
+    {
+        _ = ResolveTenantId(user);
+
+        if (!_faces.IsAvailable)
+            throw new InvalidOperationException("Face recognition is not configured on this server.");
+
+        var probe = EmbedPhoto(photoBase64);
+
+        var candidates = await (
+            from template in _db.VisitorFaceDescriptors.AsNoTracking()
+            join visit in _db.VisitorVisits.AsNoTracking()
+                on template.VisitorId equals visit.VisitorId
+            where template.Model == _faces.ModelId
+                  && template.Dimensions == _faces.Dimensions
+                  && visit.Status == VisitStatus.Inside
+            select new { visit.Id, template.VisitorId, template.Descriptor })
+            .ToListAsync();
+
+        Guid? bestVisitId = null;
+        var bestSimilarity = double.MinValue;
+
+        foreach (var candidate in candidates)
+        {
+            var stored = FromBytes(candidate.Descriptor);
+            if (stored.Length != probe.Vector.Length) continue;
+
+            var similarity = _faces.Similarity(probe.Vector, stored);
+            if (similarity > bestSimilarity)
+            {
+                bestSimilarity = similarity;
+                bestVisitId = candidate.Id;
+            }
+        }
+
+        if (bestVisitId is null || bestSimilarity < _faces.MatchThreshold)
+        {
+            await _audit.LogAsync("FaceCheckoutNoMatch", "VisitorVisit", null,
+                "Face capture did not match anyone currently inside");
+            return null;
+        }
+
+        var match = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Id == bestVisitId.Value)
+            .Select(v => new FaceCheckoutMatchDto
+            {
+                VisitId = v.Id,
+                VisitorId = v.VisitorId,
+                VisitorName = v.Visitor.FullName,
+                CompanyName = v.Visitor.CompanyName,
+                VisitNumber = v.VisitNumber,
+                CheckInAt = v.CheckInAt,
+                PhotoUrl = v.Visitor.Photos.Where(p => p.IsPrimary).Select(p => p.FilePath).FirstOrDefault()
+            })
+            .FirstOrDefaultAsync();
+
+        if (match is null) return null;
+
+        match.Similarity = Math.Round(bestSimilarity, 4);
+        if (match.PhotoUrl is not null)
+            match.PhotoUrl = _media.ToPublicApiPath(Path.GetFileName(match.PhotoUrl));
+
+        await _audit.LogAsync("FaceCheckoutMatched", "VisitorVisit", match.VisitId.ToString(),
+            $"{match.VisitorName} recognised at check-out from a face capture");
+
+        return match;
+    }
+
+    /// <summary>
+    /// Extracts a face template from the registration photo. Enrolment is best-effort: a photo the
+    /// detector cannot use must not block the visitor from being registered.
+    /// </summary>
+    private async Task EnrolFaceAsync(Guid visitorId, string photoBase64, ClaimsPrincipal user)
+    {
+        if (!_faces.IsAvailable) return;
+
+        FaceEmbedding embedding;
+        try
+        {
+            embedding = EmbedPhoto(photoBase64);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogInformation("Face enrolment skipped for visitor {VisitorId}: {Reason}", visitorId, ex.Message);
+            return;
+        }
+
+        await SaveFaceDescriptorAsync(visitorId, embedding.Vector, user);
+    }
+
+    private FaceEmbedding EmbedPhoto(string photoBase64)
+    {
+        if (string.IsNullOrWhiteSpace(photoBase64))
+            throw new InvalidOperationException("A face capture is required.");
+
+        var raw = photoBase64.Contains(',') ? photoBase64.Split(',')[1] : photoBase64;
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(raw);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Photo data is invalid.");
+        }
+
+        try
+        {
+            return _faces.Embed(bytes);
+        }
+        catch (FaceEmbeddingException ex)
+        {
+            throw new InvalidOperationException(ex.Message);
+        }
     }
 
     private async Task SaveFaceDescriptorAsync(Guid visitorId, float[] descriptor, ClaimsPrincipal user)
     {
-        if (descriptor.Length != FaceRecognition.Dimensions) return;
+        if (descriptor.Length != _faces.Dimensions) return;
 
         // Keep a rolling window of recent captures: matching against several poses is far more reliable
         // than against the newest one alone. Only the overflow is discarded.
         var stale = await _db.VisitorFaceDescriptors
-            .Where(f => f.VisitorId == visitorId && f.Model == FaceRecognition.ModelId)
+            .Where(f => f.VisitorId == visitorId && f.Model == _faces.ModelId)
             .OrderByDescending(f => f.CreatedAt)
             .Skip(FaceRecognition.MaxTemplatesPerVisitor - 1)
             .ToListAsync();
@@ -1080,7 +1213,7 @@ public class VisitorService : IVisitorService
             VisitorId = visitorId,
             Descriptor = ToBytes(descriptor),
             Dimensions = descriptor.Length,
-            Model = FaceRecognition.ModelId,
+            Model = _faces.ModelId,
             CreatedBy = user.Identity?.Name
         });
         await _db.SaveChangesAsync();
@@ -1098,17 +1231,6 @@ public class VisitorService : IVisitorService
         var values = new float[bytes.Length / sizeof(float)];
         Buffer.BlockCopy(bytes, 0, values, 0, bytes.Length);
         return values;
-    }
-
-    private static double EuclideanDistance(float[] a, float[] b)
-    {
-        double sum = 0;
-        for (var i = 0; i < a.Length; i++)
-        {
-            var diff = a[i] - b[i];
-            sum += diff * diff;
-        }
-        return Math.Sqrt(sum);
     }
 
     private async Task SavePhotoAsync(Guid visitorId, Guid visitId, string base64, string webRoot, string? userName)

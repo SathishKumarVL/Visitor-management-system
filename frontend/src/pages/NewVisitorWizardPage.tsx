@@ -10,7 +10,6 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { BrandLogo } from '../components/BrandLogo'
 import { VisitorLocationStep, validateVisitorLocationStep } from '../components/visitors/VisitorLocationStep'
 import { SecureImage } from '../components/SecureImage'
-import { descriptorFromElement, ensureFaceModelsLoaded } from '../lib/faceMatch'
 import type { FaceSearchMatchDto } from '../types/api'
 
 const LEGACY_DRAFT_KEY = 'tiaano_visitor_wizard_draft'
@@ -51,7 +50,6 @@ const emptyDraft = (): VisitorWizardDraft => ({
   idNumber: '',
   isWalkIn: true,
   expectedVisitId: null,
-  faceDescriptor: null,
   recognizedVisitorId: null,
 })
 
@@ -294,34 +292,22 @@ export function NewVisitorWizardPage() {
 
     setFaceBusy(true)
     setError(null)
-    setFaceStatus('Reading face…')
-    let descriptor: number[] | null = null
-    try {
-      const raw = await descriptorFromElement(video)
-      descriptor = raw ? Array.from(raw) : null
-    } catch {
-      descriptor = null
-    }
 
+    const photoBase64 = canvas.toDataURL('image/jpeg', 0.85)
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
-    patch({ photoBase64: canvas.toDataURL('image/jpeg', 0.85), faceDescriptor: descriptor })
-
-    if (!descriptor) {
-      setFaceStatus('No face detected in the photo — continue and fill the details manually, or retake.')
-      setFaceBusy(false)
-      return
-    }
+    patch({ photoBase64 })
 
     if (!online) {
-      setFaceStatus('Offline — face saved with the photo, but returning-visitor lookup was skipped.')
+      setFaceStatus('Offline — the photo is saved, but returning-visitor lookup was skipped.')
       setFaceBusy(false)
       return
     }
 
+    // Recognition runs on the server: the browser only ever uploads the image.
     setFaceStatus('Checking for a previous visit…')
     try {
-      const match = await visitorsApi.faceSearch(descriptor)
+      const match = await visitorsApi.faceSearch(photoBase64)
       if (match) {
         setFaceMatch(match)
         setFaceStatus(null)
@@ -357,16 +343,13 @@ export function NewVisitorWizardPage() {
   }
 
   function retakePhoto() {
-    patch({ photoBase64: '', faceDescriptor: null, recognizedVisitorId: null })
+    patch({ photoBase64: '', recognizedVisitorId: null })
     setFaceMatch(null)
     setFaceStatus(null)
   }
 
   useEffect(() => {
     if (draft.step !== STEP_FACE || draft.photoBase64) return
-    void ensureFaceModelsLoaded().catch(() => {
-      setFaceStatus('Face recognition models could not be loaded — photo capture still works.')
-    })
     void startCamera()
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -416,7 +399,6 @@ export function NewVisitorWizardPage() {
       photoBase64: draft.photoBase64 || null,
       idTypeId: draft.idTypeId || null,
       idNumber: draft.idNumber || null,
-      faceDescriptor: draft.faceDescriptor,
     }
     try {
       const result = await visitorsApi.register(body)
