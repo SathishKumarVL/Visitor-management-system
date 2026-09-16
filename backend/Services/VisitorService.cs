@@ -110,6 +110,7 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("Please specify the other location.");
 
         Visitor visitor;
+        Visitor? newVisitor = null;
         if (request.ExpectedVisitId.HasValue)
         {
             var expected = await _db.VisitorVisits.Include(v => v.Visitor)
@@ -122,7 +123,13 @@ public class VisitorService : IVisitorService
             visitor.Email = request.Email?.Trim();
             visitor.UpdatedAt = DateTime.UtcNow;
             visitor.UpdatedBy = user.Identity?.Name;
-            _db.VisitorVisits.Remove(expected);
+            // The pre-registration is superseded, not erased: its visit number and audit trail stay intact.
+            expected.Status = VisitStatus.Cancelled;
+            expected.Notes = string.IsNullOrWhiteSpace(expected.Notes)
+                ? "Superseded by arrival registration."
+                : $"{expected.Notes} | Superseded by arrival registration.";
+            expected.UpdatedAt = DateTime.UtcNow;
+            expected.UpdatedBy = user.Identity?.Name;
         }
         else
         {
@@ -137,16 +144,18 @@ public class VisitorService : IVisitorService
                 CreatedBy = user.Identity?.Name
             };
             _db.Visitors.Add(visitor);
+            newVisitor = visitor;
         }
 
-        var needsApproval = false; // Approvals disabled for all visitor flows.
+        // Approval is tenant configuration: walk-ins and scheduled visits can be gated independently.
+        var needsApproval = request.IsWalkIn ? settings.WalkInApprovalRequired : settings.ApprovalRequired;
         var visit = new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected,
-            Status = VisitStatus.Approved,
+            Status = needsApproval ? VisitStatus.PendingApproval : VisitStatus.Approved,
             VisitDate = request.VisitDate ?? DateOnly.FromDateTime(DateTime.Now),
             VisitTime = request.VisitTime ?? TimeOnly.FromDateTime(DateTime.Now),
             DepartmentId = request.DepartmentId,
@@ -188,7 +197,7 @@ public class VisitorService : IVisitorService
         }
 
         _db.VisitorVisits.Add(visit);
-        await _db.SaveChangesAsync();
+        await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix);
 
         if (!string.IsNullOrWhiteSpace(request.PhotoBase64))
             await SavePhotoAsync(visitor.Id, visit.Id, request.PhotoBase64, webRoot, user.Identity?.Name);
@@ -215,8 +224,8 @@ public class VisitorService : IVisitorService
         await _audit.LogAsync("VisitorCreated", "VisitorVisit", visit.Id.ToString(),
             $"Visitor {visitor.FullName} registered ({visit.VisitNumber})");
 
-        // Issue visitor pass immediately so reception can print QR on submit.
-        if (visit.Status is not (VisitStatus.Rejected or VisitStatus.Cancelled))
+        // A pass is only valid for a visit that is cleared to enter; pending-approval visits get one at check-in.
+        if (visit.Status == VisitStatus.Approved)
         {
             _db.VisitorPasses.Add(new VisitorPass
             {
@@ -283,7 +292,7 @@ public class VisitorService : IVisitorService
             visit.VisitLocations.Add(new VisitorVisitLocation { LocationId = lid });
 
         _db.VisitorVisits.Add(visit);
-        await _db.SaveChangesAsync();
+        await SaveNewVisitAsync(visit, visitor, settings.VisitorIdPrefix);
         await _audit.LogAsync("ExpectedVisitorCreated", "VisitorVisit", visit.Id.ToString(),
             $"Expected visitor {visitor.FullName} ({visit.PreRegistrationReference})");
 
@@ -459,14 +468,9 @@ public class VisitorService : IVisitorService
         var visit = await BaseVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId)
             ?? throw new InvalidOperationException("Visit not found.");
 
-        if (visit.Status == VisitStatus.Inside)
-            throw new InvalidOperationException("Visitor is already checked in.");
-        if (visit.Status == VisitStatus.CheckedOut)
-            throw new InvalidOperationException("VISITOR ALREADY CHECKED OUT");
-        if (visit.Status is not (VisitStatus.Approved or VisitStatus.Expected))
-            throw new InvalidOperationException("Visitor must be approved before check-in.");
-
         var settings = await _settings.GetAsync();
+        EnsureCheckInAllowed(visit, settings);
+
         var gate = request.EntryGateId.HasValue
             ? await _db.EntryGates.FirstOrDefaultAsync(g => g.Id == request.EntryGateId)
             : await _db.EntryGates.FirstOrDefaultAsync(g => g.IsDefault && g.IsActive)
@@ -517,10 +521,7 @@ public class VisitorService : IVisitorService
             .FirstOrDefaultAsync(v => v.Id == visitId)
             ?? throw new InvalidOperationException("Visit not found.");
 
-        if (visit.Status == VisitStatus.CheckedOut)
-            throw new InvalidOperationException("VISITOR ALREADY CHECKED OUT");
-        if (visit.Status != VisitStatus.Inside)
-            throw new InvalidOperationException("Visitor is not currently inside.");
+        EnsureCheckOutAllowed(visit);
 
         var gate = request.ExitGateId.HasValue
             ? await _db.ExitGates.AsNoTracking().FirstOrDefaultAsync(g => g.Id == request.ExitGateId)
@@ -1148,6 +1149,43 @@ public class VisitorService : IVisitorService
             throw new UnauthorizedAccessException("Hosts may only view their own visitors.");
     }
 
+    /// <summary>
+    /// Server-side gate for REGISTERED/EXPECTED/APPROVED -> INSIDE. Approval is tenant configuration,
+    /// so an expected visit may only skip approval when the tenant has approval turned off.
+    /// </summary>
+    internal static void EnsureCheckInAllowed(VisitorVisit visit, SettingsDto settings)
+    {
+        switch (visit.Status)
+        {
+            case VisitStatus.Inside:
+                throw new InvalidOperationException("Visitor is already checked in.");
+            case VisitStatus.CheckedOut:
+                throw new InvalidOperationException("VISITOR ALREADY CHECKED OUT");
+            case VisitStatus.Rejected:
+                throw new InvalidOperationException("This visit was rejected and cannot be checked in.");
+            case VisitStatus.Cancelled:
+                throw new InvalidOperationException("This visit was cancelled and cannot be checked in.");
+            case VisitStatus.PendingApproval:
+                throw new InvalidOperationException("Visitor is awaiting host approval and cannot be checked in yet.");
+            case VisitStatus.Expected when settings.ApprovalRequired:
+                throw new InvalidOperationException("Visitor must be approved before check-in.");
+            case VisitStatus.Expected:
+            case VisitStatus.Approved:
+                return;
+            default:
+                throw new InvalidOperationException("Visitor must be approved before check-in.");
+        }
+    }
+
+    /// <summary>Server-side gate for INSIDE -> CHECKED_OUT. Only a visitor currently inside can be checked out.</summary>
+    internal static void EnsureCheckOutAllowed(VisitorVisit visit)
+    {
+        if (visit.Status == VisitStatus.CheckedOut)
+            throw new InvalidOperationException("VISITOR ALREADY CHECKED OUT");
+        if (visit.Status != VisitStatus.Inside)
+            throw new InvalidOperationException("Visitor is not currently inside.");
+    }
+
     private async Task<string> NextVisitorNumberAsync(string prefix)
     {
         var date = DateTime.Now.ToString("yyyyMMdd");
@@ -1159,17 +1197,63 @@ public class VisitorService : IVisitorService
         return $"{patternPrefix}{(MaxNumericSuffix(existing, patternPrefix) + 1):D4}";
     }
 
+    /// <summary>
+    /// Human-readable commercial visit number, e.g. VMS-2026-000184. Scoped to the current tenant by the
+    /// global query filter, so two tenants keep independent sequences.
+    /// </summary>
     private async Task<string> NextVisitNumberAsync(string prefix)
     {
-        // Human-readable commercial visit number, e.g. VMS-2026-000184
+        var patternPrefix = VisitNumberPrefix(prefix);
+        // Fixed-width suffixes sort identically as text and as numbers, so the highest existing
+        // number is one indexed row rather than the whole year loaded into memory.
+        var latest = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.VisitNumber.StartsWith(patternPrefix))
+            .OrderByDescending(v => v.VisitNumber)
+            .Select(v => v.VisitNumber)
+            .FirstOrDefaultAsync();
+        var next = latest is null ? 1 : MaxNumericSuffix(new[] { latest }, patternPrefix) + 1;
+        return $"{patternPrefix}{next:D6}";
+    }
+
+    private static string VisitNumberPrefix(string prefix)
+    {
         var year = DateTime.Now.ToString("yyyy");
         var code = string.IsNullOrWhiteSpace(prefix) ? "VMS" : prefix.Trim().ToUpperInvariant();
-        var patternPrefix = $"{code}-{year}-";
-        var existing = await _db.VisitorVisits.AsNoTracking()
-            .Where(v => v.VisitNumber.StartsWith(patternPrefix))
-            .Select(v => v.VisitNumber)
-            .ToListAsync();
-        return $"{patternPrefix}{(MaxNumericSuffix(existing, patternPrefix) + 1):D6}";
+        return $"{code}-{year}-";
+    }
+
+    /// <summary>
+    /// Persists a new visit, re-issuing the visit number if a concurrent registration claimed it first.
+    /// The (TenantId, VisitNumber) unique index is the source of truth; this only removes the operator-visible failure.
+    /// </summary>
+    private async Task SaveNewVisitAsync(VisitorVisit visit, Visitor? newVisitor, string prefix)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await _db.SaveChangesAsync();
+                return;
+            }
+            catch (DbUpdateException ex) when (attempt < maxAttempts && IsDuplicateNumber(ex, out var visitNumberClash))
+            {
+                if (visitNumberClash)
+                    visit.VisitNumber = await NextVisitNumberAsync(prefix);
+                else if (newVisitor is not null)
+                    newVisitor.VisitorNumber = await NextVisitorNumberAsync(prefix);
+                else
+                    throw;
+            }
+        }
+    }
+
+    private static bool IsDuplicateNumber(DbUpdateException ex, out bool visitNumberClash)
+    {
+        var message = ex.InnerException?.Message ?? ex.Message;
+        visitNumberClash = message.Contains("IX_VisitorVisits_TenantId_VisitNumber", StringComparison.OrdinalIgnoreCase);
+        var visitorNumberClash = message.Contains("IX_Visitors_TenantId_VisitorNumber", StringComparison.OrdinalIgnoreCase);
+        return visitNumberClash || visitorNumberClash;
     }
 
     private static int MaxNumericSuffix(IEnumerable<string> values, string patternPrefix)
