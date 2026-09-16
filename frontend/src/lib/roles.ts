@@ -11,6 +11,7 @@ export type MenuKey =
   | 'hosts'
   | 'purposes'
   | 'locations'
+  | 'sites'
   | 'users'
   | 'settings'
   | 'audit'
@@ -44,6 +45,7 @@ export const MENU_ITEMS: MenuItem[] = [
   { key: 'hosts', label: 'Hosts', path: '/masters/hosts', roles: ['SuperAdmin', 'Admin'] },
   { key: 'purposes', label: 'Purposes', path: '/masters/purposes', roles: ['SuperAdmin', 'Admin'] },
   { key: 'locations', label: 'Locations', path: '/masters/locations', roles: ['SuperAdmin', 'Admin'] },
+  { key: 'sites', label: 'Sites', path: '/masters/sites', roles: ['SuperAdmin', 'Admin'] },
   { key: 'users', label: 'Users', path: '/users', roles: ['SuperAdmin', 'Admin'] },
   { key: 'settings', label: 'Settings', path: '/settings', roles: ['SuperAdmin', 'Admin'] },
   { key: 'audit', label: 'Audit Logs', path: '/audit', roles: ['SuperAdmin', 'Admin'] },

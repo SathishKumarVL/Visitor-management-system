@@ -182,8 +182,20 @@ public class MasterDataService : IMasterDataService
         return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto
         {
             Id = x.Id, Name = x.Name, IsActive = x.IsActive, SortOrder = x.SortOrder,
-            RequiresPlantNumber = x.RequiresPlantNumber, RequiresOtherText = x.RequiresOtherText
+            RequiresPlantNumber = x.RequiresPlantNumber, RequiresOtherText = x.RequiresOtherText,
+            SiteId = x.SiteId, SiteName = x.Site != null ? x.Site.Name : null
         }).ToListAsync();
+    }
+
+    /// <summary>Null keeps an area shared across sites; a value must name an active site in this tenant.</summary>
+    private async Task<Guid?> ValidateSiteAsync(Guid? siteId)
+    {
+        if (siteId is not Guid id || id == Guid.Empty) return null;
+
+        if (!await _db.Sites.AnyAsync(s => s.Id == id && s.IsActive))
+            throw new InvalidOperationException("Selected site was not found or is inactive.");
+
+        return id;
     }
 
     public async Task<MasterItemDto> UpsertLocationAsync(Guid? id, MasterUpsertRequest request, string? user)
@@ -200,11 +212,18 @@ public class MasterDataService : IMasterDataService
         entity.IsActive = request.IsActive;
         entity.RequiresPlantNumber = request.RequiresPlantNumber;
         entity.RequiresOtherText = request.RequiresOtherText;
+        entity.SiteId = await ValidateSiteAsync(request.SiteId);
         await _db.SaveChangesAsync();
+
+        var siteName = entity.SiteId is Guid sid
+            ? await _db.Sites.AsNoTracking().Where(s => s.Id == sid).Select(s => s.Name).FirstOrDefaultAsync()
+            : null;
+
         return new MasterItemDto
         {
             Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder,
-            RequiresPlantNumber = entity.RequiresPlantNumber, RequiresOtherText = entity.RequiresOtherText
+            RequiresPlantNumber = entity.RequiresPlantNumber, RequiresOtherText = entity.RequiresOtherText,
+            SiteId = entity.SiteId, SiteName = siteName
         };
     }
 
@@ -528,7 +547,11 @@ public class UserAdminService : IUserAdminService
 
     public async Task<IReadOnlyList<UserDto>> GetUsersAsync()
     {
-        var users = await _userManager.Users.Include(u => u.Department).OrderBy(u => u.FullName).ToListAsync();
+        var users = await _userManager.Users
+            .Include(u => u.Department)
+            .Include(u => u.Site)
+            .OrderBy(u => u.FullName)
+            .ToListAsync();
         var result = new List<UserDto>();
         foreach (var u in users)
         {
@@ -542,11 +565,28 @@ public class UserAdminService : IUserAdminService
                 Roles = roles.ToList(),
                 DepartmentId = u.DepartmentId,
                 DepartmentName = u.Department?.Name,
+                SiteId = u.SiteId,
+                SiteName = u.Site?.Name,
                 MustChangePassword = u.MustChangePassword,
                 IsActive = u.IsActive
             });
         }
         return result;
+    }
+
+    /// <summary>
+    /// Binding a user to a site controls what they can see, so the target site must belong to the
+    /// caller's tenant and still be open for business.
+    /// </summary>
+    private async Task<Guid?> ValidateSiteAsync(Guid? siteId)
+    {
+        if (siteId is not Guid id || id == Guid.Empty) return null;
+
+        var exists = await _db.Sites.AnyAsync(s => s.Id == id && s.IsActive);
+        if (!exists)
+            throw new InvalidOperationException("Selected site was not found or is inactive.");
+
+        return id;
     }
 
     public async Task<UserDto> CreateAsync(CreateUserRequest request, string? actor)
@@ -564,6 +604,7 @@ public class UserAdminService : IUserAdminService
             FullName = request.FullName.Trim(),
             TenantId = tenantId,
             DepartmentId = request.DepartmentId,
+            SiteId = await ValidateSiteAsync(request.SiteId),
             IsActive = true,
             MustChangePassword = true,
             EmailConfirmed = true,
@@ -584,6 +625,7 @@ public class UserAdminService : IUserAdminService
         user.FullName = request.FullName.Trim();
         user.Email = request.Email.Trim();
         user.DepartmentId = request.DepartmentId;
+        user.SiteId = await ValidateSiteAsync(request.SiteId);
         user.IsActive = request.IsActive;
         user.UpdatedAt = DateTime.UtcNow;
         user.UpdatedBy = actor;

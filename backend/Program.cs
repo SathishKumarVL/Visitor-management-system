@@ -92,6 +92,7 @@ builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 builder.Services.AddScoped<IEmergencyService, EmergencyService>();
+builder.Services.AddScoped<ISiteService, SiteService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

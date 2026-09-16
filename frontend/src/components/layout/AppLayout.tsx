@@ -36,6 +36,7 @@ const MENU_ICONS: Record<string, string> = {
   hosts: '☆',
   purposes: '◇',
   locations: '⌖',
+  sites: '⌂',
   users: '☺',
   settings: '⚙',
   audit: '☰',

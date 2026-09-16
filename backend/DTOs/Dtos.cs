@@ -57,6 +57,11 @@ public class UserDto
     public IReadOnlyList<string> Roles { get; set; } = Array.Empty<string>();
     public Guid? DepartmentId { get; set; }
     public string? DepartmentName { get; set; }
+
+    /// <summary>Null means the user is not bound to a site and keeps tenant-wide visibility.</summary>
+    public Guid? SiteId { get; set; }
+    public string? SiteName { get; set; }
+
     public bool MustChangePassword { get; set; }
     public bool IsActive { get; set; }
 }
@@ -77,6 +82,9 @@ public class CreateUserRequest
 
     public Guid? DepartmentId { get; set; }
 
+    /// <summary>Leave null to grant tenant-wide visibility (Admin); set it to lock the user to one site.</summary>
+    public Guid? SiteId { get; set; }
+
     [Required, MinLength(10)]
     public string Password { get; set; } = string.Empty;
 }
@@ -93,6 +101,10 @@ public class UpdateUserRequest
     public string Role { get; set; } = string.Empty;
 
     public Guid? DepartmentId { get; set; }
+
+    /// <summary>Leave null to grant tenant-wide visibility (Admin); set it to lock the user to one site.</summary>
+    public Guid? SiteId { get; set; }
+
     public bool IsActive { get; set; } = true;
 }
 
@@ -106,6 +118,40 @@ public class MasterItemDto
     public string? Intercom { get; set; }
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
+    public bool IsDefault { get; set; }
+
+    /// <summary>Set for locations only. Null means the area is shared by every site.</summary>
+    public Guid? SiteId { get; set; }
+    public string? SiteName { get; set; }
+}
+
+public class SiteDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Code { get; set; }
+    public string? Address { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsDefault { get; set; }
+
+    /// <summary>Counts help an admin understand the blast radius before deactivating a site.</summary>
+    public int UserCount { get; set; }
+    public int LocationCount { get; set; }
+    public int InsideCount { get; set; }
+}
+
+public class SiteUpsertRequest
+{
+    [Required, MaxLength(150)]
+    public string Name { get; set; } = string.Empty;
+
+    [MaxLength(50)]
+    public string? Code { get; set; }
+
+    [MaxLength(300)]
+    public string? Address { get; set; }
+
+    public bool IsActive { get; set; } = true;
     public bool IsDefault { get; set; }
 }
 
@@ -468,4 +514,7 @@ public class MasterUpsertRequest
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
     public bool IsDefault { get; set; }
+
+    /// <summary>Locations only: the site this area belongs to. Null keeps it shared across sites.</summary>
+    public Guid? SiteId { get; set; }
 }

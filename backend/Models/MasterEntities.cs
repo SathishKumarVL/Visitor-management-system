@@ -118,6 +118,10 @@ public class Location
     public Guid TenantId { get; set; }
     public Tenant? Tenant { get; set; }
 
+    /// <summary>Site this area belongs to. Null means the area is shared by every site in the tenant.</summary>
+    public Guid? SiteId { get; set; }
+    public Site? Site { get; set; }
+
     [Required, MaxLength(150)]
     public string Name { get; set; } = string.Empty;
 

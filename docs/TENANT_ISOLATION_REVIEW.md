@@ -140,7 +140,7 @@ Result: **PASS** (shared query path); Excel/PDF dedicated assertions **PARTIAL**
 
 ## Known limitations
 
-1. Site-scoped authorization not enforced (SiteId claim advisory).
+1. ~~Site-scoped authorization not enforced (SiteId claim advisory).~~ **Enforced** — see `docs/SITE_SCOPING.md`. User administration remains tenant-wide by design.
 2. Approvals/Passes/Photos lack direct `TenantId` columns (rely on parent filters) — sound for current model; document for future hardening.
 3. Notification outbox not tenant-columned (SMTP still B-002).
 4. Background jobs: no multi-tenant job runner yet.

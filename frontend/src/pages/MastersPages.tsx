@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { apiErrorMessage, mastersApi } from '../lib/api'
-import type { MasterItemDto, MasterUpsertRequest } from '../types/api'
+import { apiErrorMessage, mastersApi, sitesApi } from '../lib/api'
+import type { MasterItemDto, MasterUpsertRequest, SiteDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
-import { TextInput, FieldLabel } from '../components/ui/Field'
+import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 
 type MasterKind = 'departments' | 'purposes' | 'locations'
 
@@ -13,6 +13,7 @@ const config: Record<MasterKind, {
   create: (body: MasterUpsertRequest) => Promise<MasterItemDto>
   update: (id: string, body: MasterUpsertRequest) => Promise<MasterItemDto>
   showFlags?: boolean
+  showSite?: boolean
 }> = {
   departments: {
     title: 'Departments',
@@ -32,6 +33,7 @@ const config: Record<MasterKind, {
     create: (b) => mastersApi.createLocation(b),
     update: (id, b) => mastersApi.updateLocation(id, b),
     showFlags: true,
+    showSite: true,
   },
 }
 
@@ -44,6 +46,7 @@ const blank = (): MasterUpsertRequest => ({
   requiresPlantNumber: false,
   requiresOtherText: false,
   isDefault: false,
+  siteId: null,
 })
 
 export function MasterListPage({ kind }: { kind: MasterKind }) {
@@ -54,6 +57,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
   const [message, setMessage] = useState<string | null>(null)
   const [editing, setEditing] = useState<MasterItemDto | null>(null)
   const [form, setForm] = useState<MasterUpsertRequest>(blank())
+  const [sites, setSites] = useState<SiteDto[]>([])
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
@@ -72,6 +76,11 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (!cfg.showSite) return
+    void sitesApi.list(true).then(setSites).catch(() => setSites([]))
+  }, [cfg.showSite])
+
   function startCreate() {
     setEditing(null)
     setForm(blank())
@@ -88,6 +97,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
       requiresPlantNumber: item.requiresPlantNumber,
       requiresOtherText: item.requiresOtherText,
       isDefault: item.isDefault,
+      siteId: item.siteId ?? null,
     })
   }
 
@@ -140,6 +150,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                 <tr>
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Code</th>
+                  {cfg.showSite ? <th className="px-4 py-3">Site</th> : null}
                   <th className="px-4 py-3">Active</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -149,6 +160,11 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                   <tr key={item.id} className="border-t border-gray-100">
                     <td className="px-4 py-3 font-medium">{item.name}</td>
                     <td className="px-4 py-3">{item.code || '—'}</td>
+                    {cfg.showSite ? (
+                      <td className="px-4 py-3">
+                        {item.siteName ?? <span className="text-gray-500">All sites</span>}
+                      </td>
+                    ) : null}
                     <td className="px-4 py-3">{item.isActive ? 'Yes' : 'No'}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
@@ -194,6 +210,19 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
               <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
               Active
             </label>
+            {cfg.showSite ? (
+              <div>
+                <FieldLabel htmlFor="master-site">Site</FieldLabel>
+                <TextSelect
+                  id="master-site"
+                  value={form.siteId || ''}
+                  onChange={(e) => setForm({ ...form, siteId: e.target.value || null })}
+                >
+                  <option value="">Shared by all sites</option>
+                  {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </TextSelect>
+              </div>
+            ) : null}
             {cfg.showFlags ? (
               <>
                 <label className="flex min-h-11 items-center gap-2 text-sm">

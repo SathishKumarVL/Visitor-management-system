@@ -42,6 +42,7 @@ public class VisitorService : IVisitorService
     private readonly ILogger<VisitorService> _logger;
     private readonly IMediaStorageService _media;
     private readonly ITenantContext _tenant;
+    private readonly ISiteService _sites;
     private static readonly Regex IndianPhone = new(@"^(\+91[\-\s]?)?[6-9]\d{9}$|^0\d{2,4}[\-\s]?\d{6,8}$", RegexOptions.Compiled);
 
     public VisitorService(
@@ -54,7 +55,8 @@ public class VisitorService : IVisitorService
         IServiceScopeFactory scopeFactory,
         ILogger<VisitorService> logger,
         IMediaStorageService media,
-        ITenantContext tenant)
+        ITenantContext tenant,
+        ISiteService sites)
     {
         _db = db;
         _settings = settings;
@@ -66,6 +68,7 @@ public class VisitorService : IVisitorService
         _logger = logger;
         _media = media;
         _tenant = tenant;
+        _sites = sites;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -152,6 +155,7 @@ public class VisitorService : IVisitorService
         var visit = new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
+            SiteId = await _sites.ResolveVisitSiteIdAsync(),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected,
@@ -269,6 +273,7 @@ public class VisitorService : IVisitorService
         var visit = new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
+            SiteId = await _sites.ResolveVisitSiteIdAsync(),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             PreRegistrationReference = $"EXP-{DateTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
@@ -1204,22 +1209,32 @@ public class VisitorService : IVisitorService
     }
 
     /// <summary>
-    /// Human-readable commercial visit number, e.g. VMS-2026-000184. Scoped to the current tenant by the
-    /// global query filter, so two tenants keep independent sequences.
+    /// Human-readable commercial visit number, e.g. VMS-2026-000184. The sequence is per tenant, so this
+    /// deliberately steps around the site filter: a site-bound operator must not restart at 1 and collide
+    /// with a number another site already issued.
     /// </summary>
     private async Task<string> NextVisitNumberAsync(string prefix)
     {
+        var tenantId = RequireTenantIdForNumbering();
         var patternPrefix = VisitNumberPrefix(prefix);
         // Fixed-width suffixes sort identically as text and as numbers, so the highest existing
         // number is one indexed row rather than the whole year loaded into memory.
-        var latest = await _db.VisitorVisits.AsNoTracking()
-            .Where(v => v.VisitNumber.StartsWith(patternPrefix))
+        var latest = await _db.VisitorVisits.IgnoreQueryFilters().AsNoTracking()
+            .Where(v => v.TenantId == tenantId && v.VisitNumber.StartsWith(patternPrefix))
             .OrderByDescending(v => v.VisitNumber)
             .Select(v => v.VisitNumber)
             .FirstOrDefaultAsync();
         var next = latest is null ? 1 : MaxNumericSuffix(new[] { latest }, patternPrefix) + 1;
         return $"{patternPrefix}{next:D6}";
     }
+
+    /// <summary>
+    /// Number allocation reads across every site in the tenant, so it can only run with a known tenant.
+    /// </summary>
+    private Guid RequireTenantIdForNumbering() =>
+        _tenant.TenantId is Guid id && id != Guid.Empty
+            ? id
+            : throw new UnauthorizedAccessException("Tenant context is required to allocate a visit number.");
 
     private static string VisitNumberPrefix(string prefix)
     {

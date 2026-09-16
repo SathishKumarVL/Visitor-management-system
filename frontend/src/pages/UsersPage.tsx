@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { apiErrorMessage, mastersApi, usersApi } from '../lib/api'
-import type { CreateUserRequest, MasterItemDto, UpdateUserRequest, UserDto } from '../types/api'
+import { apiErrorMessage, mastersApi, sitesApi, usersApi } from '../lib/api'
+import type { CreateUserRequest, MasterItemDto, SiteDto, UpdateUserRequest, UserDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/ui/Field'
@@ -10,6 +10,7 @@ const ROLES = ['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host']
 export function UsersPage() {
   const [users, setUsers] = useState<UserDto[]>([])
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
+  const [sites, setSites] = useState<SiteDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -20,6 +21,7 @@ export function UsersPage() {
     email: '',
     role: 'Reception',
     departmentId: null,
+    siteId: null,
     password: '',
   })
   const [updateForm, setUpdateForm] = useState<UpdateUserRequest>({
@@ -27,6 +29,7 @@ export function UsersPage() {
     email: '',
     role: 'Reception',
     departmentId: null,
+    siteId: null,
     isActive: true,
   })
   const [saving, setSaving] = useState(false)
@@ -45,6 +48,7 @@ export function UsersPage() {
   useEffect(() => {
     void load()
     void mastersApi.departments(false).then(setDepartments)
+    void sitesApi.list(true).then(setSites)
   }, [load])
 
   function startEdit(user: UserDto) {
@@ -54,6 +58,7 @@ export function UsersPage() {
       email: user.email,
       role: user.roles[0] || 'Reception',
       departmentId: user.departmentId ?? null,
+      siteId: user.siteId ?? null,
       isActive: user.isActive,
     })
   }
@@ -66,6 +71,7 @@ export function UsersPage() {
       await usersApi.create({
         ...createForm,
         departmentId: createForm.departmentId || null,
+        siteId: createForm.siteId || null,
       })
       setMessage('User created.')
       setCreateForm({
@@ -74,6 +80,7 @@ export function UsersPage() {
         email: '',
         role: 'Reception',
         departmentId: null,
+        siteId: null,
         password: '',
       })
       await load()
@@ -93,6 +100,7 @@ export function UsersPage() {
       await usersApi.update(editing.id, {
         ...updateForm,
         departmentId: updateForm.departmentId || null,
+        siteId: updateForm.siteId || null,
       })
       setMessage('User updated.')
       setEditing(null)
@@ -120,6 +128,7 @@ export function UsersPage() {
                 <tr>
                   <th className="px-4 py-3">User</th>
                   <th className="px-4 py-3">Roles</th>
+                  <th className="px-4 py-3">Site</th>
                   <th className="px-4 py-3">Active</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -132,6 +141,9 @@ export function UsersPage() {
                       <div className="text-xs text-gray-500">{u.username} · {u.email}</div>
                     </td>
                     <td className="px-4 py-3">{u.roles.join(', ')}</td>
+                    <td className="px-4 py-3">
+                      {u.siteName ?? <span className="text-gray-500">All sites</span>}
+                    </td>
                     <td className="px-4 py-3">{u.isActive ? 'Yes' : 'No'}</td>
                     <td className="px-4 py-3 text-right">
                       <Button size="sm" variant="secondary" onClick={() => startEdit(u)}>Edit</Button>
@@ -172,6 +184,20 @@ export function UsersPage() {
                     {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </TextSelect>
                 </div>
+                <div>
+                  <FieldLabel htmlFor="edit-site">Site</FieldLabel>
+                  <TextSelect
+                    id="edit-site"
+                    value={updateForm.siteId || ''}
+                    onChange={(e) => setUpdateForm({ ...updateForm, siteId: e.target.value || null })}
+                  >
+                    <option value="">All sites (no restriction)</option>
+                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </TextSelect>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Choosing a site limits this user to that site's visitors, reports and roster.
+                  </p>
+                </div>
                 <label className="flex min-h-11 items-center gap-2 text-sm">
                   <input type="checkbox" checked={updateForm.isActive} onChange={(e) => setUpdateForm({ ...updateForm, isActive: e.target.checked })} />
                   Active
@@ -210,6 +236,20 @@ export function UsersPage() {
                     <option value="">None</option>
                     {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </TextSelect>
+                </div>
+                <div>
+                  <FieldLabel htmlFor="create-site">Site</FieldLabel>
+                  <TextSelect
+                    id="create-site"
+                    value={createForm.siteId || ''}
+                    onChange={(e) => setCreateForm({ ...createForm, siteId: e.target.value || null })}
+                  >
+                    <option value="">All sites (no restriction)</option>
+                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </TextSelect>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Choosing a site limits this user to that site's visitors, reports and roster.
+                  </p>
                 </div>
                 <div>
                   <FieldLabel>Password</FieldLabel>

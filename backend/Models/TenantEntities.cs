@@ -52,6 +52,9 @@ public class Site
     public bool IsDefault { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? UpdatedBy { get; set; }
 }
 
 /// <summary>Resolved per-request. Never trust client-supplied tenant without auth binding.</summary>

@@ -19,6 +19,8 @@ import type {
   PublicBrandingDto,
   RegisterVisitorRequest,
   SettingsDto,
+  SiteDto,
+  SiteUpsertRequest,
   UpdateUserRequest,
   UserDto,
   VisitorDetailDto,
@@ -269,6 +271,15 @@ export const settingsApi = {
   get: () => unwrap(api.get<ApiResponse<SettingsDto>>('/settings')),
   getBranding: () => unwrap(api.get<ApiResponse<PublicBrandingDto>>('/settings/branding')),
   update: (body: SettingsDto) => unwrap(api.put<ApiResponse<SettingsDto>>('/settings', body)),
+}
+
+export const sitesApi = {
+  list: (activeOnly = false) =>
+    unwrap(api.get<ApiResponse<SiteDto[]>>('/sites', { params: { activeOnly } })),
+  create: (body: SiteUpsertRequest) => unwrap(api.post<ApiResponse<SiteDto>>('/sites', body)),
+  update: (id: string, body: SiteUpsertRequest) =>
+    unwrap(api.put<ApiResponse<SiteDto>>(`/sites/${id}`, body)),
+  deactivate: (id: string) => unwrap(api.post<ApiResponse<null>>(`/sites/${id}/deactivate`, {})),
 }
 
 export const usersApi = {

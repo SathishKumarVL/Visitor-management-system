@@ -24,6 +24,7 @@ import { EmergencyModePage } from './pages/EmergencyModePage'
 import { FaceCheckoutPage } from './pages/FaceCheckoutPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
+import { SitesPage } from './pages/SitesPage'
 import { HostsPage } from './pages/HostsPage'
 import { UsersPage } from './pages/UsersPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -93,6 +94,7 @@ export default function App() {
               <Route path="/masters/hosts" element={<HostsPage />} />
               <Route path="/masters/purposes" element={<PurposesPage />} />
               <Route path="/masters/locations" element={<LocationsPage />} />
+              <Route path="/masters/sites" element={<SitesPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/audit" element={<AuditLogsPage />} />

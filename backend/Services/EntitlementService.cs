@@ -18,6 +18,7 @@ public interface IEntitlementService
     Task EnsureModuleEnabledAsync(string moduleKey);
     Task EnsureLicenseAllowsWriteAsync();
     Task EnsureCanCreateUserAsync();
+    Task EnsureCanCreateSiteAsync();
 }
 
 public sealed class EntitlementService : IEntitlementService
@@ -86,5 +87,19 @@ public sealed class EntitlementService : IEntitlementService
         var activeUsers = await _db.Users.CountAsync(u => u.IsActive);
         if (activeUsers >= license.MaxUsers)
             throw new InvalidOperationException("User limit for this license has been reached.");
+    }
+
+    public async Task EnsureCanCreateSiteAsync()
+    {
+        await EnsureLicenseAllowsWriteAsync();
+        var tenantId = CurrentTenantId;
+        var license = await _db.TenantLicenses.AsNoTracking()
+            .Where(l => l.TenantId == tenantId && l.IsActive)
+            .OrderByDescending(l => l.ExpiresAt ?? DateTime.MaxValue)
+            .FirstAsync();
+
+        var activeSites = await _db.Sites.CountAsync(s => s.IsActive);
+        if (activeSites >= license.MaxSites)
+            throw new InvalidOperationException("Site limit for this license has been reached.");
     }
 }

@@ -22,6 +22,8 @@ export interface UserDto {
   roles: string[]
   departmentId?: string | null
   departmentName?: string | null
+  siteId?: string | null
+  siteName?: string | null
   mustChangePassword: boolean
   isActive: boolean
 }
@@ -52,6 +54,29 @@ export interface MasterItemDto {
   intercom?: string | null
   requiresPlantNumber: boolean
   requiresOtherText: boolean
+  isDefault: boolean
+  /** Locations only. Null means the area is shared by every site. */
+  siteId?: string | null
+  siteName?: string | null
+}
+
+export interface SiteDto {
+  id: string
+  name: string
+  code?: string | null
+  address?: string | null
+  isActive: boolean
+  isDefault: boolean
+  userCount: number
+  locationCount: number
+  insideCount: number
+}
+
+export interface SiteUpsertRequest {
+  name: string
+  code?: string | null
+  address?: string | null
+  isActive: boolean
   isDefault: boolean
 }
 
@@ -288,6 +313,8 @@ export interface CreateUserRequest {
   email: string
   role: string
   departmentId?: string | null
+  /** Null grants tenant-wide visibility; a value locks the user to that one site. */
+  siteId?: string | null
   password: string
 }
 
@@ -296,6 +323,8 @@ export interface UpdateUserRequest {
   email: string
   role: string
   departmentId?: string | null
+  /** Null grants tenant-wide visibility; a value locks the user to that one site. */
+  siteId?: string | null
   isActive: boolean
 }
 
@@ -318,6 +347,8 @@ export interface MasterUpsertRequest {
   requiresPlantNumber: boolean
   requiresOtherText: boolean
   isDefault: boolean
+  /** Locations only: null keeps the area shared across sites. */
+  siteId?: string | null
 }
 
 export interface VisitorSearchParams {

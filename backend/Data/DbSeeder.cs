@@ -338,6 +338,29 @@ public static class DbSeeder
             UPDATE AuditLogs SET TenantId = {0} WHERE TenantId IS NULL;
             UPDATE NotificationOutbox SET TenantId = {0} WHERE TenantId IS NULL;
             """, tenantId);
+
+        await BackfillSiteIdsAsync(context, tenantId);
+    }
+
+    /// <summary>
+    /// Site scoping filters visits and areas, so anything created before sites existed has to be adopted by
+    /// the tenant default. Without this, a site-bound user would see an empty system.
+    /// </summary>
+    private static async Task BackfillSiteIdsAsync(ApplicationDbContext context, Guid tenantId)
+    {
+        var defaultSiteId = await context.Sites.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.TenantId == tenantId && s.IsActive)
+            .OrderByDescending(s => s.IsDefault)
+            .ThenBy(s => s.Name)
+            .Select(s => (Guid?)s.Id)
+            .FirstOrDefaultAsync();
+
+        if (defaultSiteId is not Guid siteId) return;
+
+        await context.Database.ExecuteSqlRawAsync("""
+            UPDATE VisitorVisits SET SiteId = {1} WHERE TenantId = {0} AND SiteId IS NULL;
+            UPDATE Locations SET SiteId = {1} WHERE TenantId = {0} AND SiteId IS NULL;
+            """, tenantId, siteId);
     }
 
     private static async Task EnsureColumnWidthsAsync(ApplicationDbContext context)
