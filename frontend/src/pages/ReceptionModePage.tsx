@@ -7,7 +7,10 @@ export function ReceptionModePage() {
   const navigate = useNavigate()
   const location = useLocation()
   const company = useSettingsStore((s) => s.settings.companyName)
-  const registeredName = (location.state as { visitorName?: string } | null)?.visitorName
+  const registration = location.state as
+    | { visitorName?: string; pendingApproval?: boolean; visitNumber?: string }
+    | null
+  const registeredName = registration?.visitorName
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -25,8 +28,15 @@ export function ReceptionModePage() {
         </div>
 
         {registeredName ? (
-          <div className="relative mx-auto mt-6 max-w-xl">
-            <Alert tone="success">Visitor “{registeredName}” registered successfully.</Alert>
+          <div className="relative mx-auto mt-6 max-w-xl" role="status" aria-live="polite">
+            {registration?.pendingApproval ? (
+              <Alert tone="warning">
+                Visitor “{registeredName}” registered{registration.visitNumber ? ` as ${registration.visitNumber}` : ''} and
+                is waiting for host approval. Check in once the host approves.
+              </Alert>
+            ) : (
+              <Alert tone="success">Visitor “{registeredName}” registered successfully.</Alert>
+            )}
           </div>
         ) : null}
 

@@ -420,6 +420,24 @@ export function NewVisitorWizardPage() {
     try {
       const result = await visitorsApi.register(body)
 
+      // Tenants with approval enabled park the visit until the host decides; only an
+      // already-cleared visit may be walked straight through to a pass.
+      const awaitingApproval = String(result.statusLabel ?? '').toLowerCase().includes('pending')
+      if (awaitingApproval) {
+        setSubmitting(false)
+        navigate('/reception', {
+          replace: true,
+          state: {
+            registered: true,
+            pendingApproval: true,
+            visitId: result.visitId,
+            visitNumber: result.visitNumber,
+            visitorName: draft.visitorName.trim(),
+          },
+        })
+        return
+      }
+
       // Best-effort follow-ups with a short timeout so Submit never hangs.
       const followUps = Promise.allSettled([
         passApi.generate(result.visitId),
