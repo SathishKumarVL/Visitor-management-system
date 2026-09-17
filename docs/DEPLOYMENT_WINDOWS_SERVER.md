@@ -141,9 +141,10 @@ Example rewrite for React Router:
 ## 10. Post-deploy checklist
 
 - [ ] Browse https://vms.tiaano.local
-- [ ] Login as reception
-- [ ] Register visitor, approve, check-in, print pass
-- [ ] Verify visitor by Visit Number on security tablet
-- [ ] Confirm photos write to uploads
+- [ ] Login as admin / superadmin
+- [ ] Create departments, hosts, purposes, locations, gates and desk users under Admin
+- [ ] Register a visitor, check-in, print pass
+- [ ] Verify visitor by Visit Number on a security tablet
+- [ ] Confirm photos write under App_Data/media
 - [ ] Force password change for seed users
 - [ ] Disable Swagger in Production (already gated to Development)

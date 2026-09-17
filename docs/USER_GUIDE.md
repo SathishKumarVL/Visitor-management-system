@@ -1,8 +1,11 @@
 # User Guide — TIAANO VMS
 
+Desk accounts (`reception`, `security`, `host`) are created by an administrator under
+**Admin → Users**, not shipped with the install. The steps below assume those accounts exist.
+
 ## Reception tablet
 
-1. Login as `reception`
+1. Login as a user with the Reception role
 2. Use **Reception Mode** large buttons
 3. **New Visitor** → complete the step-based wizard (under ~2 minutes)
 4. If your site does not require approval, the visitor is checked in and the pass prints straight away
@@ -14,14 +17,14 @@
 
 ## Security tablet
 
-1. Login as `security`
+1. Login as a user with the Security role
 2. **Verify Visitor** by Visit Number printed on the pass
 3. Confirm photo/name/host and check in or check out as needed
 4. Use **Currently Inside** and search for name/mobile/company lookups
 
 ## Host
 
-1. Login as `host`
+1. Login as a user with the Host role
 2. Open **Pending Approvals** to see visits waiting on a decision, with photo, company, purpose and visit number
 3. **Approve** — reception can then check the visitor in
 4. **Reject** — a reason is required and is recorded against the visit
@@ -31,7 +34,7 @@ this queue stays empty because visits are cleared to enter on registration.
 
 ## Emergency
 
-1. Login as `security` (or reception/admin) and open **Emergency Mode**
+1. Login as security (or reception/admin) and open **Emergency Mode**
 2. The roster lists everyone currently inside with photo, company, host, location and entry time
 3. Mark each person **Verified**, **Evacuated** or **Missing** — marks are saved on the server,
    so every marshal sees the same counts, and each one is audited

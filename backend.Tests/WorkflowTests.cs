@@ -29,6 +29,7 @@ public class TestApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        builder.UseSetting("ConnectionStrings:DefaultConnection", TestDatabase.ConnectionString);
         builder.UseSetting("Jwt:Key", TestSecrets.JwtKey);
         builder.UseSetting("Jwt:Issuer", "Tiaano.Vms");
         builder.UseSetting("Jwt:Audience", "Tiaano.Vms.Clients");
@@ -44,6 +45,17 @@ public class TestApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<IFaceEmbeddingService>();
             services.AddSingleton<IFaceEmbeddingService, StubFaceEmbeddingService>();
         });
+    }
+
+    /// <summary>
+    /// Runs after the application has started and its own seeding has completed, so the test
+    /// fixtures layer on top of a migrated database exactly once per factory.
+    /// </summary>
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = base.CreateHost(builder);
+        TestFixtureSeeder.EnsureAsync(host.Services).GetAwaiter().GetResult();
+        return host;
     }
 
     public async Task EnsureReceptionPasswordAsync()

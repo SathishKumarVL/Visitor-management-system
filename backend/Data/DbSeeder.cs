@@ -33,110 +33,12 @@ public static class DbSeeder
         // Backfill tenant ids for legacy rows (idempotent).
         await BackfillTenantIdsAsync(context, tenantId);
 
-        if (!await context.Departments.IgnoreQueryFilters().AnyAsync())
-        {
-            var departments = new (string Name, string Code, int Order)[]
-            {
-                ("Managing Director", "MD", 1),
-                ("Administration", "ADMIN", 2),
-                ("Production", "PROD", 3),
-                ("Quality Control", "QC", 4),
-                ("Purchase", "PUR", 5),
-                ("Design", "DES", 6),
-                ("Logistics", "LOG", 7),
-                ("Corporate Finance", "CFIN", 8),
-                ("Marketing", "MKT", 9),
-                ("Facilitation", "FAC", 10),
-                ("Finance", "FIN", 11),
-                ("MSE", "MSE", 12)
-            };
-
-            foreach (var d in departments)
-            {
-                context.Departments.Add(new Department
-                {
-                    TenantId = tenantId,
-                    Name = d.Name,
-                    Code = d.Code,
-                    SortOrder = d.Order,
-                    CreatedBy = "system"
-                });
-            }
-            await context.SaveChangesAsync();
-        }
-
-        if (!await context.VisitPurposes.IgnoreQueryFilters().AnyAsync())
-        {
-            var purposes = new[]
-            {
-                "Equipments", "Chlor Alkali", "DSA Anode", "Chlorinator", "Composite",
-                "H2 Generator", "HOCl Generator", "Platinized Anode", "Electrolytic Scale Remover",
-                "ScaleX", "Cathodic Protection", "S.A.E.W.T / T'Chlor",
-                "Effluent Treatment Plant / Sewage Treatment Plant",
-                "Others"
-            };
-            for (var i = 0; i < purposes.Length; i++)
-            {
-                context.VisitPurposes.Add(new VisitPurpose
-                {
-                    TenantId = tenantId,
-                    Name = purposes[i],
-                    SortOrder = i + 1,
-                    CreatedBy = "system"
-                });
-            }
-            await context.SaveChangesAsync();
-        }
-
+        // Departments, visit purposes, locations, ID types and gates are deliberately not seeded.
+        // They describe one particular organisation, so a fresh install starts empty and an
+        // administrator enters their own under Admin -> Masters. The only exception is below:
+        // "Others" is a fallback the registration flow depends on, so it is a system record rather
+        // than sample content. VisitorService recreates it on demand if it is ever deleted.
         await VisitPurposeDefaults.EnsureOthersPurposeAsync(context, tenantId);
-
-        if (!await context.Locations.IgnoreQueryFilters().AnyAsync())
-        {
-            var locations = new (string Name, bool Plant, bool Other, int Order)[]
-            {
-                ("Anode Hall", false, false, 1),
-                ("Titanium Hall", false, false, 2),
-                ("Nickel Hall", false, false, 3),
-                ("Tantalum Hall", false, false, 4),
-                ("Reception", false, false, 5),
-                ("Zirconium Hall", false, false, 6),
-                ("Platinum Hall", false, false, 7),
-                ("Composite Hall", false, false, 8),
-                ("Plant No.", true, false, 9),
-                ("Others", false, true, 10)
-            };
-            foreach (var loc in locations)
-            {
-                context.Locations.Add(new Location
-                {
-                    TenantId = tenantId,
-                    Name = loc.Name,
-                    RequiresPlantNumber = loc.Plant,
-                    RequiresOtherText = loc.Other,
-                    SortOrder = loc.Order,
-                    CreatedBy = "system"
-                });
-            }
-            await context.SaveChangesAsync();
-        }
-
-        if (!await context.IdTypes.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId))
-        {
-            foreach (var (name, order) in new[] { ("Aadhaar", 1), ("PAN", 2), ("Driving License", 3), ("Passport", 4), ("Voter ID", 5), ("Company ID", 6) })
-            {
-                context.IdTypes.Add(new IdType { TenantId = tenantId, Name = name, SortOrder = order, CreatedBy = "system" });
-            }
-            await context.SaveChangesAsync();
-        }
-
-        if (!await context.EntryGates.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId))
-        {
-            context.EntryGates.Add(new EntryGate { TenantId = tenantId, Name = "Main Gate", IsDefault = true, CreatedBy = "system" });
-            context.EntryGates.Add(new EntryGate { TenantId = tenantId, Name = "Reception Entrance", CreatedBy = "system" });
-            context.ExitGates.Add(new ExitGate { TenantId = tenantId, Name = "Main Gate", IsDefault = true, CreatedBy = "system" });
-            context.ExitGates.Add(new ExitGate { TenantId = tenantId, Name = "Reception Exit", CreatedBy = "system" });
-            await context.SaveChangesAsync();
-        }
 
         if (!await context.SystemSettings.IgnoreQueryFilters().AnyAsync())
         {
@@ -200,34 +102,12 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        var adminDept = await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "ADMIN" && d.TenantId == tenantId);
-        var productionDept = await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "PROD" && d.TenantId == tenantId);
-        var mdDept = await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "MD" && d.TenantId == tenantId);
-
-        if (!await context.Employees.IgnoreQueryFilters().AnyAsync(e => e.TenantId == tenantId))
-        {
-            context.Employees.AddRange(
-                new Employee { TenantId = tenantId, FullName = "Ramesh Kumar", Email = "ramesh.host@tiaano.local", DepartmentId = productionDept.Id, Intercom = "201", Designation = "Production Manager", CreatedBy = "system" },
-                new Employee { TenantId = tenantId, FullName = "Priya Sharma", Email = "priya.host@tiaano.local", DepartmentId = adminDept.Id, Intercom = "101", Designation = "Admin Manager", CreatedBy = "system" },
-                new Employee { TenantId = tenantId, FullName = "Anil Mehta", Email = "anil.md@tiaano.local", DepartmentId = mdDept.Id, Intercom = "001", Designation = "Managing Director", CreatedBy = "system" },
-                new Employee { TenantId = tenantId, FullName = "Sneha Patel", Email = "sneha.qc@tiaano.local", DepartmentId = (await context.Departments.IgnoreQueryFilters().FirstAsync(d => d.Code == "QC" && d.TenantId == tenantId)).Id, Intercom = "301", Designation = "QC Lead", CreatedBy = "system" }
-            );
-            await context.SaveChangesAsync();
-        }
-
+        // Only the two accounts needed to get in and configure the system. Reception, security and
+        // host accounts belong to real people and are created by an administrator under Admin ->
+        // Users, so that every operator action in the audit trail names someone accountable.
         var seedPassword = SecretConfiguration.GetSeedPasswordForCreateOnly(config);
-        await EnsureUserAsync(userManager, context, tenantId, "superadmin", "Super Administrator", "superadmin@tiaano.local", AppRoles.SuperAdmin, adminDept.Id, seedPassword, false);
-        await EnsureUserAsync(userManager, context, tenantId, "admin", "System Admin", "admin@tiaano.local", AppRoles.Admin, adminDept.Id, seedPassword, true);
-        await EnsureUserAsync(userManager, context, tenantId, "reception", "Reception Desk", "reception@tiaano.local", AppRoles.Reception, adminDept.Id, seedPassword, true);
-        await EnsureUserAsync(userManager, context, tenantId, "security", "Security Desk", "security@tiaano.local", AppRoles.Security, adminDept.Id, seedPassword, true);
-
-        var hostUser = await EnsureUserAsync(userManager, context, tenantId, "host", "Ramesh Kumar", "ramesh.host@tiaano.local", AppRoles.Host, productionDept.Id, seedPassword, true);
-        var hostEmp = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.Email == "ramesh.host@tiaano.local" && e.TenantId == tenantId);
-        if (hostEmp is not null && string.IsNullOrEmpty(hostEmp.UserId))
-        {
-            hostEmp.UserId = hostUser.Id;
-            await context.SaveChangesAsync();
-        }
+        await EnsureUserAsync(userManager, context, tenantId, "superadmin", "Super Administrator", "superadmin@tiaano.local", AppRoles.SuperAdmin, null, seedPassword, false);
+        await EnsureUserAsync(userManager, context, tenantId, "admin", "System Admin", "admin@tiaano.local", AppRoles.Admin, null, seedPassword, true);
 
         await EnsureProductFoundationAsync(context, tenantId);
     }
@@ -270,16 +150,6 @@ public static class DbSeeder
                     IsEnabled = true
                 });
             }
-        }
-
-        if (!await context.ApplicationReleases.AnyAsync(r => r.Version == "0.2.0-overnight"))
-        {
-            context.ApplicationReleases.Add(new Models.Product.ApplicationRelease
-            {
-                Version = "0.2.0-overnight",
-                DatabaseVersion = "AddProductizationFoundation",
-                Notes = "Overnight autonomous hardening: QR removed, secrets contained, media secured, tenant foundation, productization scaffold."
-            });
         }
 
         await context.SaveChangesAsync();
@@ -390,7 +260,7 @@ public static class DbSeeder
         string fullName,
         string email,
         string role,
-        Guid departmentId,
+        Guid? departmentId,
         string? password,
         bool mustChangePassword)
     {

@@ -43,7 +43,16 @@ dotnet user-secrets set "ConnectionStrings:DefaultConnection" "your-connection-s
 
 ### 4. Run migrations / seed
 
-Startup runs `MigrateAsync` and seeds departments, purposes, locations, gates, settings, and sample users.
+Startup runs `MigrateAsync` and seeds only what a fresh install needs to boot:
+
+- the default TIAANO tenant and Headquarters site
+- identity roles
+- `superadmin` and `admin` login accounts (password from `Seed:DefaultPassword`)
+- system settings defaults
+- product-module entitlements
+- the "Others" visit purpose (registration falls back to it)
+
+Departments, hosts, visit purposes, locations, ID types and gates are **not** seeded — enter your own under Admin before registering visitors. Demo desk accounts (`reception`, `security`, `host`) are no longer created either.
 
 Manual migration:
 
@@ -87,11 +96,11 @@ Open http://localhost:5173
 
 ### 8. Verify
 
-1. Login as `reception` using the password you configured in `Seed:DefaultPassword` (User Secrets)
-2. Open Reception Mode → New Visitor
-3. Complete wizard and submit
-4. Login as `host` and approve
-5. Check in and print pass
+1. Login as `admin` using the password you configured in `Seed:DefaultPassword` (User Secrets)
+2. Under Admin, create at least one Department, Host employee, Visit purpose, and a Reception user
+3. Login as that reception user → New Visitor
+4. Complete the wizard and submit
+5. Check in and print a pass
 
 ## Build for production
 

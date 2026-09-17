@@ -63,10 +63,20 @@ Vite proxies `/api`, `/uploads`, and `/branding` to the API.
 
 ### Seed users
 
-On first run (when users do not already exist), seed accounts are created for:
-`superadmin`, `admin`, `reception`, `security`, `host`.
+On first run (when users do not already exist), seed accounts are created for
+`superadmin` and `admin` only. Desk roles (`reception`, `security`, `host`) and all master data
+(departments, hosts, purposes, locations, gates) are created by an administrator under Admin —
+nothing fictional is pre-loaded.
 
 Initial passwords come from `Seed:DefaultPassword` via User Secrets / environment variables — never from tracked config or docs. Seeded users are marked `MustChangePassword`. Existing users are never password-reset on startup. See [docs/SECURITY.md](docs/SECURITY.md).
+
+To wipe leftover test or sample data from a local database:
+
+```powershell
+./scripts/purge-mock-data.ps1 -Force
+```
+
+Integration tests use a separate database (`TiaanoVms_Tests`) so they no longer write into the working database.
 
 ## Project layout
 
