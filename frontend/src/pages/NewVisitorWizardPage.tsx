@@ -8,20 +8,19 @@ import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../co
 import { nowIsoTime, todayIsoDate, validateVisitorEmail } from '../lib/utils'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { BrandLogo } from '../components/BrandLogo'
-import { VisitorLocationStep, validateVisitorLocationStep } from '../components/visitors/VisitorLocationStep'
 import { SecureImage } from '../components/SecureImage'
 import type { FaceSearchMatchDto } from '../types/api'
 
 const LEGACY_DRAFT_KEY = 'tiaano_visitor_wizard_draft'
-const STEPS = ['Face', 'Visitor', 'Host', 'Purpose', 'Location', 'ID', 'Review'] as const
+const STEPS = ['Face', 'Visitor', 'Host', 'Purpose', 'ID', 'Review'] as const
+const STATIC_ID_TYPES = ['Aadhaar', 'Pan Card', 'Passport'] as const
 
 const STEP_FACE = 0
 const STEP_VISITOR = 1
 const STEP_HOST = 2
 const STEP_PURPOSE = 3
-const STEP_LOCATION = 4
-const STEP_ID = 5
-const STEP_REVIEW = 6
+const STEP_ID = 4
+const STEP_REVIEW = 5
 
 function sanitizeMobileDigits(value: string): string {
   return value.replace(/\D/g, '').slice(0, 10)
@@ -46,11 +45,12 @@ const emptyDraft = (): VisitorWizardDraft => ({
   otherPurposeText: '',
   notes: '',
   photoBase64: '',
-  idTypeId: '',
+  idTypeName: '',
   idNumber: '',
   isWalkIn: true,
   expectedVisitId: null,
   recognizedVisitorId: null,
+  passNumber: '',
 })
 
 function toggleId(list: string[], id: string): string[] {
@@ -66,8 +66,6 @@ export function NewVisitorWizardPage() {
   const [draft, setDraft] = useState<VisitorWizardDraft>(() => emptyDraft())
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
   const [purposes, setPurposes] = useState<MasterItemDto[]>([])
-  const [locations, setLocations] = useState<MasterItemDto[]>([])
-  const [idTypes, setIdTypes] = useState<MasterItemDto[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [completedPass, setCompletedPass] = useState<PassDto | null>(null)
@@ -119,16 +117,12 @@ export function NewVisitorWizardPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [d, p, locs, i] = await Promise.all([
+        const [d, p] = await Promise.all([
           mastersApi.departments(),
           mastersApi.purposes(),
-          mastersApi.locations(),
-          mastersApi.idTypes(),
         ])
         setDepartments(d)
         setPurposes(p)
-        setLocations(locs)
-        setIdTypes(i)
 
         if (expectedId) {
           setLoadingExpected(true)
@@ -208,8 +202,15 @@ export function NewVisitorWizardPage() {
         return 'Enter the specific reason when Others is selected.'
       }
     }
-    if (step === STEP_LOCATION) {
-      return validateVisitorLocationStep(draft, locations)
+    if (step === STEP_ID) {
+      if (!draft.idTypeName.trim()) return 'Select an ID type.'
+      if (!STATIC_ID_TYPES.includes(draft.idTypeName as (typeof STATIC_ID_TYPES)[number])) {
+        return 'Select a valid ID type.'
+      }
+      if (!draft.idNumber.trim()) return 'Enter the ID number.'
+    }
+    if (step === STEP_REVIEW) {
+      if (!draft.passNumber.trim()) return 'Enter the pass number to register this visitor.'
     }
     return null
   }
@@ -258,7 +259,6 @@ export function NewVisitorWizardPage() {
     if (m.includes('telephone') || m.includes('phone') || m.includes('email') || m.includes('visitor name') || m.includes('company')) return STEP_VISITOR
     if (m.includes('department') || m.includes('host')) return STEP_HOST
     if (m.includes('purpose')) return STEP_PURPOSE
-    if (m.includes('location') || m.includes('plant')) return STEP_LOCATION
     if (m.includes('photo')) return STEP_FACE
     if (m.includes('identity') || m.includes('id ')) return STEP_ID
     return draft.step
@@ -363,7 +363,7 @@ export function NewVisitorWizardPage() {
       validateStep(STEP_VISITOR) ||
       validateStep(STEP_HOST) ||
       validateStep(STEP_PURPOSE) ||
-      validateStep(STEP_LOCATION)
+      validateStep(STEP_REVIEW)
     if (msg) {
       setError(msg)
       return
@@ -388,17 +388,18 @@ export function NewVisitorWizardPage() {
       departmentId: draft.departmentId,
       hostName: draft.hostName.trim(),
       purposeIds: syncOthersPurposeIds(draft.purposeIds, draft.othersChecked),
-      locationIds: draft.locationIds,
-      plantNumber: draft.plantNumber.trim() || null,
-      otherLocationText: draft.otherLocationText.trim() || null,
+      locationIds: [],
+      plantNumber: null,
+      otherLocationText: null,
       purposeNotes: draft.othersChecked ? draft.otherPurposeText.trim() : null,
       notes: draft.notes.trim() || null,
       isWalkIn: draft.isWalkIn,
       expectedVisitId: draft.expectedVisitId,
       recognizedVisitorId: draft.recognizedVisitorId,
       photoBase64: draft.photoBase64 || null,
-      idTypeId: draft.idTypeId || null,
-      idNumber: draft.idNumber || null,
+      idTypeName: draft.idTypeName.trim(),
+      idNumber: draft.idNumber.trim(),
+      passNumber: draft.passNumber.trim(),
     }
     try {
       const result = await visitorsApi.register(body)
@@ -741,10 +742,6 @@ export function NewVisitorWizardPage() {
           </div>
         )}
 
-        {draft.step === STEP_LOCATION && (
-          <VisitorLocationStep draft={draft} locations={locations} onPatch={patch} />
-        )}
-
         {draft.step === STEP_ID && (
           <div className="grid gap-6 lg:grid-cols-2">
             <div>
@@ -766,17 +763,27 @@ export function NewVisitorWizardPage() {
             </div>
             <div className="space-y-4">
               <div>
-                <FieldLabel htmlFor="idTypeId">ID type</FieldLabel>
-                <TextSelect id="idTypeId" value={draft.idTypeId} onChange={(e) => patch({ idTypeId: e.target.value })}>
-                  <option value="">Optional</option>
-                  {idTypes.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
+                <FieldLabel htmlFor="idTypeName">ID type</FieldLabel>
+                <TextSelect
+                  id="idTypeName"
+                  required
+                  value={draft.idTypeName}
+                  onChange={(e) => patch({ idTypeName: e.target.value })}
+                >
+                  <option value="">Select ID type</option>
+                  {STATIC_ID_TYPES.map((name) => (
+                    <option key={name} value={name}>{name}</option>
                   ))}
                 </TextSelect>
               </div>
               <div>
                 <FieldLabel htmlFor="idNumber">ID number</FieldLabel>
-                <TextInput id="idNumber" value={draft.idNumber} onChange={(e) => patch({ idNumber: e.target.value })} />
+                <TextInput
+                  id="idNumber"
+                  required
+                  value={draft.idNumber}
+                  onChange={(e) => patch({ idNumber: e.target.value })}
+                />
               </div>
             </div>
           </div>
@@ -834,14 +841,6 @@ export function NewVisitorWizardPage() {
                 {draft.othersChecked && draft.otherPurposeText.trim() ? (
                   <ReviewRow label="Other purpose detail" value={draft.otherPurposeText.trim()} />
                 ) : null}
-                <ReviewRow
-                  label="Location"
-                  value={locations.filter((l) => draft.locationIds.includes(l.id)).map((l) => l.name).join(', ') || '—'}
-                />
-                {draft.plantNumber.trim() ? <ReviewRow label="Plant number" value={draft.plantNumber.trim()} /> : null}
-                {draft.otherLocationText.trim() ? (
-                  <ReviewRow label="Other location" value={draft.otherLocationText.trim()} />
-                ) : null}
                 {completedPass?.visitNumber ? (
                   <ReviewRow label="Visit #" value={completedPass.visitNumber} />
                 ) : null}
@@ -869,6 +868,23 @@ export function NewVisitorWizardPage() {
                 ) : null}
               </div>
             </div>
+
+            {!completedPass && !passPendingApproval ? (
+              <div className="no-print mt-4 max-w-sm space-y-1 border-t border-border/70 pt-4">
+                <FieldLabel htmlFor="passNumber">Pass number *</FieldLabel>
+                <TextInput
+                  id="passNumber"
+                  value={draft.passNumber}
+                  onChange={(e) => patch({ passNumber: e.target.value })}
+                  placeholder="Enter the physical pass / badge number"
+                  autoComplete="off"
+                  required
+                />
+                <p className="text-xs text-ink-muted">Required before registration.</p>
+              </div>
+            ) : draft.passNumber.trim() ? (
+              <ReviewRow label="Pass number" value={draft.passNumber.trim()} />
+            ) : null}
 
             {completedPass && completedVisitId ? (
               <div className="no-print flex flex-wrap gap-2">
@@ -909,7 +925,13 @@ export function NewVisitorWizardPage() {
             <span />
           )}
           {draft.step === STEP_REVIEW && !completedPass && !passPendingApproval ? (
-            <Button variant="primary" size="lg" loading={submitting} disabled={!online} onClick={() => void submit()}>
+            <Button
+              variant="primary"
+              size="lg"
+              loading={submitting}
+              disabled={!online || !draft.passNumber.trim()}
+              onClick={() => void submit()}
+            >
               {submitting ? 'Registering…' : 'Register Visitor'}
             </Button>
           ) : draft.step < STEPS.length - 1 ? (

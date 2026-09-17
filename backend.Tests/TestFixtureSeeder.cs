@@ -11,9 +11,9 @@ namespace Tiaano.Vms.Api.Tests;
 /// Test database configuration.
 /// </summary>
 /// <remarks>
-/// Tests run against their own database rather than the development one. They register visitors,
-/// check them in and write audit rows, and pointing them at the working database buried real records
-/// under hundreds of fixtures. Set <c>VMS_TEST_CONNECTION</c> to override, e.g. on CI.
+/// Tests run against their own database rather than the development one. They register visitors
+/// and check them in, and pointing them at the working database buried real records under hundreds
+/// of fixtures. Set <c>VMS_TEST_CONNECTION</c> to override, e.g. on CI.
 /// </remarks>
 internal static class TestDatabase
 {

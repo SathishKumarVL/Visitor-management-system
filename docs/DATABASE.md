@@ -16,7 +16,6 @@ Database name (dev default): `TiaanoVms`
 | VisitPurposes | Purpose master |
 | Locations | Location master |
 | IdTypes | ID document types |
-| EntryGates / ExitGates | Gates |
 | Visitors | Visitor profile |
 | VisitorVisits | Visit instances + status |
 | VisitorVisitPurposes | M:N visit ↔ purpose |
@@ -25,7 +24,6 @@ Database name (dev default): `TiaanoVms`
 | VisitorDocuments | Masked/encrypted ID data |
 | Approvals | Approval history |
 | VisitorPasses | Issued pass records (legacy PassCode retained; Visit Number is the public identifier) |
-| AuditLogs | Immutable audit trail |
 | SystemSettings | Configurable settings (unique per TenantId + Key) |
 | NotificationOutbox | Notification abstraction queue (tenant-scoped; nullable `TenantId` for pre-existing rows) |
 | EmergencyRollCallEvents | Append-only evacuation roll call; never mutates the visit |
@@ -38,7 +36,7 @@ Database name (dev default): `TiaanoVms`
 
 All operational masters and transactional tables carry `TenantId` and EF global query filters:
 
-Departments, Employees, AspNetUsers, VisitPurposes, Locations, IdTypes, EntryGates, ExitGates, Visitors, VisitorVisits, SystemSettings, Sites, AuditLogs (nullable TenantId).
+Departments, Employees, AspNetUsers, VisitPurposes, Locations, IdTypes, Visitors, VisitorVisits, SystemSettings, Sites.
 
 Approvals, passes, photos, and documents are isolated indirectly via filtered parent visits/visitors.
 
@@ -46,9 +44,8 @@ Approvals, passes, photos, and documents are isolated indirectly via filtered pa
 
 - Visitors: (TenantId, VisitorNumber) unique, FullName, Phone, CompanyName
 - VisitorVisits: (TenantId, VisitNumber) unique, Status, VisitDate, PreRegistrationReference
-- IdTypes / EntryGates / ExitGates: (TenantId, Name)
+- IdTypes: (TenantId, Name)
 - VisitorPasses: PassCode (unique)
-- AuditLogs: CreatedAt, Entity, Action
 - SystemSettings: (TenantId, Key) unique
 
 ## Soft delete policy
@@ -73,6 +70,6 @@ Startup also calls `Database.MigrateAsync()` then seeds reference data.
 - 12 departments (Managing Director … MSE)
 - 13 visit purposes (Equipments … ETP/STP)
 - 10 locations (Anode Hall … Others)
-- ID types, entry/exit gates (tenant-scoped)
+- ID types (tenant-scoped)
 - Sample hosts and role users
 - Default entitlements: visitor-management + emergency-management enabled; analytics not entitled

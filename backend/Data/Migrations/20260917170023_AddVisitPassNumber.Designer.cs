@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Tiaano.Vms.Api.Data;
 
@@ -11,9 +12,11 @@ using Tiaano.Vms.Api.Data;
 namespace Tiaano.Vms.Api.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260917170023_AddVisitPassNumber")]
+    partial class AddVisitPassNumber
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -163,10 +166,6 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.Property<int>("AccessFailedCount")
                         .HasColumnType("int");
 
-                    b.Property<string>("AllowedMenuKeysJson")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
                     b.Property<string>("ConcurrencyStamp")
                         .IsConcurrencyToken()
                         .HasColumnType("nvarchar(max)");
@@ -310,6 +309,57 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.HasIndex("VisitorVisitId");
 
                     b.ToTable("Approvals");
+                });
+
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.AuditLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Entity")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("EntityId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("UserId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("UserName")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Action");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("Entity");
+
+                    b.ToTable("AuditLogs");
                 });
 
             modelBuilder.Entity("Tiaano.Vms.Api.Models.Department", b =>
@@ -456,6 +506,84 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("Employees");
+                });
+
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.EntryGate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Name");
+
+                    b.ToTable("EntryGates");
+                });
+
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.ExitGate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Name");
+
+                    b.ToTable("ExitGates");
                 });
 
             modelBuilder.Entity("Tiaano.Vms.Api.Models.IdType", b =>
@@ -1227,6 +1355,12 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.Property<Guid>("DepartmentId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("EntryGateId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ExitGateId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<DateOnly?>("ExpectedDate")
                         .HasColumnType("date");
 
@@ -1312,6 +1446,10 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.HasIndex("CheckedOutByUserId");
 
                     b.HasIndex("DepartmentId");
+
+                    b.HasIndex("EntryGateId");
+
+                    b.HasIndex("ExitGateId");
 
                     b.HasIndex("HostEmployeeId");
 
@@ -1529,6 +1667,28 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.EntryGate", b =>
+                {
+                    b.HasOne("Tiaano.Vms.Api.Models.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.ExitGate", b =>
+                {
+                    b.HasOne("Tiaano.Vms.Api.Models.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("Tiaano.Vms.Api.Models.IdType", b =>
                 {
                     b.HasOne("Tiaano.Vms.Api.Models.Tenant", "Tenant")
@@ -1743,6 +1903,16 @@ namespace Tiaano.Vms.Api.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("Tiaano.Vms.Api.Models.EntryGate", "EntryGate")
+                        .WithMany()
+                        .HasForeignKey("EntryGateId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Tiaano.Vms.Api.Models.ExitGate", "ExitGate")
+                        .WithMany()
+                        .HasForeignKey("ExitGateId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Tiaano.Vms.Api.Models.Employee", "HostEmployee")
                         .WithMany()
                         .HasForeignKey("HostEmployeeId")
@@ -1776,6 +1946,10 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.Navigation("CheckedOutByUser");
 
                     b.Navigation("Department");
+
+                    b.Navigation("EntryGate");
+
+                    b.Navigation("ExitGate");
 
                     b.Navigation("HostEmployee");
 

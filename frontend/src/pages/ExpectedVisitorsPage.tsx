@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, visitorsApi } from '../lib/api'
-import type { EmployeeDto, ExpectedVisitorRequest, MasterItemDto, VisitorListItemDto } from '../types/api'
+import type { ExpectedVisitorRequest, MasterItemDto, VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
@@ -23,7 +23,6 @@ export function ExpectedVisitorsPage() {
   const [message, setMessage] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(searchParams.get('book') === '1')
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
-  const [hosts, setHosts] = useState<EmployeeDto[]>([])
   const [form, setForm] = useState({
     visitorName: '',
     companyName: '',
@@ -32,7 +31,7 @@ export function ExpectedVisitorsPage() {
     expectedDate: todayIsoDate(),
     expectedTime: nowIsoTime(),
     departmentId: '',
-    hostEmployeeId: '',
+    hostName: '',
   })
   const [saving, setSaving] = useState(false)
   const [emailTouched, setEmailTouched] = useState(false)
@@ -57,20 +56,16 @@ export function ExpectedVisitorsPage() {
     if (canCreate) void mastersApi.departments().then(setDepartments)
   }, [canCreate])
 
-  useEffect(() => {
-    if (!form.departmentId) {
-      setHosts([])
-      return
-    }
-    void mastersApi.hosts(form.departmentId).then(setHosts)
-  }, [form.departmentId])
-
   async function createExpected(e: FormEvent) {
     e.preventDefault()
     const emailError = validateVisitorEmail(form.email)
     if (emailError) {
       setEmailTouched(true)
       setError(emailError)
+      return
+    }
+    if (!form.hostName.trim()) {
+      setError('Enter the host name.')
       return
     }
     setSaving(true)
@@ -84,7 +79,7 @@ export function ExpectedVisitorsPage() {
       expectedDate: form.expectedDate,
       expectedTime: `${form.expectedTime}:00`,
       departmentId: form.departmentId,
-      hostEmployeeId: form.hostEmployeeId,
+      hostName: form.hostName.trim(),
       purposeIds: [],
       locationIds: [],
     }
@@ -101,7 +96,7 @@ export function ExpectedVisitorsPage() {
         expectedDate: todayIsoDate(),
         expectedTime: nowIsoTime(),
         departmentId: '',
-        hostEmployeeId: '',
+        hostName: '',
       })
       await load()
     } catch (err) {
@@ -181,17 +176,19 @@ export function ExpectedVisitorsPage() {
             </div>
             <div>
               <FieldLabel>Department *</FieldLabel>
-              <TextSelect required value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value, hostEmployeeId: '' })}>
+              <TextSelect required value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
                 <option value="">Select</option>
                 {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </TextSelect>
             </div>
             <div>
               <FieldLabel>Host *</FieldLabel>
-              <TextSelect required value={form.hostEmployeeId} onChange={(e) => setForm({ ...form, hostEmployeeId: e.target.value })}>
-                <option value="">Select</option>
-                {hosts.map((h) => <option key={h.id} value={h.id}>{h.fullName}</option>)}
-              </TextSelect>
+              <TextInput
+                required
+                value={form.hostName}
+                onChange={(e) => setForm({ ...form, hostName: e.target.value })}
+                placeholder="Type the host name"
+              />
             </div>
             <div className="sm:col-span-2">
               <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save appointment'}</Button>

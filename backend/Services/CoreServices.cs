@@ -1,57 +1,16 @@
-using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models;
-using Tiaano.Vms.Api.Models.Enums;
 
 namespace Tiaano.Vms.Api.Services;
-
-public interface IAuditService
-{
-    Task LogAsync(string action, string entity, string? entityId, string? description, ClaimsPrincipal? user = null, string? ip = null);
-}
-
-public class AuditService : IAuditService
-{
-    private readonly ApplicationDbContext _db;
-    private readonly IHttpContextAccessor _http;
-    private readonly ITenantContext _tenant;
-
-    public AuditService(ApplicationDbContext db, IHttpContextAccessor http, ITenantContext tenant)
-    {
-        _db = db;
-        _http = http;
-        _tenant = tenant;
-    }
-
-    public async Task LogAsync(string action, string entity, string? entityId, string? description, ClaimsPrincipal? user = null, string? ip = null)
-    {
-        user ??= _http.HttpContext?.User;
-        ip ??= _http.HttpContext?.Connection.RemoteIpAddress?.ToString();
-
-        var resolvedTenant = TenantClaims.ResolveTenantId(user, _tenant);
-        _db.AuditLogs.Add(new AuditLog
-        {
-            TenantId = resolvedTenant == Guid.Empty ? null : resolvedTenant,
-            Action = action,
-            Entity = entity,
-            EntityId = entityId,
-            Description = description,
-            UserId = user?.FindFirstValue(ClaimTypes.NameIdentifier),
-            UserName = user?.Identity?.Name ?? user?.FindFirstValue(ClaimTypes.Name),
-            IpAddress = ip,
-            CreatedAt = DateTime.UtcNow
-        });
-        await _db.SaveChangesAsync();
-    }
-}
 
 public interface ISettingsService
 {
     Task<SettingsDto> GetAsync();
     Task<SettingsDto> GetPublicBrandingAsync();
     Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName);
+    Task<SettingsDto> UploadLogoAsync(IFormFile file, string? userName);
     Task<string> GetValueAsync(string key, string fallback);
 }
 
@@ -61,15 +20,31 @@ public class SettingsService : ISettingsService
     private static readonly Dictionary<Guid, (SettingsDto Dto, DateTime AtUtc)> Cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
-    private readonly ApplicationDbContext _db;
-    private readonly IAuditService _audit;
-    private readonly ITenantContext _tenant;
+    private static readonly HashSet<string> AllowedThemes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "tiaano", "ocean", "forest", "slate", "sunrise"
+    };
 
-    public SettingsService(ApplicationDbContext db, IAuditService audit, ITenantContext tenant)
+    private static readonly HashSet<string> AllowedFonts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "inter", "sourceSans", "ibmPlex", "nunito"
+    };
+
+    private readonly ApplicationDbContext _db;
+    private readonly ITenantContext _tenant;
+    private readonly IWebHostEnvironment _env;
+    private readonly IMediaStorageService _media;
+
+    public SettingsService(
+        ApplicationDbContext db,
+        ITenantContext tenant,
+        IWebHostEnvironment env,
+        IMediaStorageService media)
     {
         _db = db;
-        _audit = audit;
         _tenant = tenant;
+        _env = env;
+        _media = media;
     }
 
     private Guid EffectiveTenantId =>
@@ -141,8 +116,10 @@ public class SettingsService : ISettingsService
             }
         }
 
-        await Upsert("CompanyName", dto.CompanyName);
-        await Upsert("LogoPath", dto.LogoPath);
+        await Upsert("CompanyName", dto.CompanyName?.Trim() ?? "TIAANO");
+        await Upsert("LogoPath", string.IsNullOrWhiteSpace(dto.LogoPath) ? "/branding/tiaano-logo.png" : dto.LogoPath.Trim());
+        await Upsert("ThemePreset", NormalizeTheme(dto.ThemePreset));
+        await Upsert("FontPreset", NormalizeFont(dto.FontPreset));
         await Upsert("VisitorIdPrefix", dto.VisitorIdPrefix);
         await Upsert("VisitorPassValidityHours", dto.VisitorPassValidityHours.ToString());
         await Upsert("ApprovalRequired", dto.ApprovalRequired.ToString().ToLowerInvariant());
@@ -150,22 +127,75 @@ public class SettingsService : ISettingsService
         await Upsert("PhotoRequired", dto.PhotoRequired.ToString().ToLowerInvariant());
         await Upsert("IdVerificationRequired", dto.IdVerificationRequired.ToString().ToLowerInvariant());
         await Upsert("MaxVisitDurationWarningMinutes", dto.MaxVisitDurationWarningMinutes.ToString());
-        await Upsert("DefaultEntryGate", dto.DefaultEntryGate);
-        await Upsert("DefaultExitGate", dto.DefaultExitGate);
         await Upsert("SessionTimeoutMinutes", dto.SessionTimeoutMinutes.ToString());
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("SettingsChanged", "SystemSetting", null, "System settings updated");
+        ClearCache(tenantId);
+        return await GetAsync();
+    }
+
+    public async Task<SettingsDto> UploadLogoAsync(IFormFile file, string? userName)
+    {
+        if (file is null || file.Length == 0)
+            throw new InvalidOperationException("Choose an image file to upload.");
+        if (file.Length > 5_000_000)
+            throw new InvalidOperationException("Logo must be under 5MB.");
+
+        await using var ms = new MemoryStream();
+        await file.CopyToAsync(ms);
+        var bytes = ms.ToArray();
+        if (!_media.IsAllowedImage(bytes, out var contentType))
+            throw new InvalidOperationException("Logo must be a valid JPEG, PNG, or WebP image.");
+
+        var tenantId = EffectiveTenantId;
+        var webRoot = _env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot");
+        var brandingDir = Path.Combine(webRoot, "branding", "tenants", tenantId.ToString("N"));
+        Directory.CreateDirectory(brandingDir);
+
+        foreach (var old in Directory.EnumerateFiles(brandingDir, "logo.*"))
+            File.Delete(old);
+
+        var ext = contentType switch
+        {
+            "image/png" => ".png",
+            "image/webp" => ".webp",
+            _ => ".jpg"
+        };
+        var fileName = $"logo{ext}";
+        var fullPath = Path.Combine(brandingDir, fileName);
+        await File.WriteAllBytesAsync(fullPath, bytes);
+
+        var publicPath = $"/branding/tenants/{tenantId:N}/{fileName}";
+        var current = await GetAsync();
+        current.LogoPath = publicPath;
+        return await UpdateAsync(current, userName);
+    }
+
+    private static void ClearCache(Guid tenantId)
+    {
         lock (CacheLock)
         {
             Cache.Remove(tenantId);
         }
-        return await GetAsync();
+    }
+
+    private static string NormalizeTheme(string? value)
+    {
+        var key = string.IsNullOrWhiteSpace(value) ? "tiaano" : value.Trim();
+        return AllowedThemes.Contains(key) ? AllowedThemes.First(x => x.Equals(key, StringComparison.OrdinalIgnoreCase)) : "tiaano";
+    }
+
+    private static string NormalizeFont(string? value)
+    {
+        var key = string.IsNullOrWhiteSpace(value) ? "inter" : value.Trim();
+        return AllowedFonts.Contains(key) ? AllowedFonts.First(x => x.Equals(key, StringComparison.OrdinalIgnoreCase)) : "inter";
     }
 
     private static SettingsDto Map(Dictionary<string, string> map) => new()
     {
         CompanyName = map.GetValueOrDefault("CompanyName", "TIAANO"),
         LogoPath = map.GetValueOrDefault("LogoPath", "/branding/tiaano-logo.png"),
+        ThemePreset = NormalizeTheme(map.GetValueOrDefault("ThemePreset", "tiaano")),
+        FontPreset = NormalizeFont(map.GetValueOrDefault("FontPreset", "inter")),
         VisitorIdPrefix = map.GetValueOrDefault("VisitorIdPrefix", "TIA"),
         VisitorPassValidityHours = int.TryParse(map.GetValueOrDefault("VisitorPassValidityHours"), out var h) ? h : 12,
         ApprovalRequired = bool.TryParse(map.GetValueOrDefault("ApprovalRequired", "false"), out var ar) && ar,
@@ -173,8 +203,6 @@ public class SettingsService : ISettingsService
         PhotoRequired = bool.TryParse(map.GetValueOrDefault("PhotoRequired", "false"), out var pr) && pr,
         IdVerificationRequired = bool.TryParse(map.GetValueOrDefault("IdVerificationRequired", "false"), out var idr) && idr,
         MaxVisitDurationWarningMinutes = int.TryParse(map.GetValueOrDefault("MaxVisitDurationWarningMinutes"), out var m) ? m : 240,
-        DefaultEntryGate = map.GetValueOrDefault("DefaultEntryGate", "Main Gate"),
-        DefaultExitGate = map.GetValueOrDefault("DefaultExitGate", "Main Gate"),
         SessionTimeoutMinutes = int.TryParse(map.GetValueOrDefault("SessionTimeoutMinutes"), out var s) ? s : 480
     };
 }

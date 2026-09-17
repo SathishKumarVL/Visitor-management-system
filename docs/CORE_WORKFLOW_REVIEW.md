@@ -118,7 +118,7 @@ Reception no longer fires a blind check-in after registration. When the visit co
 
 ## Check-in / check-out behaviour
 
-Check-in resolves an entry gate (explicit, then tenant default, then any active gate), sets `CheckInAt`, records the acting user, and issues or reuses an active pass. Check-out resolves an exit gate the same way, sets `CheckOutAt`, deactivates passes, and writes an audit entry.
+Check-in sets `CheckInAt`, records the acting user, and issues or reuses an active pass. Check-out sets `CheckOutAt` and deactivates passes.
 
 The thank-you email is queued on a background task so SMTP can never delay or fail the checkout transaction. That background scope is explicitly seeded with the visit's tenant, because it has no request to resolve one from.
 
@@ -172,7 +172,7 @@ The login limiter decision now lives in `RateLimitPolicy.IsLoginRateLimitRelaxed
 
 ## Accessibility
 
-Targeted improvements in this slice: polite live regions for approval, check-out and emergency results; a labelled rejection reason field with `aria-invalid`, `aria-describedby`, Enter to submit and Escape to cancel; focus moved into the reason field when a rejection starts; `aria-pressed` on roll-call toggles; a labelled roll-call button group; `htmlFor`/`id` pairing fixed on the exit-gate select.
+Targeted improvements in this slice: polite live regions for approval, check-out and emergency results; a labelled rejection reason field with `aria-invalid`, `aria-describedby`, Enter to submit and Escape to cancel; focus moved into the reason field when a rejection starts; `aria-pressed` on roll-call toggles; a labelled roll-call button group.
 
 Already in place from earlier work: 44px+ touch targets across buttons and form controls, real `<label>` elements, `role="alert"` on field errors, `role="status"` on alerts and spinners.
 

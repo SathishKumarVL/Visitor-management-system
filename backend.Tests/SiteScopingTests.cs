@@ -381,7 +381,10 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
             purposeIds = new[] { purposeId },
             locationIds = Array.Empty<Guid>(),
             numberOfPersons = 1,
-            isWalkIn = true
+            isWalkIn = true,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012",
+            passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
 

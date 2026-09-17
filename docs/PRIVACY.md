@@ -27,4 +27,4 @@ Tenant admins should eventually support:
 - Anonymization
 - Secure deletion where legally required
 
-These workflows require explicit admin authorization and audit logging.
+These workflows require explicit admin authorization.

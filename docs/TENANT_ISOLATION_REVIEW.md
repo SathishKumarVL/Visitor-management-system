@@ -28,7 +28,7 @@
 | Users | Yes | `TenantId` + query filter |
 | Employees / Departments | Yes | `TenantId` + filter |
 | Locations / Purposes | Yes | `TenantId` + filter |
-| IdTypes / EntryGates / ExitGates | Yes (hardened this slice) | `TenantId` + filter + migration backfill |
+| IdTypes | Yes (hardened this slice) | `TenantId` + filter + migration backfill |
 | Visitors / Visits | Yes | `TenantId` + filter |
 | Photos / Documents | Indirect | Parent visitor filtered; media path tenant-rooted |
 | Passes / Approvals | Indirect | Parent visit filtered |
@@ -71,9 +71,8 @@ Site claim (`siteId`) is stored when valid for the tenant; **full site-scoped da
 | `/api/settings/branding` | Anonymous | Explicit TIAANO only | — | — |
 | `/api/masters*` | Auth | JWT | Admin write | — |
 | `/api/users*` | Admin | JWT | Admin | MaxUsers on create |
-| `/api/audit` | Admin | JWT filter | Admin | — |
 
-Gaps closed this slice: shared IdTypes/gates, settings static cache leak, media legacy shared-root reads, soft tenant fallback on authenticated requests, missing module enforcement.
+Gaps closed this slice: shared IdTypes, settings static cache leak, media legacy shared-root reads, soft tenant fallback on authenticated requests, missing module enforcement.
 
 ---
 

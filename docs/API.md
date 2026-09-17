@@ -57,15 +57,14 @@ is currently inside. See `docs/CORE_WORKFLOW_REVIEW.md` for the full state machi
 
 Visitor passes display a Visit Number (e.g. `VMS-2026-000184`). QR codes are not used.
 
-## Masters / Users / Settings / Reports / Audit
+## Masters / Users / Settings / Reports
 
-- `GET/POST/PUT /api/masters/departments|hosts|purposes|locations|id-types|entry-gates|exit-gates`
+- `GET/POST/PUT /api/masters/departments|hosts|purposes|locations|id-types`
 - `POST /api/masters/{type}/{id}/deactivate`
 - `GET/POST/PUT /api/users`
 - `GET /api/settings` (auth) · `GET /api/settings/branding` (public branding only)
 - `GET /api/dashboard` (requires `visitor-management`)
 - `GET /api/reports/visitors?format=json|excel|pdf|csv` (requires `visitor-management`)
-- `GET /api/audit`
 - `GET /api/media/{fileName}` (auth; tenant-private storage only)
 - `GET /api/system/health|version|license`
 
@@ -83,7 +82,7 @@ verified / evacuated / missing / unaccounted counts. `employeeTrackingAvailable`
 because employee presence is not tracked; clients must not present the total as all people on site.
 
 `POST /api/emergency/roll-call` takes `{ visitId, status, notes? }` where `status` is
-`1` Verified, `2` Evacuated or `3` Missing. Each call appends an audited event and is refused with
+`1` Verified, `2` Evacuated or `3` Missing. Each call appends a roll-call event and is refused with
 **400** unless the visitor is currently inside. Marks never modify the visit record.
 
 Disabled or expired modules return **403**. Missing tenant claim on authenticated requests returns **401**.

@@ -20,6 +20,13 @@ public class ApplicationUser : IdentityUser
     public bool IsActive { get; set; } = true;
     public bool MustChangePassword { get; set; } = true;
 
+    /// <summary>
+    /// JSON array of menu keys the user may see (e.g. ["dashboard","visitors"]).
+    /// Null means use the full set allowed by their role.
+    /// </summary>
+    [MaxLength(1000)]
+    public string? AllowedMenuKeysJson { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public string? CreatedBy { get; set; }
@@ -148,44 +155,6 @@ public class IdType
 
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime? UpdatedAt { get; set; }
-    public string? CreatedBy { get; set; }
-    public string? UpdatedBy { get; set; }
-}
-
-public class EntryGate
-{
-    public Guid Id { get; set; } = Guid.NewGuid();
-
-    public Guid TenantId { get; set; }
-    public Tenant? Tenant { get; set; }
-
-    [Required, MaxLength(100)]
-    public string Name { get; set; } = string.Empty;
-
-    public bool IsActive { get; set; } = true;
-    public bool IsDefault { get; set; }
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime? UpdatedAt { get; set; }
-    public string? CreatedBy { get; set; }
-    public string? UpdatedBy { get; set; }
-}
-
-public class ExitGate
-{
-    public Guid Id { get; set; } = Guid.NewGuid();
-
-    public Guid TenantId { get; set; }
-    public Tenant? Tenant { get; set; }
-
-    [Required, MaxLength(100)]
-    public string Name { get; set; } = string.Empty;
-
-    public bool IsActive { get; set; } = true;
-    public bool IsDefault { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }

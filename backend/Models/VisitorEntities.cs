@@ -72,6 +72,12 @@ public class VisitorVisit
     [MaxLength(50)]
     public string? HostIntercom { get; set; }
 
+    /// <summary>
+    /// Physical visitor-pass / badge number issued at the desk. Distinct from the system VisitNumber.
+    /// </summary>
+    [MaxLength(80)]
+    public string? PassNumber { get; set; }
+
     [MaxLength(1000)]
     public string? PurposeNotes { get; set; }
 
@@ -90,16 +96,12 @@ public class VisitorVisit
     public bool IsWalkIn { get; set; }
 
     public DateTime? CheckInAt { get; set; }
-    public Guid? EntryGateId { get; set; }
-    public EntryGate? EntryGate { get; set; }
     public string? CheckedInByUserId { get; set; }
     public ApplicationUser? CheckedInByUser { get; set; }
     public string? SecurityCheckInUserId { get; set; }
     public ApplicationUser? SecurityCheckInUser { get; set; }
 
     public DateTime? CheckOutAt { get; set; }
-    public Guid? ExitGateId { get; set; }
-    public ExitGate? ExitGate { get; set; }
     public string? CheckedOutByUserId { get; set; }
     public ApplicationUser? CheckedOutByUser { get; set; }
 
@@ -277,33 +279,6 @@ public class VisitorPass
     public ApplicationUser? IssuedByUser { get; set; }
 
     public DateTime? LastPrintedAt { get; set; }
-}
-
-public class AuditLog
-{
-    public Guid Id { get; set; } = Guid.NewGuid();
-
-    public Guid? TenantId { get; set; }
-
-    [Required, MaxLength(100)]
-    public string Action { get; set; } = string.Empty;
-
-    [Required, MaxLength(100)]
-    public string Entity { get; set; } = string.Empty;
-
-    [MaxLength(100)]
-    public string? EntityId { get; set; }
-
-    public string? UserId { get; set; }
-    public string? UserName { get; set; }
-
-    [MaxLength(2000)]
-    public string? Description { get; set; }
-
-    [MaxLength(50)]
-    public string? IpAddress { get; set; }
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class SystemSetting

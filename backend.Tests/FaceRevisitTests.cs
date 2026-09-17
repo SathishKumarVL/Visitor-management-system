@@ -83,7 +83,10 @@ public class FaceRevisitTests : IClassFixture<TestApiFactory>
             numberOfPersons = 1,
             isWalkIn = true,
             recognizedVisitorId,
-            photoBase64
+            photoBase64,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012",
+            passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);

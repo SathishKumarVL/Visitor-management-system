@@ -43,7 +43,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         loading: false,
       })
       if (result.user.mustChangePassword) return '/change-password'
-      return homePathForRoles(result.user.roles)
+      return homePathForRoles(result.user.roles, result.user.allowedMenuKeys)
     } catch (e) {
       set({ loading: false })
       throw e

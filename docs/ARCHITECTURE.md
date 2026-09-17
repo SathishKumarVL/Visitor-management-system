@@ -13,7 +13,7 @@ Modular monolith:
 
 ## Layers
 
-1. **Core platform** — auth, tenancy, licensing, media, audit, settings, upgrades
+1. **Core platform** — auth, tenancy, licensing, media, settings, upgrades
 2. **Visitor Management module** — registration, approval, check-in/out, passes, reports, emergency roster
 
 The visitor lifecycle is a server-enforced state machine. `VisitorService.EnsureCheckInAllowed`
@@ -27,7 +27,7 @@ TIAANO is the first tenant (`WellKnownTenants.TiaanoId`), not hardcoded business
 ## Multi-tenancy
 
 - `Tenant` / `Site` entities
-- `TenantId` on users, masters (including IdTypes/EntryGates/ExitGates), visitors, visits, settings
+- `TenantId` on users, masters (including IdTypes), visitors, visits, settings
 - Per-request `ITenantContext` bound from JWT `tenantId` claim only (client headers ignored)
 - Authenticated requests without a valid active tenant claim fail closed (401)
 - EF global query filters fail closed: missing tenant context returns **no rows** (never all tenants)

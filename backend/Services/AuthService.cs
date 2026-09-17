@@ -27,7 +27,6 @@ public class AuthService : IAuthService
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IConfiguration _config;
     private readonly IHostEnvironment _env;
-    private readonly IAuditService _audit;
     private readonly ApplicationDbContext _db;
 
     public AuthService(
@@ -35,14 +34,12 @@ public class AuthService : IAuthService
         SignInManager<ApplicationUser> signInManager,
         IConfiguration config,
         IHostEnvironment env,
-        IAuditService audit,
         ApplicationDbContext db)
     {
         _userManager = userManager;
         _signInManager = signInManager;
         _config = config;
         _env = env;
-        _audit = audit;
         _db = db;
     }
 
@@ -52,31 +49,26 @@ public class AuthService : IAuthService
             .FirstOrDefaultAsync(u => u.UserName == request.Username);
         if (user is null || !user.IsActive)
         {
-            await _audit.LogAsync("LoginFailed", "User", null, $"Failed login for '{request.Username}'");
             return null;
         }
 
         if (user.TenantId == Guid.Empty)
         {
-            await _audit.LogAsync("LoginFailed", "User", user.Id, "User has no tenant assignment");
             return null;
         }
 
         var result = await _signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
         if (result.IsLockedOut)
         {
-            await _audit.LogAsync("LoginLockedOut", "User", user.Id, $"Account locked: {user.UserName}");
             return null;
         }
         if (!result.Succeeded)
         {
-            await _audit.LogAsync("LoginFailed", "User", user.Id, $"Failed login for '{user.UserName}'");
             return null;
         }
 
         var roles = await _userManager.GetRolesAsync(user);
         var response = await IssueTokensAsync(user, roles, request.RememberMe, ipAddress);
-        await _audit.LogAsync("UserLogin", "User", user.Id, $"User {user.UserName} logged in");
         return response;
     }
 
@@ -124,7 +116,6 @@ public class AuthService : IAuthService
         {
             var active = await _db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null).ToListAsync();
             foreach (var t in active) t.RevokedAt = DateTime.UtcNow;
-            await _audit.LogAsync("UserLogout", "User", userId, "User logged out");
         }
 
         await _db.SaveChangesAsync();
@@ -149,7 +140,6 @@ public class AuthService : IAuthService
         var tokens = await _db.RefreshTokens.Where(t => t.UserId == user.Id && t.RevokedAt == null).ToListAsync();
         foreach (var t in tokens) t.RevokedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("PasswordChanged", "User", user.Id, "Password changed");
     }
 
     private async Task<LoginResponse> IssueTokensAsync(
@@ -225,16 +215,23 @@ public class AuthService : IAuthService
         return Convert.ToHexString(bytes);
     }
 
-    private static UserDto MapUser(ApplicationUser user, IList<string> roles) => new()
+    private static UserDto MapUser(ApplicationUser user, IList<string> roles)
     {
-        Id = user.Id,
-        Username = user.UserName ?? string.Empty,
-        FullName = user.FullName,
-        Email = user.Email ?? string.Empty,
-        Roles = roles.ToList(),
-        DepartmentId = user.DepartmentId,
-        DepartmentName = user.Department?.Name,
-        MustChangePassword = user.MustChangePassword,
-        IsActive = user.IsActive
-    };
+        var primaryRole = roles.FirstOrDefault() ?? string.Empty;
+        return new()
+        {
+            Id = user.Id,
+            Username = user.UserName ?? string.Empty,
+            FullName = user.FullName,
+            Email = user.Email ?? string.Empty,
+            Roles = roles.ToList(),
+            DepartmentId = user.DepartmentId,
+            DepartmentName = user.Department?.Name,
+            SiteId = user.SiteId,
+            SiteName = user.Site?.Name,
+            AllowedMenuKeys = MenuAccess.Deserialize(user.AllowedMenuKeysJson, primaryRole),
+            MustChangePassword = user.MustChangePassword,
+            IsActive = user.IsActive
+        };
+    }
 }

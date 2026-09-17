@@ -7,7 +7,7 @@ export function SecurityModePage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Gate operations"
+        eyebrow="Security operations"
         title="Security Desk"
         subtitle="Fast check-in, verification, and on-site visibility."
       />

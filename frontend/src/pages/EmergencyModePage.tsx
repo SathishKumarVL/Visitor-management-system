@@ -55,7 +55,7 @@ export function EmergencyModePage() {
       <PageHeader
         eyebrow="Safety operations"
         title="Emergency Mode"
-        subtitle="Live roster of people currently inside. Every mark is recorded and audited."
+        subtitle="Live roster of people currently inside. Mark each person as accounted for."
         actions={
           <Button variant="secondary" onClick={() => void load()}>
             Refresh

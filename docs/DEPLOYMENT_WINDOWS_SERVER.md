@@ -142,7 +142,7 @@ Example rewrite for React Router:
 
 - [ ] Browse https://vms.tiaano.local
 - [ ] Login as admin / superadmin
-- [ ] Create departments, hosts, purposes, locations, gates and desk users under Admin
+- [ ] Create departments, hosts, purposes, locations and desk users under Admin
 - [ ] Register a visitor, check-in, print pass
 - [ ] Verify visitor by Visit Number on a security tablet
 - [ ] Confirm photos write under App_Data/media

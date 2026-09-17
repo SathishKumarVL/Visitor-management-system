@@ -35,7 +35,7 @@ export function ChangePasswordPage() {
     setSubmitting(true)
     try {
       await changePassword({ currentPassword, newPassword })
-      navigate(homePathForRoles(user?.roles ?? []), { replace: true })
+      navigate(homePathForRoles(user?.roles ?? [], user?.allowedMenuKeys), { replace: true })
     } catch (err) {
       setError(apiErrorMessage(err, 'Unable to change password.'))
     } finally {

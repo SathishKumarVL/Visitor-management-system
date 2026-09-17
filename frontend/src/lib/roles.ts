@@ -8,19 +8,14 @@ export type MenuKey =
   | 'expected'
   | 'reports'
   | 'departments'
-  | 'hosts'
   | 'purposes'
   | 'locations'
   | 'sites'
   | 'users'
   | 'settings'
-  | 'audit'
   | 'reception'
   | 'security'
   | 'host'
-  | 'passes'
-  | 'verify'
-  | 'emergency'
 
 export interface MenuItem {
   key: MenuKey
@@ -37,26 +32,28 @@ export const MENU_ITEMS: MenuItem[] = [
   { key: 'visitors', label: 'Visitors', path: '/visitors', roles: ['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host'] },
   { key: 'inside', label: 'Currently Inside', path: '/visitors/inside', roles: ['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host'] },
   { key: 'expected', label: 'Expected Visitors', path: '/visitors/expected', roles: ['SuperAdmin', 'Admin', 'Reception', 'Host', 'Security'] },
-  { key: 'passes', label: 'Visitor Passes', path: '/passes', roles: ['SuperAdmin', 'Admin', 'Reception', 'Security'] },
-  { key: 'verify', label: 'Verify Visitor', path: '/verify', roles: ['SuperAdmin', 'Admin', 'Reception', 'Security'] },
-  { key: 'emergency', label: 'Emergency', path: '/emergency', roles: ['SuperAdmin', 'Admin', 'Security'] },
   { key: 'reports', label: 'Reports', path: '/reports', roles: ['SuperAdmin', 'Admin', 'Reception'] },
   { key: 'departments', label: 'Departments', path: '/masters/departments', roles: ['SuperAdmin', 'Admin'] },
-  { key: 'hosts', label: 'Hosts', path: '/masters/hosts', roles: ['SuperAdmin', 'Admin'] },
   { key: 'purposes', label: 'Purposes', path: '/masters/purposes', roles: ['SuperAdmin', 'Admin'] },
   { key: 'locations', label: 'Locations', path: '/masters/locations', roles: ['SuperAdmin', 'Admin'] },
   { key: 'sites', label: 'Sites', path: '/masters/sites', roles: ['SuperAdmin', 'Admin'] },
   { key: 'users', label: 'Users', path: '/users', roles: ['SuperAdmin', 'Admin'] },
   { key: 'settings', label: 'Settings', path: '/settings', roles: ['SuperAdmin', 'Admin'] },
-  { key: 'audit', label: 'Audit Logs', path: '/audit', roles: ['SuperAdmin', 'Admin'] },
 ]
 
-export function visibleMenu(roles: string[]): MenuItem[] {
-  return MENU_ITEMS.filter((item) => hasAnyRole(roles, item.roles))
+export function visibleMenu(roles: string[], allowedMenuKeys?: string[] | null): MenuItem[] {
+  const byRole = MENU_ITEMS.filter((item) => hasAnyRole(roles, item.roles))
+  if (!allowedMenuKeys || allowedMenuKeys.length === 0) return byRole
+  const allow = new Set(allowedMenuKeys.map((k) => k.toLowerCase()))
+  return byRole.filter((item) => allow.has(item.key))
 }
 
-export function canAccessPath(roles: string[], path: string): boolean {
+export function menusForRole(role: string): MenuItem[] {
+  return MENU_ITEMS.filter((item) => hasAnyRole([role], item.roles))
+}
+
+export function canAccessPath(roles: string[], path: string, allowedMenuKeys?: string[] | null): boolean {
   const item = MENU_ITEMS.find((m) => path === m.path || path.startsWith(`${m.path}/`))
   if (!item) return true
-  return hasAnyRole(roles, item.roles)
+  return visibleMenu(roles, allowedMenuKeys).some((m) => m.key === item.key)
 }

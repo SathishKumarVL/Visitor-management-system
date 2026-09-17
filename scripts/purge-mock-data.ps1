@@ -44,7 +44,6 @@ DELETE FROM VisitorFaceDescriptors;
 DELETE FROM VisitorVisits;
 DELETE FROM Visitors;
 DELETE FROM NotificationOutbox;
-DELETE FROM AuditLogs;
 DELETE FROM EmergencyRollCallEvents;
 DELETE FROM RefreshTokens;
 
@@ -55,8 +54,6 @@ UPDATE AspNetUsers SET DepartmentId = NULL, SiteId = NULL;
 -- Sample master data that used to be seeded. Keep "Others" — registration falls back to it.
 DELETE FROM Locations;
 DELETE FROM IdTypes;
-DELETE FROM EntryGates;
-DELETE FROM ExitGates;
 DELETE FROM Employees;
 DELETE FROM Departments;
 DELETE FROM VisitPurposes
@@ -120,7 +117,6 @@ UNION ALL SELECT 'VisitPurposes', COUNT(*) FROM VisitPurposes
 UNION ALL SELECT 'AspNetUsers', COUNT(*) FROM AspNetUsers
 UNION ALL SELECT 'Tenants', COUNT(*) FROM Tenants
 UNION ALL SELECT 'Sites', COUNT(*) FROM Sites
-UNION ALL SELECT 'AuditLogs', COUNT(*) FROM AuditLogs
 ORDER BY [Table];
 '@
 

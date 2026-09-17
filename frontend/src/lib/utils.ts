@@ -44,21 +44,61 @@ export function primaryRole(roles: string[]): Role | null {
   return (roles[0] as Role) ?? null
 }
 
-export function homePathForRoles(roles: string[]): string {
+export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | null): string {
   const role = primaryRole(roles)
+  let preferred = '/dashboard'
   switch (role) {
     case 'Reception':
-      return '/reception'
+      preferred = '/reception'
+      break
     case 'Security':
-      return '/security'
+      preferred = '/security'
+      break
     case 'Host':
-      return '/host'
-    case 'Admin':
-    case 'SuperAdmin':
-      return '/dashboard'
+      preferred = '/host'
+      break
     default:
-      return '/dashboard'
+      preferred = '/dashboard'
   }
+
+  // Prefer role home when still allowed; otherwise first visible menu.
+  // Import deferred via dynamic check to avoid circular deps — caller may also use visibleMenu.
+  if (!allowedMenuKeys || allowedMenuKeys.length === 0) return preferred
+
+  const keyForPath: Record<string, string> = {
+    '/dashboard': 'dashboard',
+    '/reception': 'reception',
+    '/security': 'security',
+    '/host': 'host',
+  }
+  const preferredKey = keyForPath[preferred]
+  const allow = new Set(allowedMenuKeys.map((k) => k.toLowerCase()))
+  if (preferredKey && allow.has(preferredKey)) return preferred
+
+  const order = [
+    'dashboard', 'reception', 'security', 'host', 'visitors', 'inside', 'expected',
+    'reports', 'departments', 'purposes', 'locations', 'sites', 'users', 'settings',
+  ]
+  const pathByKey: Record<string, string> = {
+    dashboard: '/dashboard',
+    reception: '/reception',
+    security: '/security',
+    host: '/host',
+    visitors: '/visitors',
+    inside: '/visitors/inside',
+    expected: '/visitors/expected',
+    reports: '/reports',
+    departments: '/masters/departments',
+    purposes: '/masters/purposes',
+    locations: '/masters/locations',
+    sites: '/masters/sites',
+    users: '/users',
+    settings: '/settings',
+  }
+  for (const key of order) {
+    if (allow.has(key) && pathByKey[key]) return pathByKey[key]
+  }
+  return preferred
 }
 
 export function hasAnyRole(userRoles: string[], allowed: Role[]): boolean {

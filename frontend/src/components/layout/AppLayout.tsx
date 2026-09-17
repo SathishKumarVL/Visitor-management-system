@@ -33,16 +33,11 @@ const MENU_ICONS: Record<string, string> = {
   expected: '◷',
   reports: '▤',
   departments: '▦',
-  hosts: '☆',
   purposes: '◇',
   locations: '⌖',
   sites: '⌂',
   users: '☺',
   settings: '⚙',
-  audit: '☰',
-  passes: '▣',
-  verify: '✓',
-  emergency: '!',
 }
 
 export function AppLayout() {
@@ -56,7 +51,7 @@ export function AppLayout() {
   const logout = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
   const location = useLocation()
-  const items = visibleMenu(user?.roles ?? [])
+  const items = visibleMenu(user?.roles ?? [], user?.allowedMenuKeys)
   const allPaths = items.map((i) => i.path)
   const role = primaryRole(user?.roles ?? [])
   const pageTitle = useMemo(() => {

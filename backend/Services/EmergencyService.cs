@@ -21,18 +21,15 @@ public class EmergencyService : IEmergencyService
 {
     private readonly ApplicationDbContext _db;
     private readonly IVisitorService _visitors;
-    private readonly IAuditService _audit;
     private readonly ITenantContext _tenant;
 
     public EmergencyService(
         ApplicationDbContext db,
         IVisitorService visitors,
-        IAuditService audit,
         ITenantContext tenant)
     {
         _db = db;
         _visitors = visitors;
-        _audit = audit;
         _tenant = tenant;
     }
 
@@ -91,9 +88,6 @@ public class EmergencyService : IEmergencyService
         };
         _db.EmergencyRollCallEvents.Add(mark);
         await _db.SaveChangesAsync();
-
-        await _audit.LogAsync("EmergencyRollCallMarked", "VisitorVisit", visitId.ToString(),
-            $"Roll call marked {status}{(string.IsNullOrWhiteSpace(notes) ? "" : $": {notes.Trim()}")}");
 
         return new EmergencyRollCallResultDto
         {

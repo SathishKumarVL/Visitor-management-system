@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { apiErrorMessage, mastersApi, passApi, visitorsApi } from '../lib/api'
-import type { MasterItemDto, VisitorDetailDto } from '../types/api'
+import { apiErrorMessage, passApi, visitorsApi } from '../lib/api'
+import type { VisitorDetailDto } from '../types/api'
 import { Alert, Badge, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
-import { FieldLabel, TextSelect } from '../components/ui/Field'
 import { formatDate, formatDateTime, formatDuration, statusBadgeClass } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
@@ -21,10 +20,6 @@ export function VisitorDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [entryGates, setEntryGates] = useState<MasterItemDto[]>([])
-  const [exitGates, setExitGates] = useState<MasterItemDto[]>([])
-  const [entryGateId, setEntryGateId] = useState('')
-  const [exitGateId, setExitGateId] = useState('')
 
   async function load() {
     if (!id) return
@@ -41,12 +36,6 @@ export function VisitorDetailPage() {
 
   useEffect(() => {
     void load()
-    if (canGate) {
-      void Promise.all([mastersApi.entryGates(), mastersApi.exitGates()]).then(([a, b]) => {
-        setEntryGates(a)
-        setExitGates(b)
-      })
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -55,7 +44,7 @@ export function VisitorDetailPage() {
     setBusy(true)
     setMessage(null)
     try {
-      const pass = await visitorsApi.checkIn(id, entryGateId || undefined)
+      const pass = await visitorsApi.checkIn(id)
       setMessage('Checked in successfully.')
       navigate(`/passes/${id}/print`, { state: { pass } })
     } catch (e) {
@@ -70,7 +59,7 @@ export function VisitorDetailPage() {
     setBusy(true)
     setMessage(null)
     try {
-      await visitorsApi.checkOut(id, exitGateId || undefined)
+      await visitorsApi.checkOut(id)
       setMessage('Checked out successfully.')
       await load()
     } catch (e) {
@@ -155,7 +144,6 @@ export function VisitorDetailPage() {
               <Item label="Check-in" value={formatDateTime(visitor.checkInAt)} />
               <Item label="Check-out" value={formatDateTime(visitor.checkOutAt)} />
               <Item label="Duration" value={formatDuration(visitor.durationMinutes)} />
-              <Item label="Entry / Exit" value={`${visitor.entryGate || '—'} / ${visitor.exitGate || '—'}`} />
               <Item label="Purposes" value={visitor.purposes.join(', ') || '—'} />
               {visitor.purposeNotes ? (
                 <Item label="Other purpose detail" value={visitor.purposeNotes} />
@@ -166,25 +154,6 @@ export function VisitorDetailPage() {
               <Item label="ID" value={`${visitor.idTypeName || '—'} ${visitor.idNumberMasked || ''}`} />
               <Item label="Notes" value={visitor.notes || '—'} />
             </dl>
-
-            {canGate ? (
-              <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 sm:grid-cols-2">
-                <div>
-                  <FieldLabel>Entry gate</FieldLabel>
-                  <TextSelect value={entryGateId} onChange={(e) => setEntryGateId(e.target.value)}>
-                    <option value="">Default</option>
-                    {entryGates.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  </TextSelect>
-                </div>
-                <div>
-                  <FieldLabel>Exit gate</FieldLabel>
-                  <TextSelect value={exitGateId} onChange={(e) => setExitGateId(e.target.value)}>
-                    <option value="">Default</option>
-                    {exitGates.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  </TextSelect>
-                </div>
-              </div>
-            ) : null}
           </Panel>
 
           <Panel>

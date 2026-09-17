@@ -36,7 +36,6 @@ public class VisitorService : IVisitorService
 {
     private readonly ApplicationDbContext _db;
     private readonly ISettingsService _settings;
-    private readonly IAuditService _audit;
     private readonly INotificationService _notifications;
     private readonly IConfiguration _config;
     private readonly IHostEnvironment _env;
@@ -51,7 +50,6 @@ public class VisitorService : IVisitorService
     public VisitorService(
         ApplicationDbContext db,
         ISettingsService settings,
-        IAuditService audit,
         INotificationService notifications,
         IConfiguration config,
         IHostEnvironment env,
@@ -64,7 +62,6 @@ public class VisitorService : IVisitorService
     {
         _db = db;
         _settings = settings;
-        _audit = audit;
         _notifications = notifications;
         _config = config;
         _env = env;
@@ -98,8 +95,12 @@ public class VisitorService : IVisitorService
 
         if (settings.PhotoRequired && string.IsNullOrWhiteSpace(request.PhotoBase64))
             throw new InvalidOperationException("Visitor photo is required.");
-        if (settings.IdVerificationRequired && (request.IdTypeId is null || string.IsNullOrWhiteSpace(request.IdNumber)))
-            throw new InvalidOperationException("Identity verification is required.");
+
+        var idTypeId = await ResolveRequiredIdTypeAsync(request);
+        if (string.IsNullOrWhiteSpace(request.IdNumber))
+            throw new InvalidOperationException("ID number is required.");
+        if (request.IdNumber.Trim().Length > 40)
+            throw new InvalidOperationException("ID number must be at most 40 characters.");
 
         var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
 
@@ -116,6 +117,12 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("Plant number is required when Plant No. is selected.");
         if (locations.Any(l => l.RequiresOtherText) && string.IsNullOrWhiteSpace(request.OtherLocationText))
             throw new InvalidOperationException("Please specify the other location.");
+
+        var passNumber = (request.PassNumber ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(passNumber))
+            throw new InvalidOperationException("Pass number is required.");
+        if (passNumber.Length > 80)
+            throw new InvalidOperationException("Pass number must be at most 80 characters.");
 
         Visitor visitor;
         Visitor? newVisitor = null;
@@ -187,6 +194,7 @@ public class VisitorService : IVisitorService
             OtherLocationText = request.OtherLocationText,
             PurposeNotes = request.PurposeNotes,
             Notes = request.Notes,
+            PassNumber = passNumber,
             NumberOfPersons = request.NumberOfPersons < 1 ? 1 : Math.Min(request.NumberOfPersons, 99),
             IsWalkIn = request.IsWalkIn,
             CreatedBy = user.Identity?.Name
@@ -227,24 +235,18 @@ public class VisitorService : IVisitorService
             await EnrolFaceAsync(visitor.Id, request.PhotoBase64, user);
         }
 
-        if (request.IdTypeId.HasValue && !string.IsNullOrWhiteSpace(request.IdNumber))
+        var key = SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
+        _db.VisitorDocuments.Add(new VisitorDocument
         {
-            var key = SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
-            _db.VisitorDocuments.Add(new VisitorDocument
-            {
-                VisitorId = visitor.Id,
-                VisitorVisitId = visit.Id,
-                IdTypeId = request.IdTypeId.Value,
-                IdNumberEncrypted = SensitiveDataHelper.Encrypt(request.IdNumber.Trim(), key),
-                IdNumberMasked = SensitiveDataHelper.MaskId(request.IdNumber.Trim()),
-                VerificationStatus = IdVerificationStatus.Verified,
-                CreatedBy = user.Identity?.Name
-            });
-            await _db.SaveChangesAsync();
-        }
-
-        await _audit.LogAsync("VisitorCreated", "VisitorVisit", visit.Id.ToString(),
-            $"Visitor {visitor.FullName} registered ({visit.VisitNumber})");
+            VisitorId = visitor.Id,
+            VisitorVisitId = visit.Id,
+            IdTypeId = idTypeId,
+            IdNumberEncrypted = SensitiveDataHelper.Encrypt(request.IdNumber.Trim(), key),
+            IdNumberMasked = SensitiveDataHelper.MaskId(request.IdNumber.Trim()),
+            VerificationStatus = IdVerificationStatus.Verified,
+            CreatedBy = user.Identity?.Name
+        });
+        await _db.SaveChangesAsync();
 
         // A pass is only valid for a visit that is cleared to enter; pending-approval visits get one at check-in.
         if (visit.Status == VisitStatus.Approved)
@@ -252,7 +254,7 @@ public class VisitorService : IVisitorService
             _db.VisitorPasses.Add(new VisitorPass
             {
                 VisitorVisitId = visit.Id,
-                PassCode = $"PASS-{Guid.NewGuid():N}"[..20].ToUpperInvariant(),
+                PassCode = passNumber,
                 IssuedByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier),
                 ValidUntil = DateTime.UtcNow.AddHours(settings.VisitorPassValidityHours),
                 IsActive = true
@@ -267,7 +269,7 @@ public class VisitorService : IVisitorService
                 $"Visitor {visitor.FullName} from {visitor.CompanyName} is pending your approval.");
         }
 
-        return (await BuildDetailAsync(visit.Id, user, EncryptionKey(), includeAuditHistory: false))!;
+        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
     }
 
     public async Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user)
@@ -276,6 +278,8 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("Visitor name and company are required.");
 
         var settings = await _settings.GetAsync();
+        var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
+
         var visitor = new Visitor
         {
             TenantId = ResolveTenantId(user),
@@ -302,7 +306,7 @@ public class VisitorService : IVisitorService
             ExpectedDate = request.ExpectedDate,
             ExpectedTime = request.ExpectedTime,
             DepartmentId = request.DepartmentId,
-            HostEmployeeId = request.HostEmployeeId,
+            HostEmployeeId = host.Id,
             PlantNumber = request.PlantNumber,
             OtherLocationText = request.OtherLocationText,
             Notes = request.Notes,
@@ -316,10 +320,8 @@ public class VisitorService : IVisitorService
 
         _db.VisitorVisits.Add(visit);
         await SaveNewVisitAsync(visit, visitor, settings.VisitorIdPrefix);
-        await _audit.LogAsync("ExpectedVisitorCreated", "VisitorVisit", visit.Id.ToString(),
-            $"Expected visitor {visitor.FullName} ({visit.PreRegistrationReference})");
 
-        return (await BuildDetailAsync(visit.Id, user, EncryptionKey(), includeAuditHistory: false))!;
+        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
     }
 
     public async Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes)
@@ -341,13 +343,12 @@ public class VisitorService : IVisitorService
     }
 
     public Task<VisitorDetailDto?> GetAsync(Guid visitId, ClaimsPrincipal user, string encryptionKey) =>
-        BuildDetailAsync(visitId, user, encryptionKey, includeAuditHistory: true);
+        BuildDetailAsync(visitId, user, encryptionKey);
 
     private async Task<VisitorDetailDto?> BuildDetailAsync(
         Guid visitId,
         ClaimsPrincipal user,
-        string encryptionKey,
-        bool includeAuditHistory)
+        string encryptionKey)
     {
         var visit = await DetailVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId);
         if (visit is null) return null;
@@ -359,26 +360,6 @@ public class VisitorService : IVisitorService
             .Where(d => d.VisitorVisitId == visitId || d.VisitorId == visit.VisitorId)
             .OrderByDescending(d => d.CreatedAt)
             .FirstOrDefaultAsync();
-
-        List<AuditLogDto> audits = [];
-        if (includeAuditHistory)
-        {
-            audits = await _db.AuditLogs.AsNoTracking()
-                .Where(a => a.EntityId == visitId.ToString() || a.EntityId == visit.VisitorId.ToString())
-                .OrderByDescending(a => a.CreatedAt)
-                .Take(50)
-                .Select(a => new AuditLogDto
-                {
-                    Id = a.Id,
-                    Action = a.Action,
-                    Entity = a.Entity,
-                    EntityId = a.EntityId,
-                    UserName = a.UserName,
-                    Description = a.Description,
-                    IpAddress = a.IpAddress,
-                    CreatedAt = a.CreatedAt
-                }).ToListAsync();
-        }
 
         var settings = await _settings.GetAsync();
         var dto = MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
@@ -417,8 +398,6 @@ public class VisitorService : IVisitorService
             IdNumberMasked = doc?.IdNumberMasked,
             IdNumberFull = canViewFullId && doc is not null ? SensitiveDataHelper.Decrypt(doc.IdNumberEncrypted, encryptionKey) : null,
             IdVerificationStatus = doc?.VerificationStatus ?? IdVerificationStatus.NotProvided,
-            EntryGate = visit.EntryGate?.Name,
-            ExitGate = visit.ExitGate?.Name,
             CheckedInBy = visit.CheckedInByUser?.FullName,
             CheckedOutBy = visit.CheckedOutByUser?.FullName,
             ApprovalHistory = visit.Approvals.OrderByDescending(a => a.CreatedAt).Select(a => new ApprovalHistoryDto
@@ -430,7 +409,6 @@ public class VisitorService : IVisitorService
                 RejectionReason = a.RejectionReason,
                 CreatedAt = a.CreatedAt
             }).ToList(),
-            AuditHistory = audits
         };
     }
 
@@ -453,7 +431,6 @@ public class VisitorService : IVisitorService
         approval.ActionAt = DateTime.UtcNow;
         if (approval.Id == Guid.Empty) _db.Approvals.Add(approval);
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("VisitorApproved", "VisitorVisit", visit.Id.ToString(), $"Approved visitor {visit.Visitor.FullName}");
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
     }
@@ -481,27 +458,21 @@ public class VisitorService : IVisitorService
         approval.ActionAt = DateTime.UtcNow;
         if (approval.Id == Guid.Empty) _db.Approvals.Add(approval);
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("VisitorRejected", "VisitorVisit", visit.Id.ToString(), $"Rejected: {reason}");
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
     }
 
     public async Task<PassDto> CheckInAsync(Guid visitId, CheckInRequest request, ClaimsPrincipal user, string webRoot)
     {
+        _ = request;
         var visit = await BaseVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId)
             ?? throw new InvalidOperationException("Visit not found.");
 
         var settings = await _settings.GetAsync();
         EnsureCheckInAllowed(visit, settings);
 
-        var gate = request.EntryGateId.HasValue
-            ? await _db.EntryGates.FirstOrDefaultAsync(g => g.Id == request.EntryGateId)
-            : await _db.EntryGates.FirstOrDefaultAsync(g => g.IsDefault && g.IsActive)
-              ?? await _db.EntryGates.FirstOrDefaultAsync(g => g.IsActive);
-
         visit.Status = VisitStatus.Inside;
         visit.CheckInAt = DateTime.UtcNow;
-        visit.EntryGateId = gate?.Id;
         visit.CheckedInByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         if (user.IsInRole(AppRoles.Security))
             visit.SecurityCheckInUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -514,7 +485,7 @@ public class VisitorService : IVisitorService
             pass = new VisitorPass
             {
                 VisitorVisitId = visit.Id,
-                PassCode = $"PASS-{Guid.NewGuid():N}"[..20].ToUpperInvariant(),
+                PassCode = ResolvePassCode(visit),
                 IssuedByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier),
                 ValidUntil = DateTime.UtcNow.AddHours(settings.VisitorPassValidityHours),
                 IsActive = true
@@ -526,14 +497,13 @@ public class VisitorService : IVisitorService
         pass.LastPrintedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("VisitorCheckedIn", "VisitorVisit", visit.Id.ToString(), $"Checked in {visit.Visitor.FullName}");
-        await _audit.LogAsync("VisitorPassPrinted", "VisitorPass", pass.Id.ToString(), $"Pass issued {pass.PassCode}");
 
         return await BuildPassDto(visit, pass, webRoot);
     }
 
     public async Task<VisitorListItemDto> CheckOutAsync(Guid visitId, CheckOutRequest request, ClaimsPrincipal user)
     {
+        _ = request;
         var visit = await _db.VisitorVisits
             .Include(v => v.Visitor)
             .Include(v => v.Department)
@@ -546,14 +516,8 @@ public class VisitorService : IVisitorService
 
         EnsureCheckOutAllowed(visit);
 
-        var gate = request.ExitGateId.HasValue
-            ? await _db.ExitGates.AsNoTracking().FirstOrDefaultAsync(g => g.Id == request.ExitGateId)
-            : await _db.ExitGates.AsNoTracking().FirstOrDefaultAsync(g => g.IsDefault && g.IsActive)
-              ?? await _db.ExitGates.AsNoTracking().FirstOrDefaultAsync(g => g.IsActive);
-
         visit.Status = VisitStatus.CheckedOut;
         visit.CheckOutAt = DateTime.UtcNow;
-        visit.ExitGateId = gate?.Id;
         visit.CheckedOutByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         visit.UpdatedAt = DateTime.UtcNow;
         visit.UpdatedBy = user.Identity?.Name;
@@ -562,7 +526,6 @@ public class VisitorService : IVisitorService
             pass.IsActive = false;
 
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("VisitorCheckedOut", "VisitorVisit", visit.Id.ToString(), $"Checked out {visit.Visitor.FullName}");
 
         var visitorName = visit.Visitor.FullName;
         var visitorEmail = visit.Visitor.Email;
@@ -650,19 +613,17 @@ public class VisitorService : IVisitorService
             pass = new VisitorPass
             {
                 VisitorVisitId = visit.Id,
-                PassCode = $"PASS-{Guid.NewGuid():N}"[..20].ToUpperInvariant(),
+                PassCode = ResolvePassCode(visit),
                 IssuedByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier),
                 ValidUntil = DateTime.UtcNow.AddHours(settings.VisitorPassValidityHours),
                 IsActive = true
             };
             _db.VisitorPasses.Add(pass);
-            await _audit.LogAsync("VisitorPassIssued", "VisitorPass", pass.Id.ToString(), $"Pass issued {pass.PassCode}");
         }
 
         pass.PrintCount += 1;
         pass.LastPrintedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("VisitorPassPrinted", "VisitorPass", pass.Id.ToString(), $"Pass printed {pass.PassCode}");
         return await BuildPassDto(visit, pass, webRoot);
     }
 
@@ -858,8 +819,6 @@ public class VisitorService : IVisitorService
     private IQueryable<VisitorVisit> DetailVisitQuery() =>
         LightVisitQuery()
             .Include(v => v.Approvals).ThenInclude(a => a.ActionByUser)
-            .Include(v => v.EntryGate)
-            .Include(v => v.ExitGate)
             .Include(v => v.CheckedInByUser)
             .Include(v => v.CheckedOutByUser);
 
@@ -872,8 +831,6 @@ public class VisitorService : IVisitorService
             .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
             .Include(v => v.Approvals).ThenInclude(a => a.ActionByUser)
             .Include(v => v.Passes)
-            .Include(v => v.EntryGate)
-            .Include(v => v.ExitGate)
             .Include(v => v.CheckedInByUser)
             .Include(v => v.CheckedOutByUser)
             .AsSplitQuery();
@@ -1030,7 +987,6 @@ public class VisitorService : IVisitorService
 
         if (bestVisitorId is null || bestSimilarity < _faces.MatchThreshold)
         {
-            await _audit.LogAsync("FaceSearchNoMatch", "Visitor", null, "Face capture did not match a known visitor");
             return null;
         }
 
@@ -1053,7 +1009,6 @@ public class VisitorService : IVisitorService
         // Tenant query filter removed the visitor: treat as no match rather than leaking existence.
         if (visitor is null) return null;
 
-        await _audit.LogAsync("FaceSearchMatched", "Visitor", visitor.Id.ToString(), "Returning visitor recognised from face capture");
 
         return new FaceSearchMatchDto
         {
@@ -1115,8 +1070,6 @@ public class VisitorService : IVisitorService
 
         if (bestVisitId is null || bestSimilarity < _faces.MatchThreshold)
         {
-            await _audit.LogAsync("FaceCheckoutNoMatch", "VisitorVisit", null,
-                "Face capture did not match anyone currently inside");
             return null;
         }
 
@@ -1140,8 +1093,6 @@ public class VisitorService : IVisitorService
         if (match.PhotoUrl is not null)
             match.PhotoUrl = _media.ToPublicApiPath(Path.GetFileName(match.PhotoUrl));
 
-        await _audit.LogAsync("FaceCheckoutMatched", "VisitorVisit", match.VisitId.ToString(),
-            $"{match.VisitorName} recognised at check-out from a face capture");
 
         return match;
     }
@@ -1383,6 +1334,15 @@ public class VisitorService : IVisitorService
     }
 
     /// <summary>
+    /// Prefer the desk-issued badge number captured at registration; fall back to a generated code
+    /// only for visits registered before pass numbers were required.
+    /// </summary>
+    private static string ResolvePassCode(VisitorVisit visit) =>
+        string.IsNullOrWhiteSpace(visit.PassNumber)
+            ? $"PASS-{Guid.NewGuid():N}"[..20].ToUpperInvariant()
+            : visit.PassNumber.Trim();
+
+    /// <summary>
     /// Persists a new visit, re-issuing the visit number if a concurrent registration claimed it first.
     /// The (TenantId, VisitNumber) unique index is the source of truth; this only removes the operator-visible failure.
     /// </summary>
@@ -1488,6 +1448,57 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("ID number is too long (maximum 40 characters).");
         if (request.NumberOfPersons < 1 || request.NumberOfPersons > 99)
             throw new InvalidOperationException("Number of persons must be between 1 and 99.");
+    }
+
+    private static readonly string[] StaticIdTypeNames = ["Aadhaar", "Pan Card", "Passport"];
+
+    /// <summary>
+    /// Resolves the mandatory ID proof to a tenant IdTypes row, creating the static type if needed.
+    /// </summary>
+    private async Task<Guid> ResolveRequiredIdTypeAsync(RegisterVisitorRequest request)
+    {
+        string? name = null;
+        if (!string.IsNullOrWhiteSpace(request.IdTypeName))
+        {
+            name = request.IdTypeName.Trim();
+            var match = StaticIdTypeNames.FirstOrDefault(n =>
+                string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+                throw new InvalidOperationException("ID type must be Aadhaar, Pan Card, or Passport.");
+            name = match;
+        }
+        else if (request.IdTypeId is Guid existingId && existingId != Guid.Empty)
+        {
+            var byId = await _db.IdTypes.FirstOrDefaultAsync(t => t.Id == existingId && t.IsActive)
+                ?? throw new InvalidOperationException("Selected ID type was not found.");
+            var match = StaticIdTypeNames.FirstOrDefault(n =>
+                string.Equals(n, byId.Name, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+                throw new InvalidOperationException("ID type must be Aadhaar, Pan Card, or Passport.");
+            return byId.Id;
+        }
+        else
+        {
+            throw new InvalidOperationException("ID type is required.");
+        }
+
+        var existing = await _db.IdTypes.FirstOrDefaultAsync(t =>
+            t.IsActive && t.Name == name);
+        if (existing is not null) return existing.Id;
+
+        var created = new IdType
+        {
+            TenantId = _tenant.TenantId is Guid tid && tid != Guid.Empty
+                ? tid
+                : throw new UnauthorizedAccessException("Tenant context is required."),
+            Name = name,
+            IsActive = true,
+            SortOrder = Array.IndexOf(StaticIdTypeNames, name),
+            CreatedBy = "system"
+        };
+        _db.IdTypes.Add(created);
+        await _db.SaveChangesAsync();
+        return created.Id;
     }
 
     private async Task<Employee> ResolveHostAsync(Guid departmentId, Guid? hostEmployeeId, string? hostName, string? createdBy)

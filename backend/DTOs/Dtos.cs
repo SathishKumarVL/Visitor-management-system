@@ -46,6 +46,8 @@ public class PublicBrandingDto
 {
     public string CompanyName { get; set; } = "TIAANO";
     public string LogoPath { get; set; } = "/branding/tiaano-logo.png";
+    public string ThemePreset { get; set; } = "tiaano";
+    public string FontPreset { get; set; } = "inter";
 }
 
 public class UserDto
@@ -61,6 +63,9 @@ public class UserDto
     /// <summary>Null means the user is not bound to a site and keeps tenant-wide visibility.</summary>
     public Guid? SiteId { get; set; }
     public string? SiteName { get; set; }
+
+    /// <summary>Menu keys visible to this user (already intersected with role). Empty uses role defaults on the client.</summary>
+    public IReadOnlyList<string> AllowedMenuKeys { get; set; } = Array.Empty<string>();
 
     public bool MustChangePassword { get; set; }
     public bool IsActive { get; set; }
@@ -85,6 +90,9 @@ public class CreateUserRequest
     /// <summary>Leave null to grant tenant-wide visibility (Admin); set it to lock the user to one site.</summary>
     public Guid? SiteId { get; set; }
 
+    /// <summary>Sidebar menus this user may see. Restricted to menus allowed for <see cref="Role"/>.</summary>
+    public List<string>? AllowedMenuKeys { get; set; }
+
     [Required, MinLength(10)]
     public string Password { get; set; } = string.Empty;
 }
@@ -104,6 +112,9 @@ public class UpdateUserRequest
 
     /// <summary>Leave null to grant tenant-wide visibility (Admin); set it to lock the user to one site.</summary>
     public Guid? SiteId { get; set; }
+
+    /// <summary>Sidebar menus this user may see. Restricted to menus allowed for <see cref="Role"/>.</summary>
+    public List<string>? AllowedMenuKeys { get; set; }
 
     public bool IsActive { get; set; } = true;
 }
@@ -221,6 +232,11 @@ public class RegisterVisitorRequest
     public bool IsWalkIn { get; set; } = true;
     public int NumberOfPersons { get; set; } = 1;
     public string? PhotoBase64 { get; set; }
+
+    /// <summary>Static ID proof name: Aadhaar, Pan Card, or Passport.</summary>
+    [MaxLength(100)]
+    public string? IdTypeName { get; set; }
+
     public Guid? IdTypeId { get; set; }
     public string? IdNumber { get; set; }
     public Guid? ExpectedVisitId { get; set; }
@@ -231,6 +247,11 @@ public class RegisterVisitorRequest
     /// </summary>
     public Guid? RecognizedVisitorId { get; set; }
 
+    /// <summary>
+    /// Physical visitor-pass / badge number handed to the visitor. Required at registration.
+    /// </summary>
+    [Required, MaxLength(80)]
+    public string PassNumber { get; set; } = string.Empty;
 }
 
 public class FaceSearchRequest
@@ -289,8 +310,10 @@ public class ExpectedVisitorRequest
     [Required]
     public TimeOnly ExpectedTime { get; set; }
 
-    [Required]
-    public Guid HostEmployeeId { get; set; }
+    public Guid? HostEmployeeId { get; set; }
+
+    [MaxLength(150)]
+    public string? HostName { get; set; }
 
     [Required]
     public Guid DepartmentId { get; set; }
@@ -341,12 +364,9 @@ public class VisitorDetailDto : VisitorListItemDto
     public string? IdNumberMasked { get; set; }
     public string? IdNumberFull { get; set; }
     public IdVerificationStatus IdVerificationStatus { get; set; }
-    public string? EntryGate { get; set; }
-    public string? ExitGate { get; set; }
     public string? CheckedInBy { get; set; }
     public string? CheckedOutBy { get; set; }
     public IReadOnlyList<ApprovalHistoryDto> ApprovalHistory { get; set; } = Array.Empty<ApprovalHistoryDto>();
-    public IReadOnlyList<AuditLogDto> AuditHistory { get; set; } = Array.Empty<AuditLogDto>();
 }
 
 public class ApprovalHistoryDto
@@ -359,18 +379,6 @@ public class ApprovalHistoryDto
     public DateTime CreatedAt { get; set; }
 }
 
-public class AuditLogDto
-{
-    public Guid Id { get; set; }
-    public string Action { get; set; } = string.Empty;
-    public string Entity { get; set; } = string.Empty;
-    public string? EntityId { get; set; }
-    public string? UserName { get; set; }
-    public string? Description { get; set; }
-    public string? IpAddress { get; set; }
-    public DateTime CreatedAt { get; set; }
-}
-
 public class ApprovalActionRequest
 {
     [MaxLength(1000)]
@@ -379,12 +387,10 @@ public class ApprovalActionRequest
 
 public class CheckInRequest
 {
-    public Guid? EntryGateId { get; set; }
 }
 
 public class CheckOutRequest
 {
-    public Guid? ExitGateId { get; set; }
 }
 
 public class VisitorSearchRequest
@@ -430,6 +436,8 @@ public class SettingsDto
 {
     public string CompanyName { get; set; } = "TIAANO";
     public string LogoPath { get; set; } = "/branding/tiaano-logo.png";
+    public string ThemePreset { get; set; } = "tiaano";
+    public string FontPreset { get; set; } = "inter";
     public string VisitorIdPrefix { get; set; } = "TIA";
     public int VisitorPassValidityHours { get; set; } = 12;
     public bool ApprovalRequired { get; set; } = false;
@@ -437,8 +445,6 @@ public class SettingsDto
     public bool PhotoRequired { get; set; }
     public bool IdVerificationRequired { get; set; }
     public int MaxVisitDurationWarningMinutes { get; set; } = 240;
-    public string DefaultEntryGate { get; set; } = "Main Gate";
-    public string DefaultExitGate { get; set; } = "Main Gate";
     public int SessionTimeoutMinutes { get; set; } = 480;
 }
 

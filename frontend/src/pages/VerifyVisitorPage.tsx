@@ -72,7 +72,7 @@ export function VerifyVisitorPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Gate operations"
+        eyebrow="Security operations"
         title={checkoutMode ? 'Check Out by Visit Number' : 'Verify Visitor'}
         subtitle="Look up visitors by the visit number printed on their pass. No QR codes."
       />

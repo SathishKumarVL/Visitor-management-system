@@ -53,9 +53,9 @@ public static class DbSeeder
                 ["PhotoRequired"] = "false",
                 ["IdVerificationRequired"] = "false",
                 ["MaxVisitDurationWarningMinutes"] = "240",
-                ["DefaultEntryGate"] = "Main Gate",
-                ["DefaultExitGate"] = "Main Gate",
-                ["SessionTimeoutMinutes"] = "480"
+                ["SessionTimeoutMinutes"] = "480",
+                ["ThemePreset"] = "tiaano",
+                ["FontPreset"] = "inter"
             };
             foreach (var kv in defaults)
             {
@@ -200,12 +200,9 @@ public static class DbSeeder
             UPDATE VisitPurposes SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE Locations SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE IdTypes SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
-            UPDATE EntryGates SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
-            UPDATE ExitGates SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000' OR TenantId IS NULL;
             UPDATE Visitors SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE VisitorVisits SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE SystemSettings SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
-            UPDATE AuditLogs SET TenantId = {0} WHERE TenantId IS NULL;
             UPDATE NotificationOutbox SET TenantId = {0} WHERE TenantId IS NULL;
             """, tenantId);
 

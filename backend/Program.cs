@@ -83,7 +83,6 @@ builder.Services.AddRateLimiter(options =>
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, TenantContext>();
-builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IAuthService, AuthService>();

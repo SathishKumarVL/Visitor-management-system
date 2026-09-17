@@ -52,7 +52,7 @@ Startup runs `MigrateAsync` and seeds only what a fresh install needs to boot:
 - product-module entitlements
 - the "Others" visit purpose (registration falls back to it)
 
-Departments, hosts, visit purposes, locations, ID types and gates are **not** seeded — enter your own under Admin before registering visitors. Demo desk accounts (`reception`, `security`, `host`) are no longer created either.
+Departments, hosts, visit purposes, locations and ID types are **not** seeded — enter your own under Admin before registering visitors. Demo desk accounts (`reception`, `security`, `host`) are no longer created either.
 
 Manual migration:
 

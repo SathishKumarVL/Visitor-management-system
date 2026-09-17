@@ -24,6 +24,8 @@ export interface UserDto {
   departmentName?: string | null
   siteId?: string | null
   siteName?: string | null
+  /** Sidebar menus this user may see (intersected with role). */
+  allowedMenuKeys?: string[]
   mustChangePassword: boolean
   isActive: boolean
 }
@@ -43,6 +45,8 @@ export interface ChangePasswordRequest {
 export interface PublicBrandingDto {
   companyName: string
   logoPath: string
+  themePreset?: string
+  fontPreset?: string
 }
 
 export interface MasterItemDto {
@@ -172,17 +176,6 @@ export interface ApprovalHistoryDto {
   createdAt: string
 }
 
-export interface AuditLogDto {
-  id: string
-  action: string
-  entity: string
-  entityId?: string | null
-  userName?: string | null
-  description?: string | null
-  ipAddress?: string | null
-  createdAt: string
-}
-
 export interface VisitorDetailDto extends VisitorListItemDto {
   intercom?: string | null
   purposeNotes?: string | null
@@ -193,12 +186,9 @@ export interface VisitorDetailDto extends VisitorListItemDto {
   idNumberMasked?: string | null
   idNumberFull?: string | null
   idVerificationStatus: number | string
-  entryGate?: string | null
-  exitGate?: string | null
   checkedInBy?: string | null
   checkedOutBy?: string | null
   approvalHistory: ApprovalHistoryDto[]
-  auditHistory: AuditLogDto[]
 }
 
 export interface RegisterVisitorRequest {
@@ -220,11 +210,15 @@ export interface RegisterVisitorRequest {
   notes?: string | null
   isWalkIn?: boolean
   photoBase64?: string | null
+  /** Preferred: static name Aadhaar | Pan Card | Passport. */
+  idTypeName?: string | null
   idTypeId?: string | null
   idNumber?: string | null
   expectedVisitId?: string | null
   recognizedVisitorId?: string | null
   numberOfPersons?: number
+  /** Physical visitor-pass / badge number issued at the desk. */
+  passNumber: string
 }
 
 export interface FaceSearchMatchDto {
@@ -259,7 +253,8 @@ export interface ExpectedVisitorRequest {
   email?: string | null
   expectedDate: string
   expectedTime: string
-  hostEmployeeId: string
+  hostEmployeeId?: string | null
+  hostName?: string | null
   departmentId: string
   purposeIds: string[]
   locationIds: string[]
@@ -291,6 +286,8 @@ export interface DashboardDto {
 export interface SettingsDto {
   companyName: string
   logoPath: string
+  themePreset: string
+  fontPreset: string
   visitorIdPrefix: string
   visitorPassValidityHours: number
   approvalRequired: boolean
@@ -298,8 +295,6 @@ export interface SettingsDto {
   photoRequired: boolean
   idVerificationRequired: boolean
   maxVisitDurationWarningMinutes: number
-  defaultEntryGate: string
-  defaultExitGate: string
   sessionTimeoutMinutes: number
 }
 
@@ -327,6 +322,7 @@ export interface CreateUserRequest {
   departmentId?: string | null
   /** Null grants tenant-wide visibility; a value locks the user to that one site. */
   siteId?: string | null
+  allowedMenuKeys?: string[]
   password: string
 }
 
@@ -337,6 +333,7 @@ export interface UpdateUserRequest {
   departmentId?: string | null
   /** Null grants tenant-wide visibility; a value locks the user to that one site. */
   siteId?: string | null
+  allowedMenuKeys?: string[]
   isActive: boolean
 }
 
@@ -398,9 +395,10 @@ export interface VisitorWizardDraft {
   otherPurposeText: string
   notes: string
   photoBase64: string
-  idTypeId: string
+  idTypeName: string
   idNumber: string
   isWalkIn: boolean
   expectedVisitId: string | null
   recognizedVisitorId: string | null
+  passNumber: string
 }

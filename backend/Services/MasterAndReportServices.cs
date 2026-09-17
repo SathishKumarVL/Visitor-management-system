@@ -24,23 +24,17 @@ public interface IMasterDataService
     Task<MasterItemDto> UpsertLocationAsync(Guid? id, MasterUpsertRequest request, string? user);
     Task<IReadOnlyList<MasterItemDto>> GetIdTypesAsync(bool activeOnly = true);
     Task<MasterItemDto> UpsertIdTypeAsync(Guid? id, MasterUpsertRequest request, string? user);
-    Task<IReadOnlyList<MasterItemDto>> GetEntryGatesAsync(bool activeOnly = true);
-    Task<MasterItemDto> UpsertEntryGateAsync(Guid? id, MasterUpsertRequest request, string? user);
-    Task<IReadOnlyList<MasterItemDto>> GetExitGatesAsync(bool activeOnly = true);
-    Task<MasterItemDto> UpsertExitGateAsync(Guid? id, MasterUpsertRequest request, string? user);
     Task DeactivateMasterAsync(string type, Guid id, string? user);
 }
 
 public class MasterDataService : IMasterDataService
 {
     private readonly ApplicationDbContext _db;
-    private readonly IAuditService _audit;
     private readonly ITenantContext _tenant;
 
-    public MasterDataService(ApplicationDbContext db, IAuditService audit, ITenantContext tenant)
+    public MasterDataService(ApplicationDbContext db, ITenantContext tenant)
     {
         _db = db;
-        _audit = audit;
         _tenant = tenant;
     }
 
@@ -78,7 +72,6 @@ public class MasterDataService : IMasterDataService
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.IsActive;
         await _db.SaveChangesAsync();
-        await _audit.LogAsync(id.HasValue ? "DepartmentUpdated" : "DepartmentCreated", "Department", entity.Id.ToString(), entity.Name);
         return new MasterItemDto { Id = entity.Id, Name = entity.Name, Code = entity.Code, Intercom = entity.Intercom, IsActive = entity.IsActive, SortOrder = entity.SortOrder };
     }
 
@@ -126,7 +119,6 @@ public class MasterDataService : IMasterDataService
         entity.UserId = request.UserId;
         await _db.SaveChangesAsync();
         await _db.Entry(entity).Reference(e => e.Department).LoadAsync();
-        await _audit.LogAsync(id.HasValue ? "EmployeeUpdated" : "EmployeeCreated", "Employee", entity.Id.ToString(), entity.FullName);
         return new EmployeeDto
         {
             Id = entity.Id,
@@ -149,7 +141,6 @@ public class MasterDataService : IMasterDataService
         entity.UpdatedAt = DateTime.UtcNow;
         entity.UpdatedBy = user;
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("EmployeeDeactivated", "Employee", id.ToString(), entity.FullName);
     }
 
     public async Task<IReadOnlyList<MasterItemDto>> GetPurposesAsync(bool activeOnly = true)
@@ -244,56 +235,6 @@ public class MasterDataService : IMasterDataService
         return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder };
     }
 
-    public async Task<IReadOnlyList<MasterItemDto>> GetEntryGatesAsync(bool activeOnly = true)
-    {
-        var q = _db.EntryGates.AsNoTracking().AsQueryable();
-        if (activeOnly) q = q.Where(x => x.IsActive);
-        return await q.OrderBy(x => x.Name).Select(x => new MasterItemDto { Id = x.Id, Name = x.Name, IsActive = x.IsActive, IsDefault = x.IsDefault }).ToListAsync();
-    }
-
-    public async Task<MasterItemDto> UpsertEntryGateAsync(Guid? id, MasterUpsertRequest request, string? user)
-    {
-        if (request.IsDefault)
-        {
-            foreach (var g in await _db.EntryGates.Where(x => x.IsDefault).ToListAsync()) g.IsDefault = false;
-        }
-        EntryGate entity;
-        if (id.HasValue)
-        {
-            entity = await _db.EntryGates.FindAsync(id) ?? throw new InvalidOperationException("Entry gate not found.");
-            entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
-        }
-        else { entity = new EntryGate { TenantId = CurrentTenantId, CreatedBy = user }; _db.EntryGates.Add(entity); }
-        entity.Name = request.Name.Trim(); entity.IsActive = request.IsActive; entity.IsDefault = request.IsDefault;
-        await _db.SaveChangesAsync();
-        return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, IsDefault = entity.IsDefault };
-    }
-
-    public async Task<IReadOnlyList<MasterItemDto>> GetExitGatesAsync(bool activeOnly = true)
-    {
-        var q = _db.ExitGates.AsNoTracking().AsQueryable();
-        if (activeOnly) q = q.Where(x => x.IsActive);
-        return await q.OrderBy(x => x.Name).Select(x => new MasterItemDto { Id = x.Id, Name = x.Name, IsActive = x.IsActive, IsDefault = x.IsDefault }).ToListAsync();
-    }
-
-    public async Task<MasterItemDto> UpsertExitGateAsync(Guid? id, MasterUpsertRequest request, string? user)
-    {
-        if (request.IsDefault)
-        {
-            foreach (var g in await _db.ExitGates.Where(x => x.IsDefault).ToListAsync()) g.IsDefault = false;
-        }
-        ExitGate entity;
-        if (id.HasValue)
-        {
-            entity = await _db.ExitGates.FindAsync(id) ?? throw new InvalidOperationException("Exit gate not found.");
-            entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
-        }
-        else { entity = new ExitGate { TenantId = CurrentTenantId, CreatedBy = user }; _db.ExitGates.Add(entity); }
-        entity.Name = request.Name.Trim(); entity.IsActive = request.IsActive; entity.IsDefault = request.IsDefault;
-        await _db.SaveChangesAsync();
-        return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, IsDefault = entity.IsDefault };
-    }
-
     public async Task DeactivateMasterAsync(string type, Guid id, string? user)
     {
         switch (type.ToLowerInvariant())
@@ -310,16 +251,9 @@ public class MasterDataService : IMasterDataService
             case "idtypes":
                 var i = await _db.IdTypes.FindAsync(id) ?? throw new InvalidOperationException("Not found");
                 i.IsActive = false; i.UpdatedAt = DateTime.UtcNow; i.UpdatedBy = user; break;
-            case "entrygates":
-                var eg = await _db.EntryGates.FindAsync(id) ?? throw new InvalidOperationException("Not found");
-                eg.IsActive = false; eg.UpdatedAt = DateTime.UtcNow; eg.UpdatedBy = user; break;
-            case "exitgates":
-                var xg = await _db.ExitGates.FindAsync(id) ?? throw new InvalidOperationException("Not found");
-                xg.IsActive = false; xg.UpdatedAt = DateTime.UtcNow; xg.UpdatedBy = user; break;
             default: throw new InvalidOperationException("Unknown master type");
         }
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("MasterDeactivated", type, id.ToString(), $"Deactivated {type}");
     }
 
     private static async Task<IReadOnlyList<MasterItemDto>> GetSimpleAsync<T>(DbSet<T> set, bool activeOnly) where T : class
@@ -355,19 +289,18 @@ public interface IReportService
 public class ReportService : IReportService
 {
     private readonly ApplicationDbContext _db;
-    private readonly IAuditService _audit;
+    private readonly IWebHostEnvironment _env;
 
-    public ReportService(ApplicationDbContext db, IAuditService audit)
+    public ReportService(ApplicationDbContext db, IWebHostEnvironment env)
     {
         _db = db;
-        _audit = audit;
+        _env = env;
         QuestPDF.Settings.License = LicenseType.Community;
     }
 
     public async Task<object> GenerateAsync(ReportRequest request, string generatedBy)
     {
         var rows = await QueryRows(request);
-        await _audit.LogAsync("ReportGenerated", "Report", request.ReportType, $"{request.ReportType} by {generatedBy}");
         return new
         {
             reportType = request.ReportType,
@@ -383,12 +316,29 @@ public class ReportService : IReportService
         var rows = await QueryRows(request);
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Visitors");
-        ws.Cell(1, 1).Value = "TIAANO Visitor Report";
-        ws.Cell(2, 1).Value = $"Generated: {DateTime.Now:yyyy-MM-dd HH:mm}";
-        ws.Cell(3, 1).Value = $"Generated By: {generatedBy}";
+
+        var headerRow = 1;
+        var logoBytes = TryReadLogoBytes();
+        if (logoBytes is { Length: > 0 })
+        {
+            using var logoStream = new MemoryStream(logoBytes);
+            ws.AddPicture(logoStream)
+                .MoveTo(ws.Cell(1, 1))
+                .WithSize(140, 48);
+            ws.Row(1).Height = 40;
+            ws.Row(2).Height = 8;
+            headerRow = 3;
+        }
+
+        ws.Cell(headerRow, 1).Value = "TIAANO Visitor Report";
+        ws.Cell(headerRow, 1).Style.Font.Bold = true;
+        ws.Cell(headerRow, 1).Style.Font.FontSize = 16;
+        ws.Cell(headerRow + 1, 1).Value = $"Generated: {DateTime.Now:yyyy-MM-dd HH:mm}";
+        ws.Cell(headerRow + 2, 1).Value = $"Generated By: {generatedBy}";
+        var tableHeader = headerRow + 4;
         var headers = new[] { "Visit #", "Visitor", "Company", "Host", "Department", "Date", "Status", "Purposes", "Locations" };
-        for (var i = 0; i < headers.Length; i++) ws.Cell(5, i + 1).Value = headers[i];
-        var r = 6;
+        for (var i = 0; i < headers.Length; i++) ws.Cell(tableHeader, i + 1).Value = headers[i];
+        var r = tableHeader + 1;
         foreach (var row in rows)
         {
             ws.Cell(r, 1).Value = row.VisitNumber;
@@ -404,22 +354,30 @@ public class ReportService : IReportService
         }
         using var stream = new MemoryStream();
         wb.SaveAs(stream);
-        await _audit.LogAsync("ReportExported", "Report", request.ReportType, $"Excel export by {generatedBy}");
         return stream.ToArray();
     }
 
     public async Task<byte[]> ExportPdfAsync(ReportRequest request, string generatedBy)
     {
         var rows = await QueryRows(request);
+        var logoBytes = TryReadLogoBytes();
         var doc = Document.Create(container =>
         {
             container.Page(page =>
             {
                 page.Margin(30);
-                page.Header().Text("TIAANO Visitor Report").Bold().FontSize(16);
+                page.Header().Row(row =>
+                {
+                    if (logoBytes is { Length: > 0 })
+                    {
+                        row.ConstantItem(90).Height(32).Image(logoBytes).FitArea();
+                        row.ConstantItem(12);
+                    }
+                    row.RelativeItem().AlignMiddle().Text("TIAANO Visitor Report").Bold().FontSize(16);
+                });
                 page.Content().Column(col =>
                 {
-                    col.Item().Text($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm} by {generatedBy}");
+                    col.Item().PaddingTop(8).Text($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm} by {generatedBy}");
                     col.Item().Text($"Report: {request.ReportType} | Records: {rows.Count}").FontSize(10);
                     col.Item().PaddingTop(10).Table(table =>
                     {
@@ -450,7 +408,6 @@ public class ReportService : IReportService
                 });
             });
         });
-        await _audit.LogAsync("ReportExported", "Report", request.ReportType, $"PDF export by {generatedBy}");
         return doc.GeneratePdf();
     }
 
@@ -464,7 +421,6 @@ public class ReportService : IReportService
         {
             sb.AppendLine($"\"{row.VisitNumber}\",\"{row.VisitorName}\",\"{row.Company}\",\"{row.Host}\",\"{row.Department}\",\"{row.VisitDate}\",\"{row.Status}\",\"{row.Purposes}\",\"{row.Locations}\"");
         }
-        await _audit.LogAsync("ReportExported", "Report", request.ReportType, $"CSV export by {generatedBy}");
         return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
     }
 
@@ -513,6 +469,26 @@ public class ReportService : IReportService
         )).ToList();
     }
 
+    /// <summary>
+    /// Loads the TIAANO mark for branded exports. Missing files are ignored so exports still work
+    /// on machines that have not copied branding assets into wwwroot.
+    /// </summary>
+    private byte[]? TryReadLogoBytes()
+    {
+        foreach (var relative in new[]
+                 {
+                     Path.Combine("wwwroot", "branding", "tiaano-logo.png"),
+                     Path.Combine("branding", "tiaano-logo.png")
+                 })
+        {
+            var path = Path.Combine(_env.ContentRootPath, relative);
+            if (File.Exists(path)) return File.ReadAllBytes(path);
+        }
+
+        var webRoot = Path.Combine(_env.WebRootPath ?? string.Empty, "branding", "tiaano-logo.png");
+        return File.Exists(webRoot) ? File.ReadAllBytes(webRoot) : null;
+    }
+
     private record ReportRow(string VisitNumber, string VisitorName, string Company, string Host, string Department, string VisitDate, string Status, string Purposes, string Locations);
 }
 
@@ -527,20 +503,17 @@ public class UserAdminService : IUserAdminService
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ApplicationDbContext _db;
-    private readonly IAuditService _audit;
     private readonly ITenantContext _tenant;
     private readonly IEntitlementService _entitlements;
 
     public UserAdminService(
         UserManager<ApplicationUser> userManager,
         ApplicationDbContext db,
-        IAuditService audit,
         ITenantContext tenant,
         IEntitlementService entitlements)
     {
         _userManager = userManager;
         _db = db;
-        _audit = audit;
         _tenant = tenant;
         _entitlements = entitlements;
     }
@@ -556,6 +529,7 @@ public class UserAdminService : IUserAdminService
         foreach (var u in users)
         {
             var roles = await _userManager.GetRolesAsync(u);
+            var primaryRole = roles.FirstOrDefault() ?? string.Empty;
             result.Add(new UserDto
             {
                 Id = u.Id,
@@ -567,6 +541,7 @@ public class UserAdminService : IUserAdminService
                 DepartmentName = u.Department?.Name,
                 SiteId = u.SiteId,
                 SiteName = u.Site?.Name,
+                AllowedMenuKeys = MenuAccess.Deserialize(u.AllowedMenuKeysJson, primaryRole),
                 MustChangePassword = u.MustChangePassword,
                 IsActive = u.IsActive
             });
@@ -597,6 +572,7 @@ public class UserAdminService : IUserAdminService
         var tenantId = _tenant.TenantId is Guid id && id != Guid.Empty
             ? id
             : throw new UnauthorizedAccessException("Tenant context is required.");
+        var menus = MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys);
         var user = new ApplicationUser
         {
             UserName = request.Username.Trim(),
@@ -605,6 +581,7 @@ public class UserAdminService : IUserAdminService
             TenantId = tenantId,
             DepartmentId = request.DepartmentId,
             SiteId = await ValidateSiteAsync(request.SiteId),
+            AllowedMenuKeysJson = MenuAccess.Serialize(menus),
             IsActive = true,
             MustChangePassword = true,
             EmailConfirmed = true,
@@ -614,7 +591,6 @@ public class UserAdminService : IUserAdminService
         if (!result.Succeeded)
             throw new InvalidOperationException(string.Join("; ", result.Errors.Select(e => e.Description)));
         await _userManager.AddToRoleAsync(user, request.Role);
-        await _audit.LogAsync("UserCreated", "User", user.Id, $"Created {user.UserName}");
         return (await GetUsersAsync()).First(u => u.Id == user.Id);
     }
 
@@ -626,6 +602,8 @@ public class UserAdminService : IUserAdminService
         user.Email = request.Email.Trim();
         user.DepartmentId = request.DepartmentId;
         user.SiteId = await ValidateSiteAsync(request.SiteId);
+        user.AllowedMenuKeysJson = MenuAccess.Serialize(
+            MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys));
         user.IsActive = request.IsActive;
         user.UpdatedAt = DateTime.UtcNow;
         user.UpdatedBy = actor;
@@ -633,7 +611,6 @@ public class UserAdminService : IUserAdminService
         var roles = await _userManager.GetRolesAsync(user);
         await _userManager.RemoveFromRolesAsync(user, roles);
         await _userManager.AddToRoleAsync(user, request.Role);
-        await _audit.LogAsync("UserUpdated", "User", user.Id, $"Updated {user.UserName}");
         return (await GetUsersAsync()).First(u => u.Id == user.Id);
     }
 }

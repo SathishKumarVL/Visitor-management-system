@@ -7,5 +7,5 @@ export function HomeRedirect() {
   const { user, initialized } = useAuthStore()
   if (!initialized) return <LoadingMask label="Loading…" />
   if (!user) return <Navigate to="/login" replace />
-  return <Navigate to={homePathForRoles(user.roles)} replace />
+  return <Navigate to={homePathForRoles(user.roles, user.allowedMenuKeys)} replace />
 }

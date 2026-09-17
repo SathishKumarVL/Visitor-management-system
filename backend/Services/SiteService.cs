@@ -22,18 +22,15 @@ public interface ISiteService
 public sealed class SiteService : ISiteService
 {
     private readonly ApplicationDbContext _db;
-    private readonly IAuditService _audit;
     private readonly ITenantContext _tenant;
     private readonly IEntitlementService _entitlements;
 
     public SiteService(
         ApplicationDbContext db,
-        IAuditService audit,
         ITenantContext tenant,
         IEntitlementService entitlements)
     {
         _db = db;
-        _audit = audit;
         _tenant = tenant;
         _entitlements = entitlements;
     }
@@ -153,11 +150,6 @@ public sealed class SiteService : ISiteService
             entity.IsDefault = true;
 
         await _db.SaveChangesAsync();
-        await _audit.LogAsync(
-            id.HasValue ? "SiteUpdated" : "SiteCreated",
-            "Site",
-            entity.Id.ToString(),
-            $"{(id.HasValue ? "Updated" : "Created")} site {entity.Name}");
 
         return (await GetAsync()).First(s => s.Id == entity.Id);
     }
@@ -176,7 +168,6 @@ public sealed class SiteService : ISiteService
         site.UpdatedAt = DateTime.UtcNow;
         site.UpdatedBy = user;
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("SiteDeactivated", "Site", site.Id.ToString(), $"Deactivated site {site.Name}");
     }
 
     public async Task<Guid?> ResolveVisitSiteIdAsync()

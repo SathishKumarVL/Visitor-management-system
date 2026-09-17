@@ -102,7 +102,10 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             purposeIds = new[] { purposeId },
             locationIds = Array.Empty<Guid>(),
             numberOfPersons = 1,
-            isWalkIn = walkIn
+            isWalkIn = walkIn,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012",
+            passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
@@ -430,7 +433,10 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             locationIds = Array.Empty<Guid>(),
             numberOfPersons = 1,
             isWalkIn = false,
-            expectedVisitId
+            expectedVisitId,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012",
+            passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
         });
         Assert.True(arrival.IsSuccessStatusCode, await arrival.Content.ReadAsStringAsync());
 
@@ -521,7 +527,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Emergency_RollCall_Is_Persisted_Audited_And_Leaves_The_Visit_Untouched()
+    public async Task Emergency_RollCall_Is_Persisted_And_Leaves_The_Visit_Untouched()
     {
         await SetApprovalRequiredAsync(false);
         var reception = await LoginAsync("reception");
@@ -548,10 +554,6 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
 
         // The emergency mark is an event, not a change to the visit's own lifecycle state.
         Assert.Equal(VisitStatus.Inside, await StatusOfAsync(visitId));
-
-        var audited = await db.AuditLogs.IgnoreQueryFilters()
-            .AnyAsync(a => a.EntityId == visitId.ToString() && a.Action == "EmergencyRollCallMarked");
-        Assert.True(audited);
     }
 
     [Fact]
@@ -611,27 +613,6 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    // ------------------------------------------------------------ audit trail
-
-    [Fact]
-    public async Task CheckIn_And_CheckOut_Are_Audited()
-    {
-        await SetApprovalRequiredAsync(false);
-        var reception = await LoginAsync("reception");
-        var visitId = VisitId(await RegisterAsync(reception, "Audited Visitor"));
-        (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
-        (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { })).EnsureSuccessStatusCode();
-
-        using var scope = _factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var actions = await db.AuditLogs.IgnoreQueryFilters()
-            .Where(a => a.EntityId == visitId.ToString())
-            .Select(a => a.Action)
-            .ToListAsync();
-
-        Assert.Contains("VisitorCheckedIn", actions);
-        Assert.Contains("VisitorCheckedOut", actions);
-    }
 }
 
 /// <summary>

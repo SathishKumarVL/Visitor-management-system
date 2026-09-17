@@ -28,7 +28,6 @@ import { SitesPage } from './pages/SitesPage'
 import { HostsPage } from './pages/HostsPage'
 import { UsersPage } from './pages/UsersPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { AuditLogsPage } from './pages/AuditLogsPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
 
 export default function App() {
@@ -97,7 +96,6 @@ export default function App() {
               <Route path="/masters/sites" element={<SitesPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/audit" element={<AuditLogsPage />} />
             </Route>
           </Route>
         </Route>

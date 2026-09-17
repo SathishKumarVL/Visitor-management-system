@@ -2,9 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Configuration;
-using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models.Enums;
 using Tiaano.Vms.Api.Security;
@@ -423,24 +421,6 @@ public class MastersController : ControllerBase
     public async Task<ActionResult<ApiResponse<MasterItemDto>>> CreateIdType([FromBody] MasterUpsertRequest request) =>
         Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertIdTypeAsync(null, request, User.Identity?.Name)));
 
-    [HttpGet("entry-gates")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> EntryGates([FromQuery] bool activeOnly = true) =>
-        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetEntryGatesAsync(activeOnly)));
-
-    [HttpPost("entry-gates")]
-    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
-    public async Task<ActionResult<ApiResponse<MasterItemDto>>> CreateEntryGate([FromBody] MasterUpsertRequest request) =>
-        Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertEntryGateAsync(null, request, User.Identity?.Name)));
-
-    [HttpGet("exit-gates")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> ExitGates([FromQuery] bool activeOnly = true) =>
-        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetExitGatesAsync(activeOnly)));
-
-    [HttpPost("exit-gates")]
-    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
-    public async Task<ActionResult<ApiResponse<MasterItemDto>>> CreateExitGate([FromBody] MasterUpsertRequest request) =>
-        Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertExitGateAsync(null, request, User.Identity?.Name)));
-
     [HttpPost("{type}/{id:guid}/deactivate")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
     public async Task<ActionResult<ApiResponse<object>>> Deactivate(string type, Guid id)
@@ -515,7 +495,9 @@ public class SettingsController : ControllerBase
         return Ok(new ApiResponse<PublicBrandingDto>(true, new PublicBrandingDto
         {
             CompanyName = s.CompanyName,
-            LogoPath = s.LogoPath
+            LogoPath = s.LogoPath,
+            ThemePreset = s.ThemePreset,
+            FontPreset = s.FontPreset
         }));
     }
 
@@ -528,6 +510,22 @@ public class SettingsController : ControllerBase
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
     public async Task<ActionResult<ApiResponse<SettingsDto>>> Update([FromBody] SettingsDto dto) =>
         Ok(new ApiResponse<SettingsDto>(true, await _settings.UpdateAsync(dto, User.Identity?.Name)));
+
+    [HttpPost("logo")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    [RequestSizeLimit(5_000_000)]
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> UploadLogo(IFormFile file)
+    {
+        try
+        {
+            var result = await _settings.UploadLogoAsync(file, User.Identity?.Name);
+            return Ok(new ApiResponse<SettingsDto>(true, result));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<SettingsDto>(false, null, ex.Message));
+        }
+    }
 
     [HttpPost("test-email")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
@@ -573,37 +571,5 @@ public class ReportsController : ControllerBase
             return File(bytes, "text/csv", $"tiaano-visitors-{DateTime.Now:yyyyMMddHHmm}.csv");
         }
         return Ok(new ApiResponse<object>(true, await _reports.GenerateAsync(request, userName)));
-    }
-}
-
-[ApiController]
-[Route("api/audit")]
-[Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
-public class AuditController : ControllerBase
-{
-    private readonly ApplicationDbContext _db;
-    public AuditController(ApplicationDbContext db) => _db = db;
-
-    [HttpGet]
-    public async Task<ActionResult<ApiResponse<PagedResult<AuditLogDto>>>> Get([FromQuery] int page = 1, [FromQuery] int pageSize = 50, [FromQuery] string? action = null)
-    {
-        var q = _db.AuditLogs.AsNoTracking().AsQueryable();
-        if (!string.IsNullOrWhiteSpace(action)) q = q.Where(a => a.Action.Contains(action));
-        var total = await q.CountAsync();
-        page = Math.Max(1, page);
-        pageSize = Math.Clamp(pageSize, 1, 200);
-        var items = await q.OrderByDescending(a => a.CreatedAt).Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(a => new AuditLogDto
-            {
-                Id = a.Id,
-                Action = a.Action,
-                Entity = a.Entity,
-                EntityId = a.EntityId,
-                UserName = a.UserName,
-                Description = a.Description,
-                IpAddress = a.IpAddress,
-                CreatedAt = a.CreatedAt
-            }).ToListAsync();
-        return Ok(new ApiResponse<PagedResult<AuditLogDto>>(true, new PagedResult<AuditLogDto>(items, total, page, pageSize)));
     }
 }

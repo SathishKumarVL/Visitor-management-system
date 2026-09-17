@@ -27,7 +27,6 @@ import type {
   VisitorDetailDto,
   VisitorListItemDto,
   VisitorSearchParams,
-  AuditLogDto,
 } from '../types/api'
 
 const TOKEN_KEY = 'tiaano_vms_token'
@@ -207,10 +206,10 @@ export const visitorsApi = {
     unwrap(api.get<ApiResponse<VisitorListItemDto[]>>('/visitors/expected', { params: { date } })),
   createExpected: (body: ExpectedVisitorRequest) =>
     unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors/expected', body)),
-  checkIn: (id: string, entryGateId?: string) =>
-    unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, { entryGateId })),
-  checkOut: (id: string, exitGateId?: string) =>
-    unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, { exitGateId })),
+  checkIn: (id: string) =>
+    unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {})),
+  checkOut: (id: string) =>
+    unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, {})),
   faceSearch: (photoBase64: string) =>
     unwrap(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { photoBase64 })),
   faceIdentifyInside: (photoBase64: string) =>
@@ -262,10 +261,6 @@ export const mastersApi = {
     unwrap(api.put<ApiResponse<MasterItemDto>>(`/masters/locations/${id}`, body)),
   idTypes: (activeOnly = true) =>
     unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/id-types', { params: { activeOnly } })),
-  entryGates: (activeOnly = true) =>
-    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/entry-gates', { params: { activeOnly } })),
-  exitGates: (activeOnly = true) =>
-    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/exit-gates', { params: { activeOnly } })),
   deactivate: (type: string, id: string) =>
     unwrap(api.post<ApiResponse<object>>(`/masters/${type}/${id}/deactivate`)),
 }
@@ -274,6 +269,15 @@ export const settingsApi = {
   get: () => unwrap(api.get<ApiResponse<SettingsDto>>('/settings')),
   getBranding: () => unwrap(api.get<ApiResponse<PublicBrandingDto>>('/settings/branding')),
   update: (body: SettingsDto) => unwrap(api.put<ApiResponse<SettingsDto>>('/settings', body)),
+  uploadLogo: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return unwrap(
+      api.post<ApiResponse<SettingsDto>>('/settings/logo', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+    )
+  },
 }
 
 export const sitesApi = {
@@ -312,15 +316,6 @@ export const emergencyApi = {
         visitId,
         status,
         notes: notes ?? null,
-      }),
-    ),
-}
-
-export const auditApi = {
-  list: (page = 1, pageSize = 50, action?: string) =>
-    unwrap(
-      api.get<ApiResponse<PagedResult<AuditLogDto>>>('/audit', {
-        params: { page, pageSize, action },
       }),
     ),
 }

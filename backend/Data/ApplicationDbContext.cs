@@ -22,8 +22,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<VisitPurpose> VisitPurposes => Set<VisitPurpose>();
     public DbSet<Location> Locations => Set<Location>();
     public DbSet<IdType> IdTypes => Set<IdType>();
-    public DbSet<EntryGate> EntryGates => Set<EntryGate>();
-    public DbSet<ExitGate> ExitGates => Set<ExitGate>();
     public DbSet<Visitor> Visitors => Set<Visitor>();
     public DbSet<VisitorVisit> VisitorVisits => Set<VisitorVisit>();
     public DbSet<VisitorVisitPurpose> VisitorVisitPurposes => Set<VisitorVisitPurpose>();
@@ -33,7 +31,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<VisitorFaceDescriptor> VisitorFaceDescriptors => Set<VisitorFaceDescriptor>();
     public DbSet<Approval> Approvals => Set<Approval>();
     public DbSet<VisitorPass> VisitorPasses => Set<VisitorPass>();
-    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
     public DbSet<EmergencyRollCallEvent> EmergencyRollCallEvents => Set<EmergencyRollCallEvent>();
@@ -88,6 +85,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
+            e.Property(x => x.AllowedMenuKeysJson).HasMaxLength(1000);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -113,10 +111,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.HostEmployee).WithMany().HasForeignKey(x => x.HostEmployeeId)
                 .OnDelete(DeleteBehavior.Restrict);
-            e.HasOne(x => x.EntryGate).WithMany().HasForeignKey(x => x.EntryGateId)
-                .OnDelete(DeleteBehavior.SetNull);
-            e.HasOne(x => x.ExitGate).WithMany().HasForeignKey(x => x.ExitGateId)
-                .OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.CheckedInByUser).WithMany().HasForeignKey(x => x.CheckedInByUserId)
                 .OnDelete(DeleteBehavior.NoAction);
             e.HasOne(x => x.SecurityCheckInUser).WithMany().HasForeignKey(x => x.SecurityCheckInUserId)
@@ -215,14 +209,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.NoAction);
         });
 
-        builder.Entity<AuditLog>(e =>
-        {
-            e.HasIndex(x => x.CreatedAt);
-            e.HasIndex(x => x.Entity);
-            e.HasIndex(x => x.Action);
-            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && (x.TenantId == null || x.TenantId == _tenant.TenantId)));
-        });
-
         builder.Entity<SystemSetting>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
@@ -249,20 +235,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         });
 
         builder.Entity<IdType>(e =>
-        {
-            e.HasIndex(x => new { x.TenantId, x.Name });
-            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
-        });
-
-        builder.Entity<EntryGate>(e =>
-        {
-            e.HasIndex(x => new { x.TenantId, x.Name });
-            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
-        });
-
-        builder.Entity<ExitGate>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);

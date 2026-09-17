@@ -2,10 +2,13 @@ import { create } from 'zustand'
 import { getStoredToken, settingsApi } from '../lib/api'
 import type { SettingsDto } from '../types/api'
 import { assetUrl } from '../lib/utils'
+import { applyBranding } from '../lib/branding'
 
 const defaults: SettingsDto = {
   companyName: 'TIAANO',
   logoPath: '/branding/tiaano-logo.png',
+  themePreset: 'tiaano',
+  fontPreset: 'inter',
   visitorIdPrefix: 'TIA',
   visitorPassValidityHours: 12,
   approvalRequired: true,
@@ -13,8 +16,6 @@ const defaults: SettingsDto = {
   photoRequired: false,
   idVerificationRequired: false,
   maxVisitDurationWarningMinutes: 240,
-  defaultEntryGate: 'Main Gate',
-  defaultExitGate: 'Main Gate',
   sessionTimeoutMinutes: 480,
 }
 
@@ -24,6 +25,11 @@ interface SettingsState {
   loaded: boolean
   load: () => Promise<void>
   update: (next: SettingsDto) => Promise<SettingsDto>
+  uploadLogo: (file: File) => Promise<SettingsDto>
+}
+
+function applyFromSettings(settings: SettingsDto) {
+  applyBranding(settings.themePreset, settings.fontPreset)
 }
 
 async function loadBrandingFallback(
@@ -32,16 +38,21 @@ async function loadBrandingFallback(
 ) {
   try {
     const branding = await settingsApi.getBranding()
+    const settings: SettingsDto = {
+      ...current,
+      companyName: branding.companyName,
+      logoPath: branding.logoPath,
+      themePreset: branding.themePreset || current.themePreset,
+      fontPreset: branding.fontPreset || current.fontPreset,
+    }
+    applyFromSettings(settings)
     set({
-      settings: {
-        ...current,
-        companyName: branding.companyName,
-        logoPath: branding.logoPath,
-      },
+      settings,
       logoSrc: assetUrl(branding.logoPath),
       loaded: true,
     })
   } catch {
+    applyFromSettings(current)
     set({ loaded: true })
   }
 }
@@ -55,6 +66,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (token) {
       try {
         const settings = await settingsApi.get()
+        applyFromSettings(settings)
         set({ settings, logoSrc: assetUrl(settings.logoPath), loaded: true })
         return
       } catch {
@@ -67,6 +79,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
   update: async (next) => {
     const settings = await settingsApi.update(next)
+    applyFromSettings(settings)
+    set({ settings, logoSrc: assetUrl(settings.logoPath) })
+    return settings
+  },
+  uploadLogo: async (file) => {
+    const settings = await settingsApi.uploadLogo(file)
+    applyFromSettings(settings)
     set({ settings, logoSrc: assetUrl(settings.logoPath) })
     return settings
   },

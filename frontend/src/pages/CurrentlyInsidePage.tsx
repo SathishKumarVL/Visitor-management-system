@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { apiErrorMessage, mastersApi, visitorsApi } from '../lib/api'
-import type { MasterItemDto, VisitorListItemDto } from '../types/api'
+import { apiErrorMessage, visitorsApi } from '../lib/api'
+import type { VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldLabel, TextInput, TextSelect } from '../components/ui/Field'
@@ -30,8 +30,6 @@ export function CurrentlyInsidePage() {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [exitGates, setExitGates] = useState<MasterItemDto[]>([])
-  const [exitGateId, setExitGateId] = useState('')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('longest')
 
@@ -49,8 +47,7 @@ export function CurrentlyInsidePage() {
 
   useEffect(() => {
     void load()
-    if (canCheckout) void mastersApi.exitGates().then(setExitGates)
-  }, [load, canCheckout])
+  }, [load])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -88,7 +85,7 @@ export function CurrentlyInsidePage() {
     setBusyId(id)
     setMessage(null)
     try {
-      await visitorsApi.checkOut(id, exitGateId || undefined)
+      await visitorsApi.checkOut(id)
       setMessage('Visitor checked out.')
       await load()
     } catch (e) {
@@ -135,20 +132,6 @@ export function CurrentlyInsidePage() {
           </div>
         </Panel>
       </div>
-
-      {canCheckout ? (
-        <Panel className="mb-4 max-w-sm">
-          <FieldLabel htmlFor="insideExitGate">Exit gate</FieldLabel>
-          <TextSelect id="insideExitGate" value={exitGateId} onChange={(e) => setExitGateId(e.target.value)}>
-            <option value="">Default</option>
-            {exitGates.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-          </TextSelect>
-        </Panel>
-      ) : null}
 
       <div aria-live="polite" aria-atomic="true">
         {error ? (

@@ -1,13 +1,16 @@
 import { useSettingsStore } from '../store/settingsStore'
 import { cn } from '../lib/utils'
 
+const DEFAULT_LOGO = '/branding/tiaano-logo.png'
+const FALLBACK_LOGO = '/branding/tiaano-logo.svg'
+
 export function BrandLogo({ className, light = false }: { className?: string; light?: boolean }) {
   const logoSrc = useSettingsStore((s) => s.logoSrc)
   const company = useSettingsStore((s) => s.settings.companyName)
 
   return (
     <img
-      src={logoSrc}
+      src={logoSrc || DEFAULT_LOGO}
       alt={company}
       className={cn(
         'h-10 w-auto max-w-[220px] object-contain object-left',
@@ -16,9 +19,15 @@ export function BrandLogo({ className, light = false }: { className?: string; li
       )}
       onError={(e) => {
         const el = e.currentTarget as HTMLImageElement
-        if (!el.src.endsWith('/branding/tiaano-logo.png')) {
-          el.src = '/branding/tiaano-logo.png'
+        // Walk the fallback chain once: configured path → default PNG → SVG shipped in public/.
+        if (el.dataset.fallback === 'svg') return
+        if (el.dataset.fallback === 'png' || el.src.endsWith(DEFAULT_LOGO)) {
+          el.dataset.fallback = 'svg'
+          el.src = FALLBACK_LOGO
+          return
         }
+        el.dataset.fallback = 'png'
+        el.src = DEFAULT_LOGO
       }}
     />
   )
