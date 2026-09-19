@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
@@ -30,6 +31,8 @@ public interface IVisitorService
     Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes);
     Task<FaceSearchMatchDto?> FaceSearchAsync(string photoBase64, ClaimsPrincipal user);
     Task<FaceCheckoutMatchDto?> FaceIdentifyInsideAsync(string photoBase64, ClaimsPrincipal user);
+    /// <summary>Validates that a visitor photo contains exactly one detectable face (no persistence).</summary>
+    FacePhotoValidationDto ValidateVisitorPhoto(string photoBase64);
 }
 
 public class VisitorService : IVisitorService
@@ -45,6 +48,8 @@ public class VisitorService : IVisitorService
     private readonly ITenantContext _tenant;
     private readonly ISiteService _sites;
     private readonly IFaceEmbeddingService _faces;
+    private readonly IPassNumberService _passNumbers;
+    private readonly IFeedbackService _feedback;
     private static readonly Regex IndianPhone = new(@"^(\+91[\-\s]?)?[6-9]\d{9}$|^0\d{2,4}[\-\s]?\d{6,8}$", RegexOptions.Compiled);
 
     public VisitorService(
@@ -58,7 +63,9 @@ public class VisitorService : IVisitorService
         IMediaStorageService media,
         ITenantContext tenant,
         ISiteService sites,
-        IFaceEmbeddingService faces)
+        IFaceEmbeddingService faces,
+        IPassNumberService passNumbers,
+        IFeedbackService feedback)
     {
         _db = db;
         _settings = settings;
@@ -71,6 +78,8 @@ public class VisitorService : IVisitorService
         _tenant = tenant;
         _sites = sites;
         _faces = faces;
+        _passNumbers = passNumbers;
+        _feedback = feedback;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -96,11 +105,16 @@ public class VisitorService : IVisitorService
         if (settings.PhotoRequired && string.IsNullOrWhiteSpace(request.PhotoBase64))
             throw new InvalidOperationException("Visitor photo is required.");
 
-        var idTypeId = await ResolveRequiredIdTypeAsync(request);
-        if (string.IsNullOrWhiteSpace(request.IdNumber))
-            throw new InvalidOperationException("ID number is required.");
-        if (request.IdNumber.Trim().Length > 40)
+        var hasIdType = !string.IsNullOrWhiteSpace(request.IdTypeName)
+            || (request.IdTypeId is Guid tid && tid != Guid.Empty);
+        var hasIdNumber = !string.IsNullOrWhiteSpace(request.IdNumber);
+        if (settings.IdVerificationRequired && (!hasIdType || !hasIdNumber))
+            throw new InvalidOperationException("ID type and ID number are required.");
+        if (hasIdType != hasIdNumber)
+            throw new InvalidOperationException("Provide both ID type and ID number, or leave both blank.");
+        if (hasIdNumber && request.IdNumber!.Trim().Length > 40)
             throw new InvalidOperationException("ID number must be at most 40 characters.");
+        Guid? idTypeId = hasIdType ? await ResolveOptionalIdTypeAsync(request) : null;
 
         var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
 
@@ -118,11 +132,9 @@ public class VisitorService : IVisitorService
         if (locations.Any(l => l.RequiresOtherText) && string.IsNullOrWhiteSpace(request.OtherLocationText))
             throw new InvalidOperationException("Please specify the other location.");
 
-        var passNumber = (request.PassNumber ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(passNumber))
-            throw new InvalidOperationException("Pass number is required.");
-        if (passNumber.Length > 80)
-            throw new InvalidOperationException("Pass number must be at most 80 characters.");
+        // Always allocate from the tenant series — free-text desk badges collide with unique PassCode.
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        var passNumber = await _passNumbers.AllocateNextAsync(userId);
 
         Visitor visitor;
         Visitor? newVisitor = null;
@@ -152,6 +164,7 @@ public class VisitorService : IVisitorService
             // history. The query filter keeps this from reaching across tenants or sites.
             visitor = await _db.Visitors.FirstOrDefaultAsync(v => v.Id == request.RecognizedVisitorId.Value)
                 ?? throw new InvalidOperationException("Recognised visitor record not found.");
+            await EnsureVisitorNotAlreadyInsideAsync(visitor.Id);
             visitor.FullName = request.VisitorName.Trim();
             visitor.CompanyName = request.CompanyName.Trim();
             visitor.Phone = request.Telephone?.Trim();
@@ -161,6 +174,14 @@ public class VisitorService : IVisitorService
         }
         else
         {
+            // Even without an explicit match confirmation, block if the capture matches someone already inside.
+            if (!string.IsNullOrWhiteSpace(request.PhotoBase64) && _faces.IsAvailable)
+            {
+                var matchedId = await TryFindMatchingVisitorIdAsync(request.PhotoBase64);
+                if (matchedId is Guid mid)
+                    await EnsureVisitorNotAlreadyInsideAsync(mid);
+            }
+
             visitor = new Visitor
             {
                 TenantId = ResolveTenantId(user),
@@ -235,17 +256,20 @@ public class VisitorService : IVisitorService
             await EnrolFaceAsync(visitor.Id, request.PhotoBase64, user);
         }
 
-        var key = SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
-        _db.VisitorDocuments.Add(new VisitorDocument
+        if (idTypeId is Guid resolvedIdType && hasIdNumber)
         {
-            VisitorId = visitor.Id,
-            VisitorVisitId = visit.Id,
-            IdTypeId = idTypeId,
-            IdNumberEncrypted = SensitiveDataHelper.Encrypt(request.IdNumber.Trim(), key),
-            IdNumberMasked = SensitiveDataHelper.MaskId(request.IdNumber.Trim()),
-            VerificationStatus = IdVerificationStatus.Verified,
-            CreatedBy = user.Identity?.Name
-        });
+            var key = SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
+            _db.VisitorDocuments.Add(new VisitorDocument
+            {
+                VisitorId = visitor.Id,
+                VisitorVisitId = visit.Id,
+                IdTypeId = resolvedIdType,
+                IdNumberEncrypted = SensitiveDataHelper.Encrypt(request.IdNumber!.Trim(), key),
+                IdNumberMasked = SensitiveDataHelper.MaskId(request.IdNumber.Trim()),
+                VerificationStatus = IdVerificationStatus.Verified,
+                CreatedBy = user.Identity?.Name
+            });
+        }
         await _db.SaveChangesAsync();
 
         // A pass is only valid for a visit that is cleared to enter; pending-approval visits get one at check-in.
@@ -321,7 +345,28 @@ public class VisitorService : IVisitorService
         _db.VisitorVisits.Add(visit);
         await SaveNewVisitAsync(visit, visitor, settings.VisitorIdPrefix);
 
+        // Reminders are best-effort: a notify failure must not roll back the appointment.
+        try
+        {
+            await TryQueueAppointmentAckAsync(visit, visitor, host);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Appointment acknowledgement notify failed for visit {VisitId}", visit.Id);
+        }
+
         return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+    }
+
+    private async Task TryQueueAppointmentAckAsync(VisitorVisit visit, Visitor visitor, Employee host)
+    {
+        var when = $"{visit.ExpectedDate:yyyy-MM-dd} {visit.ExpectedTime:HH:mm}";
+        var subject = $"Appointment scheduled: {visitor.FullName}";
+        var body = $"Expected visitor {visitor.FullName} ({visitor.CompanyName}) on {when}.";
+        if (!string.IsNullOrWhiteSpace(host.Email))
+            await _notifications.NotifyAsync("Email", host.Email, subject, body);
+        if (!string.IsNullOrWhiteSpace(host.UserId))
+            await _notifications.NotifyAsync("Push", host.UserId, subject, body);
     }
 
     public async Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes)
@@ -363,6 +408,7 @@ public class VisitorService : IVisitorService
 
         var settings = await _settings.GetAsync();
         var dto = MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
+        var feedback = await _feedback.GetForVisitAsync(visitId);
         return new VisitorDetailDto
         {
             VisitId = dto.VisitId,
@@ -409,6 +455,7 @@ public class VisitorService : IVisitorService
                 RejectionReason = a.RejectionReason,
                 CreatedAt = a.CreatedAt
             }).ToList(),
+            Feedback = feedback,
         };
     }
 
@@ -430,7 +477,7 @@ public class VisitorService : IVisitorService
         approval.ActionByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         approval.ActionAt = DateTime.UtcNow;
         if (approval.Id == Guid.Empty) _db.Approvals.Add(approval);
-        await _db.SaveChangesAsync();
+        await SaveVisitLifecycleAsync();
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
     }
@@ -457,7 +504,7 @@ public class VisitorService : IVisitorService
         approval.ActionByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         approval.ActionAt = DateTime.UtcNow;
         if (approval.Id == Guid.Empty) _db.Approvals.Add(approval);
-        await _db.SaveChangesAsync();
+        await SaveVisitLifecycleAsync();
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
     }
@@ -470,6 +517,7 @@ public class VisitorService : IVisitorService
 
         var settings = await _settings.GetAsync();
         EnsureCheckInAllowed(visit, settings);
+        await EnsureVisitorNotAlreadyInsideAsync(visit.VisitorId, excludeVisitId: visit.Id);
 
         visit.Status = VisitStatus.Inside;
         visit.CheckInAt = DateTime.UtcNow;
@@ -496,7 +544,7 @@ public class VisitorService : IVisitorService
         pass.PrintCount += 1;
         pass.LastPrintedAt = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync();
+        await SaveVisitLifecycleAsync();
 
         return await BuildPassDto(visit, pass, webRoot);
     }
@@ -515,6 +563,7 @@ public class VisitorService : IVisitorService
             ?? throw new InvalidOperationException("Visit not found.");
 
         EnsureCheckOutAllowed(visit);
+        await _feedback.EnsureFeedbackCompleteAsync(visitId);
 
         visit.Status = VisitStatus.CheckedOut;
         visit.CheckOutAt = DateTime.UtcNow;
@@ -525,7 +574,7 @@ public class VisitorService : IVisitorService
         foreach (var pass in visit.Passes.Where(p => p.IsActive))
             pass.IsActive = false;
 
-        await _db.SaveChangesAsync();
+        await SaveVisitLifecycleAsync();
 
         var visitorName = visit.Visitor.FullName;
         var visitorEmail = visit.Visitor.Email;
@@ -1009,6 +1058,8 @@ public class VisitorService : IVisitorService
         // Tenant query filter removed the visitor: treat as no match rather than leaking existence.
         if (visitor is null) return null;
 
+        var currentlyInside = await _db.VisitorVisits.AsNoTracking()
+            .AnyAsync(v => v.VisitorId == visitor.Id && v.Status == VisitStatus.Inside);
 
         return new FaceSearchMatchDto
         {
@@ -1021,7 +1072,8 @@ public class VisitorService : IVisitorService
             PhotoUrl = visitor.PhotoPath is null ? null : _media.ToPublicApiPath(Path.GetFileName(visitor.PhotoPath)),
             LastVisitDate = visitor.LastVisitDate,
             TotalVisits = visitor.TotalVisits,
-            Similarity = Math.Round(bestSimilarity, 4)
+            Similarity = Math.Round(bestSimilarity, 4),
+            IsCurrentlyInside = currentlyInside
         };
     }
 
@@ -1186,6 +1238,7 @@ public class VisitorService : IVisitorService
 
     private async Task SavePhotoAsync(Guid visitorId, Guid visitId, string base64, string webRoot, string? userName)
     {
+        _ = webRoot;
         var raw = base64.Contains(',') ? base64.Split(',')[1] : base64;
         byte[] bytes;
         try
@@ -1196,6 +1249,9 @@ public class VisitorService : IVisitorService
         {
             throw new InvalidOperationException("Photo data is invalid.");
         }
+
+        // Exactly-one-face gate BEFORE any permanent media write.
+        _faces.EnsureExactlyOneFace(bytes);
 
         var fileName = await _media.SaveVisitorPhotoAsync(visitorId, bytes);
         _ = _media.IsAllowedImage(bytes, out var contentType);
@@ -1214,6 +1270,37 @@ public class VisitorService : IVisitorService
             CreatedBy = userName
         });
         await _db.SaveChangesAsync();
+    }
+
+    public FacePhotoValidationDto ValidateVisitorPhoto(string photoBase64)
+    {
+        if (string.IsNullOrWhiteSpace(photoBase64))
+            throw new InvalidOperationException(FacePhotoRules.NoFaceMessage);
+
+        var raw = photoBase64.Contains(',') ? photoBase64.Split(',')[1] : photoBase64;
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(raw);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Photo data is invalid.");
+        }
+
+        if (!_media.IsAllowedImage(bytes, out _))
+            throw new InvalidOperationException("Photo must be a valid JPEG, PNG, or WebP image under 5MB.");
+
+        var faceCount = _faces.CountFaces(bytes);
+        if (faceCount != 1)
+            throw new InvalidOperationException(FacePhotoRules.MessageForCount(faceCount));
+
+        return new FacePhotoValidationDto
+        {
+            FaceCount = faceCount,
+            Accepted = true,
+            Status = "Ready to capture"
+        };
     }
 
     private async Task<IQueryable<VisitorVisit>> ApplyHostScopeAsync(IQueryable<VisitorVisit> query, ClaimsPrincipal user)
@@ -1246,6 +1333,23 @@ public class VisitorService : IVisitorService
             .AnyAsync(e => e.UserId == userId && e.Id == visit.HostEmployeeId);
         if (!isHost)
             throw new UnauthorizedAccessException("Hosts may only view their own visitors.");
+    }
+
+    /// <summary>
+    /// Persists Visit lifecycle mutations under the SQL Server rowversion token.
+    /// A stale concurrent update becomes <see cref="ConcurrencyConflictException"/> (HTTP 409),
+    /// not an unhandled 500 / opaque DbUpdateException.
+    /// </summary>
+    private async Task SaveVisitLifecycleAsync()
+    {
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new ConcurrencyConflictException();
+        }
     }
 
     /// <summary>
@@ -1283,6 +1387,57 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("VISITOR ALREADY CHECKED OUT");
         if (visit.Status != VisitStatus.Inside)
             throw new InvalidOperationException("Visitor is not currently inside.");
+    }
+
+    private async Task EnsureVisitorNotAlreadyInsideAsync(Guid visitorId, Guid? excludeVisitId = null)
+    {
+        var alreadyInside = await _db.VisitorVisits.AsNoTracking()
+            .AnyAsync(v =>
+                v.VisitorId == visitorId
+                && v.Status == VisitStatus.Inside
+                && (excludeVisitId == null || v.Id != excludeVisitId.Value));
+        if (alreadyInside)
+            throw new InvalidOperationException(
+                "This visitor is already checked in. Check them out before registering or checking in again.");
+    }
+
+    /// <summary>Best face match in the tenant, or null when below threshold / unavailable.</summary>
+    private async Task<Guid?> TryFindMatchingVisitorIdAsync(string photoBase64)
+    {
+        try
+        {
+            var probe = EmbedPhoto(photoBase64);
+            Guid? bestVisitorId = null;
+            var bestSimilarity = double.MinValue;
+
+            var candidates = _db.VisitorFaceDescriptors.AsNoTracking()
+                .Where(f => f.Model == _faces.ModelId && f.Dimensions == _faces.Dimensions)
+                .OrderByDescending(f => f.CreatedAt)
+                .Select(f => new { f.VisitorId, f.Descriptor })
+                .AsAsyncEnumerable();
+
+            await foreach (var candidate in candidates)
+            {
+                var stored = FromBytes(candidate.Descriptor);
+                if (stored.Length != probe.Vector.Length) continue;
+
+                var similarity = _faces.Similarity(probe.Vector, stored);
+                if (similarity > bestSimilarity)
+                {
+                    bestSimilarity = similarity;
+                    bestVisitorId = candidate.VisitorId;
+                }
+            }
+
+            if (bestVisitorId is null || bestSimilarity < _faces.MatchThreshold)
+                return null;
+            return bestVisitorId;
+        }
+        catch (InvalidOperationException)
+        {
+            // No face / multiple faces — let normal photo validation handle messaging elsewhere.
+            return null;
+        }
     }
 
     private async Task<string> NextVisitorNumberAsync(string prefix)
@@ -1334,13 +1489,13 @@ public class VisitorService : IVisitorService
     }
 
     /// <summary>
-    /// Prefer the desk-issued badge number captured at registration; fall back to a generated code
-    /// only for visits registered before pass numbers were required.
+    /// Prefer the allocated pass number; fall back to VisitNumber for legacy visits.
+    /// Never invent a random code that could collide with a reused desk badge.
     /// </summary>
     private static string ResolvePassCode(VisitorVisit visit) =>
-        string.IsNullOrWhiteSpace(visit.PassNumber)
-            ? $"PASS-{Guid.NewGuid():N}"[..20].ToUpperInvariant()
-            : visit.PassNumber.Trim();
+        !string.IsNullOrWhiteSpace(visit.PassNumber)
+            ? visit.PassNumber.Trim()
+            : visit.VisitNumber;
 
     /// <summary>
     /// Persists a new visit, re-issuing the visit number if a concurrent registration claimed it first.
@@ -1382,18 +1537,27 @@ public class VisitorService : IVisitorService
     }
 
     /// <summary>
-    /// Serialises number allocation for one tenant and year. The lock is owned by the surrounding
-    /// transaction, so it is always released on commit or rollback. Providers without application
-    /// locks fall back to the unique index plus retry.
+    /// Serialises number allocation for one tenant and year via ADO.NET <c>sp_getapplock</c>.
+    /// The lock is owned by the surrounding EF transaction connection. Providers without
+    /// application locks fall back to the unique index plus retry.
     /// </summary>
     private async Task AcquireNumberAllocationLockAsync(Guid tenantId, string prefix)
     {
         if (!_db.Database.IsSqlServer()) return;
 
         var resource = $"vms-number:{tenantId}:{VisitNumberPrefix(prefix)}";
-        await _db.Database.ExecuteSqlRawAsync(
-            "EXEC sp_getapplock @Resource = {0}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000",
-            resource);
+        var connection = (Microsoft.Data.SqlClient.SqlConnection)_db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync();
+
+        var transaction = (Microsoft.Data.SqlClient.SqlTransaction?)_db.Database.CurrentTransaction?.GetDbTransaction();
+
+        await using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText =
+            "EXEC sp_getapplock @Resource = @Resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000";
+        cmd.Parameters.Add(AdoSql.NVarChar("@Resource", resource, 255));
+        await cmd.ExecuteNonQueryAsync();
     }
 
     private static bool IsDuplicateNumber(DbUpdateException ex)
@@ -1424,7 +1588,7 @@ public class VisitorService : IVisitorService
         if (request.DepartmentId == Guid.Empty)
             throw new InvalidOperationException("Department is required.");
         if (!request.HostEmployeeId.HasValue && string.IsNullOrWhiteSpace(request.HostName))
-            throw new InvalidOperationException("Host name is required.");
+            throw new InvalidOperationException("Person to meet is required.");
         if (request.PurposeIds.Count == 0 && string.IsNullOrWhiteSpace(request.PurposeNotes))
             throw new InvalidOperationException("Purpose of visit is required.");
         if (!string.IsNullOrWhiteSpace(request.Telephone))
@@ -1453,9 +1617,9 @@ public class VisitorService : IVisitorService
     private static readonly string[] StaticIdTypeNames = ["Aadhaar", "Pan Card", "Passport"];
 
     /// <summary>
-    /// Resolves the mandatory ID proof to a tenant IdTypes row, creating the static type if needed.
+    /// Resolves an optional ID proof to a tenant IdTypes row, creating the static type if needed.
     /// </summary>
-    private async Task<Guid> ResolveRequiredIdTypeAsync(RegisterVisitorRequest request)
+    private async Task<Guid> ResolveOptionalIdTypeAsync(RegisterVisitorRequest request)
     {
         string? name = null;
         if (!string.IsNullOrWhiteSpace(request.IdTypeName))
@@ -1479,7 +1643,7 @@ public class VisitorService : IVisitorService
         }
         else
         {
-            throw new InvalidOperationException("ID type is required.");
+            throw new InvalidOperationException("ID type is required when an ID number is provided.");
         }
 
         var existing = await _db.IdTypes.FirstOrDefaultAsync(t =>
@@ -1519,7 +1683,7 @@ public class VisitorService : IVisitorService
 
         var name = hostName?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(name))
-            throw new InvalidOperationException("Host name is required.");
+            throw new InvalidOperationException("Person to meet is required.");
 
         var existing = await _db.Employees.Include(e => e.Department)
             .FirstOrDefaultAsync(e =>

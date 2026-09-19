@@ -248,10 +248,73 @@ public class RegisterVisitorRequest
     public Guid? RecognizedVisitorId { get; set; }
 
     /// <summary>
-    /// Physical visitor-pass / badge number handed to the visitor. Required at registration.
+    /// Optional client-supplied value (ignored). The server always allocates from the tenant series.
     /// </summary>
-    [Required, MaxLength(80)]
-    public string PassNumber { get; set; } = string.Empty;
+    [MaxLength(80)]
+    public string? PassNumber { get; set; }
+}
+
+public class PassNumberSeriesDto
+{
+    public Guid Id { get; set; }
+    public Guid? SiteId { get; set; }
+    public string Prefix { get; set; } = "VMS-";
+    public int? Year { get; set; }
+    public int StartNumber { get; set; }
+    public int EndNumber { get; set; }
+    public int CurrentNumber { get; set; }
+    public bool IsActive { get; set; }
+    public string FormatExample { get; set; } = string.Empty;
+}
+
+public class UpsertPassNumberSeriesRequest
+{
+    public Guid? SiteId { get; set; }
+
+    [Required, MaxLength(20)]
+    public string Prefix { get; set; } = "VMS-";
+
+    public int? Year { get; set; }
+    public int StartNumber { get; set; } = 1000;
+    public int EndNumber { get; set; } = 999999;
+    public int? CurrentNumber { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public class PassNumberAllocationDto
+{
+    public Guid Id { get; set; }
+    public Guid SeriesId { get; set; }
+    public string UserId { get; set; } = string.Empty;
+    public string? UserName { get; set; }
+    public string? FullName { get; set; }
+    public int StartNumber { get; set; }
+    public int EndNumber { get; set; }
+    public int CurrentNumber { get; set; }
+    public bool IsActive { get; set; }
+}
+
+public class UpsertPassNumberAllocationRequest
+{
+    public Guid? Id { get; set; }
+    public Guid? SeriesId { get; set; }
+
+    [Required]
+    public string UserId { get; set; } = string.Empty;
+
+    public int StartNumber { get; set; }
+    public int EndNumber { get; set; }
+    public int? CurrentNumber { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public class RegisterDevicePushTokenRequest
+{
+    [Required, MaxLength(500)]
+    public string Token { get; set; } = string.Empty;
+
+    [MaxLength(40)]
+    public string Platform { get; set; } = "unknown";
 }
 
 public class FaceSearchRequest
@@ -262,6 +325,14 @@ public class FaceSearchRequest
     /// </summary>
     [Required]
     public string PhotoBase64 { get; set; } = string.Empty;
+}
+
+/// <summary>Result of the exactly-one-face visitor photo gate (no persistence).</summary>
+public class FacePhotoValidationDto
+{
+    public int FaceCount { get; set; }
+    public bool Accepted { get; set; }
+    public string Status { get; set; } = string.Empty;
 }
 
 public class FaceSearchMatchDto
@@ -278,6 +349,9 @@ public class FaceSearchMatchDto
 
     /// <summary>Cosine similarity — higher is a closer match. Surfaced for operator transparency.</summary>
     public double Similarity { get; set; }
+
+    /// <summary>True when this visitor already has an open (Inside) visit and must check out first.</summary>
+    public bool IsCurrentlyInside { get; set; }
 }
 
 /// <summary>A visitor currently inside, recognised from a live capture at the exit desk.</summary>
@@ -367,6 +441,7 @@ public class VisitorDetailDto : VisitorListItemDto
     public string? CheckedInBy { get; set; }
     public string? CheckedOutBy { get; set; }
     public IReadOnlyList<ApprovalHistoryDto> ApprovalHistory { get; set; } = Array.Empty<ApprovalHistoryDto>();
+    public VisitFeedbackDto? Feedback { get; set; }
 }
 
 public class ApprovalHistoryDto
@@ -446,6 +521,19 @@ public class SettingsDto
     public bool IdVerificationRequired { get; set; }
     public int MaxVisitDurationWarningMinutes { get; set; } = 240;
     public int SessionTimeoutMinutes { get; set; } = 480;
+
+    // SMTP — configured in Settings UI. Password is write-only (never returned).
+    public bool SmtpEnabled { get; set; } = true;
+    public string SmtpHost { get; set; } = string.Empty;
+    public int SmtpPort { get; set; } = 587;
+    public bool SmtpEnableSsl { get; set; } = true;
+    public string SmtpUsername { get; set; } = string.Empty;
+    public string SmtpFromAddress { get; set; } = string.Empty;
+    public string SmtpFromName { get; set; } = "Visitor Management";
+    public bool SmtpIgnoreSslErrors { get; set; }
+    /// <summary>Optional new password. Null/empty keeps the existing stored password.</summary>
+    public string? SmtpPassword { get; set; }
+    public bool SmtpPasswordConfigured { get; set; }
 }
 
 public class PassDto
@@ -544,4 +632,62 @@ public class MasterUpsertRequest
 
     /// <summary>Locations only: the site this area belongs to. Null keeps it shared across sites.</summary>
     public Guid? SiteId { get; set; }
+}
+
+public class FeedbackQuestionDto
+{
+    public Guid Id { get; set; }
+    public string Prompt { get; set; } = string.Empty;
+    public bool IsRequired { get; set; } = true;
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+}
+
+public class FeedbackQuestionUpsertRequest
+{
+    [Required, MaxLength(300)]
+    public string Prompt { get; set; } = string.Empty;
+    public bool IsRequired { get; set; } = true;
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+}
+
+public class FeedbackAnswerInput
+{
+    [Required]
+    public Guid QuestionId { get; set; }
+
+    [Range(1, 5)]
+    public int Rating { get; set; }
+}
+
+public class SubmitVisitFeedbackRequest
+{
+    [Required]
+    public List<FeedbackAnswerInput> Answers { get; set; } = new();
+
+    [MaxLength(1000)]
+    public string? Comments { get; set; }
+}
+
+public class VisitFeedbackDto
+{
+    public Guid Id { get; set; }
+    public Guid VisitId { get; set; }
+    public Guid VisitorId { get; set; }
+    public string VisitorName { get; set; } = string.Empty;
+    public string CompanyName { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string VisitNumber { get; set; } = string.Empty;
+    public string? Comments { get; set; }
+    public DateTime SubmittedAt { get; set; }
+    public IReadOnlyList<VisitFeedbackAnswerDto> Answers { get; set; } = Array.Empty<VisitFeedbackAnswerDto>();
+}
+
+public class VisitFeedbackAnswerDto
+{
+    public Guid QuestionId { get; set; }
+    public string QuestionText { get; set; } = string.Empty;
+    public int Rating { get; set; }
 }

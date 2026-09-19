@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { useAuthStore } from '../../store/authStore'
 import { visibleMenu } from '../../lib/roles'
 import { cn, primaryRole } from '../../lib/utils'
+import { LanguageSwitcher, useI18n } from '../../i18n'
 
 const TABLET_MQ = '(max-width: 1023px)'
 
@@ -16,31 +17,25 @@ function isMenuItemActive(pathname: string, itemPath: string, allPaths: string[]
   return best === itemPath
 }
 
-function greetingForNow() {
-  const h = new Date().getHours()
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  return 'Good evening'
-}
-
 const MENU_ICONS: Record<string, string> = {
-  dashboard: '◫',
-  reception: '▣',
-  security: '⬡',
+  dashboard: '▦',
+  reception: '⌂',
   host: '◎',
   visitors: '👤',
-  inside: '●',
+  inside: '◉',
   expected: '◷',
   reports: '▤',
-  departments: '▦',
+  departments: '▣',
   purposes: '◇',
   locations: '⌖',
-  sites: '⌂',
-  users: '☺',
+  feedback: '★',
+  sites: '⬡',
+  users: '👥',
   settings: '⚙',
 }
 
 export function AppLayout() {
+  const { t } = useI18n()
   const [isTablet, setIsTablet] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia(TABLET_MQ).matches : false,
   )
@@ -56,8 +51,15 @@ export function AppLayout() {
   const role = primaryRole(user?.roles ?? [])
   const pageTitle = useMemo(() => {
     const match = items.find((i) => isMenuItemActive(location.pathname, i.path, allPaths))
-    return match?.label ?? 'Visitor Management'
-  }, [items, location.pathname, allPaths])
+    return match ? t(`nav.${match.key}`) : t('nav.visitorManagement')
+  }, [items, location.pathname, allPaths, t])
+
+  const greeting = useMemo(() => {
+    const h = new Date().getHours()
+    if (h < 12) return t('greeting.morning')
+    if (h < 17) return t('greeting.afternoon')
+    return t('greeting.evening')
+  }, [t])
 
   useEffect(() => {
     const mq = window.matchMedia(TABLET_MQ)
@@ -83,7 +85,7 @@ export function AppLayout() {
           <button
             type="button"
             className="fixed inset-0 z-30 bg-ink/35 backdrop-blur-[1px]"
-            aria-label="Close menu"
+            aria-label={t('nav.closeMenu')}
             onClick={() => setOpen(false)}
           />
         ) : null}
@@ -102,7 +104,7 @@ export function AppLayout() {
           <div className="border-b border-border/70 px-4 py-5">
             <BrandLogo className="h-10" />
             <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-              Visitor Management
+              {t('nav.visitorManagement')}
             </p>
           </div>
           <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3" aria-label="Main">
@@ -118,7 +120,7 @@ export function AppLayout() {
                     if (isTablet) setOpen(false)
                   }}
                   className={cn(
-                    'flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition duration-200',
+                    'flex min-h-12 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition duration-200',
                     active
                       ? 'bg-brand-gradient text-white shadow-md'
                       : 'text-ink-muted hover:bg-aqua-light/70 hover:text-ink',
@@ -126,21 +128,21 @@ export function AppLayout() {
                 >
                   <span
                     className={cn(
-                      'inline-flex h-7 w-7 items-center justify-center rounded-lg text-xs',
-                      active ? 'bg-white/15' : 'bg-mint text-primary',
+                      'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xl leading-none',
+                      active ? 'bg-white/20 text-white' : 'bg-mint text-primary',
                     )}
                     aria-hidden
                   >
                     {MENU_ICONS[item.key] ?? '•'}
                   </span>
-                  <span className="truncate">{item.label}</span>
+                  <span className="truncate">{t(`nav.${item.key}`)}</span>
                 </NavLink>
               )
             })}
           </nav>
           <div className="border-t border-border/70 p-3">
             <div className="rounded-xl bg-mint px-3 py-3">
-              <p className="text-xs text-ink-muted">Signed in</p>
+              <p className="text-xs text-ink-muted">{t('nav.signedIn')}</p>
               <p className="truncate text-sm font-semibold text-ink">{user?.fullName}</p>
               <p className="truncate text-xs text-primary">{role}</p>
             </div>
@@ -154,7 +156,7 @@ export function AppLayout() {
                 type="button"
                 className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-border bg-white text-ink hover:bg-aqua-light"
                 onClick={() => setOpen((v) => !v)}
-                aria-label={open ? 'Close menu' : 'Open menu'}
+                aria-label={open ? t('nav.closeMenu') : t('nav.openMenu')}
                 aria-expanded={open}
               >
                 <span className="text-lg" aria-hidden>
@@ -163,13 +165,14 @@ export function AppLayout() {
               </button>
               <div className="min-w-0">
                 <p className="truncate text-xs text-ink-muted">
-                  {greetingForNow()} · {role === 'Reception' ? 'Reception Desk' : role ?? 'Workspace'}
+                  {greeting} · {role === 'Reception' ? t('nav.receptionDesk') : role === 'Host' ? t('nav.host') : role ?? t('nav.workspace')}
                 </p>
                 <h1 className="truncate text-base font-semibold text-ink sm:text-lg">{pageTitle}</h1>
               </div>
               <div className="ml-auto flex items-center gap-2 sm:gap-3">
+                <LanguageSwitcher className="hidden sm:flex" />
                 <div className="hidden rounded-full bg-aqua-light px-3 py-1 text-xs font-medium text-primary sm:inline-flex">
-                  Live
+                  {t('nav.live')}
                 </div>
                 <div className="hidden text-right sm:block">
                   <div className="text-sm font-semibold text-ink">{user?.fullName}</div>
@@ -189,7 +192,7 @@ export function AppLayout() {
                     navigate('/login')
                   }}
                 >
-                  Sign out
+                  {t('nav.signOut')}
                 </Button>
               </div>
             </div>

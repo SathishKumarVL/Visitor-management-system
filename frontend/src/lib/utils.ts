@@ -52,7 +52,7 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
       preferred = '/reception'
       break
     case 'Security':
-      preferred = '/security'
+      preferred = '/visitors/inside'
       break
     case 'Host':
       preferred = '/host'
@@ -68,21 +68,26 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
   const keyForPath: Record<string, string> = {
     '/dashboard': 'dashboard',
     '/reception': 'reception',
-    '/security': 'security',
+    '/visitors/inside': 'inside',
     '/host': 'host',
   }
   const preferredKey = keyForPath[preferred]
   const allow = new Set(allowedMenuKeys.map((k) => k.toLowerCase()))
+  // Retired hub keys — treat as inside so Security users are not locked out.
+  if (allow.has('security') || allow.has('emergency')) {
+    allow.add('inside')
+    allow.delete('security')
+    allow.delete('emergency')
+  }
   if (preferredKey && allow.has(preferredKey)) return preferred
 
   const order = [
-    'dashboard', 'reception', 'security', 'host', 'visitors', 'inside', 'expected',
-    'reports', 'departments', 'purposes', 'locations', 'sites', 'users', 'settings',
+    'dashboard', 'reception', 'host', 'visitors', 'inside', 'expected',
+    'reports', 'departments', 'purposes', 'locations', 'feedback', 'sites', 'users', 'settings',
   ]
   const pathByKey: Record<string, string> = {
     dashboard: '/dashboard',
     reception: '/reception',
-    security: '/security',
     host: '/host',
     visitors: '/visitors',
     inside: '/visitors/inside',
@@ -91,6 +96,7 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
     departments: '/masters/departments',
     purposes: '/masters/purposes',
     locations: '/masters/locations',
+    feedback: '/masters/feedback',
     sites: '/masters/sites',
     users: '/users',
     settings: '/settings',

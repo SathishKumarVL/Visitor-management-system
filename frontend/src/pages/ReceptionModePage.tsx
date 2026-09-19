@@ -2,10 +2,12 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { BrandLogo } from '../components/BrandLogo'
 import { Alert, ModeTile } from '../components/ui/Panel'
 import { useSettingsStore } from '../store/settingsStore'
+import { useI18n } from '../i18n'
 
 export function ReceptionModePage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { t } = useI18n()
   const company = useSettingsStore((s) => s.settings.companyName)
   const registration = location.state as
     | { visitorName?: string; pendingApproval?: boolean; visitNumber?: string }
@@ -20,10 +22,13 @@ export function ReceptionModePage() {
 
         <div className="relative text-center">
           <BrandLogo className="mx-auto h-12" />
-          <p className="mt-5 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Visitor Management</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Welcome</h1>
+          <p className="mt-5 text-xs font-semibold uppercase tracking-[0.22em] text-primary">{t('reception.eyebrow')}</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{t('reception.welcome')}</h1>
           <p className="mt-2 text-sm text-ink-muted">
-            {company} reception desk — choose an action to continue
+            {t('reception.subtitle', '{company} reception desk — choose an action to continue').replace(
+              '{company}',
+              company || t('nav.visitorManagement'),
+            )}
           </p>
         </div>
 
@@ -31,11 +36,14 @@ export function ReceptionModePage() {
           <div className="relative mx-auto mt-6 max-w-xl" role="status" aria-live="polite">
             {registration?.pendingApproval ? (
               <Alert tone="warning">
-                Visitor “{registeredName}” registered{registration.visitNumber ? ` as ${registration.visitNumber}` : ''} and
-                is waiting for host approval. Check in once the host approves.
+                {t('reception.pendingApproval')
+                  .replace('{name}', registeredName)
+                  .replace('{visit}', registration.visitNumber ? ` ${registration.visitNumber}` : '')}
               </Alert>
             ) : (
-              <Alert tone="success">Visitor “{registeredName}” registered successfully.</Alert>
+              <Alert tone="success">
+                {t('reception.registeredOk').replace('{name}', registeredName)}
+              </Alert>
             )}
           </div>
         ) : null}
@@ -43,37 +51,37 @@ export function ReceptionModePage() {
         <div className="relative mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-2">
           <ModeTile
             className="min-h-40 sm:col-span-2 sm:items-center sm:text-center"
-            title="NEW VISITOR"
-            description="Register a walk-in visitor now"
+            title={t('reception.newVisitor')}
+            description={t('reception.newVisitorDesc')}
             accent
             icon="👤"
             onClick={() => navigate('/visitors/new')}
           />
           <ModeTile
             className="min-h-36"
-            title="EXPECTED VISITOR"
-            description="Open booked appointments"
+            title={t('reception.expectedVisitor')}
+            description={t('reception.expectedVisitorDesc')}
             icon="📅"
             onClick={() => navigate('/visitors/expected')}
           />
           <ModeTile
             className="min-h-36"
-            title="SEARCH VISITOR"
-            description="Find a visitor by name or company"
+            title={t('reception.searchVisitor')}
+            description={t('reception.searchVisitorDesc')}
             icon="🔍"
             onClick={() => navigate('/visitors')}
           />
           <ModeTile
             className="min-h-36"
-            title="CHECK OUT"
-            description="Face match or list checkout"
+            title={t('reception.checkOut')}
+            description={t('reception.checkOutDesc')}
             icon="➜"
             onClick={() => navigate('/checkout/face')}
           />
           <ModeTile
             className="min-h-36"
-            title="VERIFY VISITOR"
-            description="Look up by visit number on the pass"
+            title={t('reception.verifyVisitor')}
+            description={t('reception.verifyVisitorDesc')}
             icon="✓"
             onClick={() => navigate('/verify')}
           />

@@ -48,6 +48,9 @@ public interface IFaceEmbeddingService
 {
     bool IsAvailable { get; }
 
+    /// <summary>True when the SCRFD detector can count faces (does not require the ArcFace embedder).</summary>
+    bool IsDetectionAvailable { get; }
+
     /// <summary>Identifier stored alongside every template so generations are never cross-compared.</summary>
     string ModelId { get; }
 
@@ -55,8 +58,17 @@ public interface IFaceEmbeddingService
 
     double MatchThreshold { get; }
 
-    /// <summary>Embeds the most prominent face in the image.</summary>
-    /// <exception cref="FaceEmbeddingException">No usable face was found.</exception>
+    /// <summary>Counts detectable faces in the image without embedding.</summary>
+    int CountFaces(byte[] imageBytes);
+
+    /// <summary>
+    /// Visitor-photo gate: exactly one face. Throws <see cref="InvalidOperationException"/> with
+    /// <see cref="FacePhotoRules"/> messages when the count is not 1.
+    /// </summary>
+    void EnsureExactlyOneFace(byte[] imageBytes);
+
+    /// <summary>Embeds the single face in the image. Rejects 0 or 2+ faces.</summary>
+    /// <exception cref="FaceEmbeddingException">No usable single face was found.</exception>
     FaceEmbedding Embed(byte[] imageBytes);
 
     double Similarity(float[] a, float[] b);
@@ -107,10 +119,42 @@ public sealed class InsightFaceService : IFaceEmbeddingService, IDisposable
 
     public double MatchThreshold => _options.MatchThreshold;
 
+    public bool IsDetectionAvailable =>
+        _options.Enabled && !_loadFailed && File.Exists(_detectorPath);
+
     public bool IsAvailable =>
-        _options.Enabled && !_loadFailed && File.Exists(_detectorPath) && File.Exists(_embedderPath);
+        IsDetectionAvailable && File.Exists(_embedderPath);
 
     public double Similarity(float[] a, float[] b) => FaceGeometry.CosineSimilarity(a, b);
+
+    public int CountFaces(byte[] imageBytes)
+    {
+        if (!IsDetectionAvailable)
+            throw new InvalidOperationException(FacePhotoRules.DetectorUnavailableMessage);
+
+        var detector = LoadDetector();
+        RgbImage image;
+        try
+        {
+            image = RgbImage.Decode(imageBytes);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"The photo could not be read as an image: {ex.Message}");
+        }
+
+        return detector.Detect(image).Count;
+    }
+
+    public void EnsureExactlyOneFace(byte[] imageBytes)
+    {
+        if (!IsDetectionAvailable)
+            throw new InvalidOperationException(FacePhotoRules.DetectorUnavailableMessage);
+
+        var count = CountFaces(imageBytes);
+        if (count == 1) return;
+        throw new InvalidOperationException(FacePhotoRules.MessageForCount(count));
+    }
 
     public FaceEmbedding Embed(byte[] imageBytes)
     {
@@ -131,11 +175,11 @@ public sealed class InsightFaceService : IFaceEmbeddingService, IDisposable
 
         var faces = detector.Detect(image);
         if (faces.Count == 0)
-            throw new FaceEmbeddingException("No face was detected in the photo.");
+            throw new FaceEmbeddingException(FacePhotoRules.NoFaceMessage);
+        if (faces.Count > 1)
+            throw new FaceEmbeddingException(FacePhotoRules.MultipleFacesMessage);
 
-        // The visitor at the desk is the closest subject, so the largest box is the right one even
-        // when colleagues are caught in the background.
-        var face = faces.OrderByDescending(f => f.Area).First();
+        var face = faces[0];
 
         if (face.Width < _options.MinimumFacePixels || face.Height < _options.MinimumFacePixels)
             throw new FaceEmbeddingException(
@@ -145,29 +189,52 @@ public sealed class InsightFaceService : IFaceEmbeddingService, IDisposable
         return new FaceEmbedding(vector, face.Score, faces.Count, face.Width);
     }
 
+    private ScrfdDetector LoadDetector()
+    {
+        if (_detector is not null) return _detector;
+
+        lock (_gate)
+        {
+            if (_detector is not null) return _detector;
+            try
+            {
+                _detector = new ScrfdDetector(
+                    _detectorPath, _options.DetectionSize, _options.DetectionScoreThreshold);
+                _logger.LogInformation("Face detector loaded from {Path}", _detectorPath);
+            }
+            catch (Exception ex)
+            {
+                _loadFailed = true;
+                _logger.LogError(ex, "Failed to load face detector");
+                throw new InvalidOperationException(FacePhotoRules.DetectorUnavailableMessage);
+            }
+
+            return _detector;
+        }
+    }
+
     private (ScrfdDetector Detector, ArcFaceEmbedder Embedder) Load()
     {
         if (_detector is not null && _embedder is not null) return (_detector, _embedder);
 
         lock (_gate)
         {
-            if (_detector is null || _embedder is null)
+            if (_detector is not null && _embedder is not null) return (_detector, _embedder);
+
+            try
             {
-                try
-                {
-                    _detector = new ScrfdDetector(
-                        _detectorPath, _options.DetectionSize, _options.DetectionScoreThreshold);
-                    _embedder = new ArcFaceEmbedder(_embedderPath);
-                    _logger.LogInformation(
-                        "Face recognition models loaded from {Directory}",
-                        Path.GetDirectoryName(_detectorPath));
-                }
-                catch (Exception ex)
-                {
-                    _loadFailed = true;
-                    _logger.LogError(ex, "Failed to load face recognition models");
-                    throw new FaceEmbeddingException("Face recognition models could not be loaded.");
-                }
+                _detector ??= new ScrfdDetector(
+                    _detectorPath, _options.DetectionSize, _options.DetectionScoreThreshold);
+                _embedder ??= new ArcFaceEmbedder(_embedderPath);
+                _logger.LogInformation(
+                    "Face recognition models loaded from {Directory}",
+                    Path.GetDirectoryName(_detectorPath));
+            }
+            catch (Exception ex)
+            {
+                _loadFailed = true;
+                _logger.LogError(ex, "Failed to load face recognition models");
+                throw new FaceEmbeddingException("Face recognition models could not be loaded.");
             }
 
             return (_detector, _embedder);

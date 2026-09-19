@@ -39,6 +39,7 @@ public static class DbSeeder
         // "Others" is a fallback the registration flow depends on, so it is a system record rather
         // than sample content. VisitorService recreates it on demand if it is ever deleted.
         await VisitPurposeDefaults.EnsureOthersPurposeAsync(context, tenantId);
+        await FeedbackQuestionDefaults.EnsureDefaultsAsync(context, tenantId);
 
         if (!await context.SystemSettings.IgnoreQueryFilters().AnyAsync())
         {
@@ -110,6 +111,44 @@ public static class DbSeeder
         await EnsureUserAsync(userManager, context, tenantId, "admin", "System Admin", "admin@tiaano.local", AppRoles.Admin, null, seedPassword, true);
 
         await EnsureProductFoundationAsync(context, tenantId);
+        await EnsurePassNumberSeriesAsync(context, tenantId);
+        await EnsureReminderSettingAsync(context, tenantId);
+    }
+
+    private static async Task EnsurePassNumberSeriesAsync(ApplicationDbContext context, Guid tenantId)
+    {
+        if (await context.PassNumberSeries.IgnoreQueryFilters()
+                .AnyAsync(s => s.TenantId == tenantId))
+            return;
+
+        context.PassNumberSeries.Add(new PassNumberSeries
+        {
+            TenantId = tenantId,
+            Prefix = "VMS-",
+            Year = null,
+            StartNumber = 1000,
+            EndNumber = 999999,
+            CurrentNumber = 999,
+            IsActive = true
+        });
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task EnsureReminderSettingAsync(ApplicationDbContext context, Guid tenantId)
+    {
+        if (await context.SystemSettings.IgnoreQueryFilters()
+                .AnyAsync(s => s.TenantId == tenantId && s.Key == "ReminderHoursBefore"))
+            return;
+
+        context.SystemSettings.Add(new SystemSetting
+        {
+            TenantId = tenantId,
+            Key = "ReminderHoursBefore",
+            Value = "24,1",
+            Description = "Comma-separated hours before an expected visit to send reminders",
+            UpdatedBy = "system"
+        });
+        await context.SaveChangesAsync();
     }
 
     private static async Task EnsureProductFoundationAsync(ApplicationDbContext context, Guid tenantId)
@@ -328,6 +367,37 @@ public static class VisitPurposeDefaults
         context.VisitPurposes.Add(created);
         await context.SaveChangesAsync();
         return created;
+    }
+}
+
+public static class FeedbackQuestionDefaults
+{
+    private static readonly string[] DefaultPrompts =
+    [
+        "Overall visit experience",
+        "Reception / front desk service",
+        "Ease of check-in process",
+    ];
+
+    public static async Task EnsureDefaultsAsync(ApplicationDbContext context, Guid tenantId)
+    {
+        var any = await context.FeedbackQuestions.IgnoreQueryFilters()
+            .AnyAsync(q => q.TenantId == tenantId);
+        if (any) return;
+
+        for (var i = 0; i < DefaultPrompts.Length; i++)
+        {
+            context.FeedbackQuestions.Add(new FeedbackQuestion
+            {
+                TenantId = tenantId,
+                Prompt = DefaultPrompts[i],
+                IsRequired = true,
+                IsActive = true,
+                SortOrder = i + 1,
+                CreatedBy = "system"
+            });
+        }
+        await context.SaveChangesAsync();
     }
 }
 

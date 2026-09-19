@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "i18n:check": "node src/i18n/checkParity.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

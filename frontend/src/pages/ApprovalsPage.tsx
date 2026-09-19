@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { apiErrorMessage, approvalsApi } from '../lib/api'
+import { apiErrorMessage, isConflictError, approvalsApi } from '../lib/api'
 import type { VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
@@ -81,6 +81,7 @@ export function ApprovalsPage() {
       await load()
     } catch (e) {
       setError(apiErrorMessage(e, 'Unable to approve this visit.'))
+      if (isConflictError(e)) await load()
     } finally {
       setBusyId(null)
     }
@@ -104,6 +105,7 @@ export function ApprovalsPage() {
       await load()
     } catch (e) {
       setError(apiErrorMessage(e, 'Unable to reject this visit.'))
+      if (isConflictError(e)) await load()
     } finally {
       setBusyId(null)
     }
@@ -112,7 +114,7 @@ export function ApprovalsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Host"
+        eyebrow="Person to meet"
         title="Pending Approvals"
         subtitle="Visitors waiting on a decision before reception can check them in"
         actions={
@@ -133,7 +135,7 @@ export function ApprovalsPage() {
             id="approvalSearch"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Name, company, host, or visit number"
+            placeholder="Name, company, person to meet, or visit number"
           />
         </Panel>
       </div>
@@ -159,7 +161,7 @@ export function ApprovalsPage() {
           description={
             query
               ? 'No pending visit matches your search.'
-              : 'Visits appear here only while they are waiting for a host decision.'
+              : 'Visits appear here only while they are waiting for a person-to-meet decision.'
           }
         />
       ) : null}
@@ -189,7 +191,7 @@ export function ApprovalsPage() {
                         <Badge className={statusBadgeClass(v.statusLabel)}>{v.statusLabel}</Badge>
                       </div>
                       <p className="mt-1 text-sm text-ink-muted">
-                        {v.companyName} · Host {v.hostName} · {v.departmentName}
+                        {v.companyName} · Person to meet {v.hostName} · {v.departmentName}
                       </p>
                       <p className="mt-0.5 text-sm text-ink-muted">
                         {v.visitNumber} · {formatDateTime(`${v.visitDate}T${v.visitTime}`)}
@@ -233,7 +235,7 @@ export function ApprovalsPage() {
                         }
                         if (e.key === 'Escape') cancelReject()
                       }}
-                      placeholder="e.g. Host unavailable today"
+                      placeholder="e.g. Person to meet unavailable today"
                       aria-invalid={reasonError ? true : undefined}
                       aria-describedby={reasonError ? `reason-error-${v.visitId}` : undefined}
                     />

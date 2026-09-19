@@ -22,6 +22,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<VisitPurpose> VisitPurposes => Set<VisitPurpose>();
     public DbSet<Location> Locations => Set<Location>();
     public DbSet<IdType> IdTypes => Set<IdType>();
+    public DbSet<FeedbackQuestion> FeedbackQuestions => Set<FeedbackQuestion>();
+    public DbSet<VisitFeedback> VisitFeedbacks => Set<VisitFeedback>();
+    public DbSet<VisitFeedbackAnswer> VisitFeedbackAnswers => Set<VisitFeedbackAnswer>();
     public DbSet<Visitor> Visitors => Set<Visitor>();
     public DbSet<VisitorVisit> VisitorVisits => Set<VisitorVisit>();
     public DbSet<VisitorVisitPurpose> VisitorVisitPurposes => Set<VisitorVisitPurpose>();
@@ -34,6 +37,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
     public DbSet<EmergencyRollCallEvent> EmergencyRollCallEvents => Set<EmergencyRollCallEvent>();
+    public DbSet<PassNumberSeries> PassNumberSeries => Set<PassNumberSeries>();
+    public DbSet<PassNumberAllocation> PassNumberAllocations => Set<PassNumberAllocation>();
+    public DbSet<DevicePushToken> DevicePushTokens => Set<DevicePushToken>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<ProductModule> ProductModules => Set<ProductModule>();
     public DbSet<TenantModuleEntitlement> TenantModuleEntitlements => Set<TenantModuleEntitlement>();
@@ -105,6 +111,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.VisitDate);
             e.HasIndex(x => x.PreRegistrationReference);
+            e.Property(x => x.RowVersion).IsRowVersion();
             e.HasOne(x => x.Visitor).WithMany(v => v.Visits).HasForeignKey(x => x.VisitorId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Department).WithMany().HasForeignKey(x => x.DepartmentId)
@@ -181,9 +188,46 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<NotificationOutbox>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.IsSent });
+            e.HasIndex(x => new { x.TenantId, x.IdempotencyKey })
+                .IsUnique()
+                .HasFilter("[IdempotencyKey] IS NOT NULL");
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
             // Fail closed: a queued notification is only visible to the tenant that queued it.
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<PassNumberSeries>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.IsActive });
+            e.Property(x => x.Prefix).HasMaxLength(20).IsRequired();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<PassNumberAllocation>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.UserId, x.IsActive });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Series).WithMany(s => s.Allocations).HasForeignKey(x => x.SeriesId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<DevicePushToken>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.UserId });
+            e.HasIndex(x => new { x.TenantId, x.Token }).IsUnique();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -239,6 +283,37 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<FeedbackQuestion>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.SortOrder });
+            e.Property(x => x.Prompt).IsRequired().HasMaxLength(300);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<VisitFeedback>(e =>
+        {
+            e.HasIndex(x => x.VisitorVisitId).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.SubmittedAt });
+            e.Property(x => x.VisitorName).IsRequired().HasMaxLength(150);
+            e.Property(x => x.CompanyName).IsRequired().HasMaxLength(200);
+            e.Property(x => x.VisitNumber).IsRequired().HasMaxLength(50);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.VisitorVisit).WithMany().HasForeignKey(x => x.VisitorVisitId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Visitor).WithMany().HasForeignKey(x => x.VisitorId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<VisitFeedbackAnswer>(e =>
+        {
+            e.HasIndex(x => x.VisitFeedbackId);
+            e.Property(x => x.QuestionText).IsRequired().HasMaxLength(300);
+            e.HasOne(x => x.VisitFeedback).WithMany(f => f.Answers).HasForeignKey(x => x.VisitFeedbackId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.FeedbackQuestion).WithMany().HasForeignKey(x => x.FeedbackQuestionId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         builder.Entity<RefreshToken>(e =>

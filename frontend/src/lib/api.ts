@@ -5,12 +5,10 @@ import type {
   CreateEmployeeRequest,
   CreateUserRequest,
   DashboardDto,
-  EmergencyRollCallResultDto,
-  EmergencyRollCallStatus,
-  EmergencyRosterDto,
   EmployeeDto,
   ExpectedVisitorRequest,
   FaceCheckoutMatchDto,
+  FacePhotoValidationDto,
   FaceSearchMatchDto,
   LoginResponse,
   MasterItemDto,
@@ -27,6 +25,14 @@ import type {
   VisitorDetailDto,
   VisitorListItemDto,
   VisitorSearchParams,
+  PassNumberSeriesDto,
+  UpsertPassNumberSeriesRequest,
+  PassNumberAllocationDto,
+  UpsertPassNumberAllocationRequest,
+  FeedbackQuestionDto,
+  FeedbackQuestionUpsertRequest,
+  SubmitVisitFeedbackRequest,
+  VisitFeedbackDto,
 } from '../types/api'
 
 const TOKEN_KEY = 'tiaano_vms_token'
@@ -164,12 +170,23 @@ export function apiErrorMessage(error: unknown, fallback = 'Request failed'): st
       return 'The server took too long to respond. Please try again.'
     }
     const data = error.response?.data as ApiResponse<unknown> | undefined
+    if (error.response?.status === 409) {
+      return (
+        data?.message ||
+        'The visit was modified by another user. Refresh the visit and try again.'
+      )
+    }
     if (data?.message) return data.message
     if (data?.errors?.length) return data.errors.join(', ')
     if (error.message) return error.message
   }
   if (error instanceof Error) return error.message
   return fallback
+}
+
+/** True when the API rejected a stale Visit lifecycle update (optimistic concurrency). */
+export function isConflictError(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.response?.status === 409
 }
 
 async function unwrap<T>(promise: Promise<{ data: ApiResponse<T> }>): Promise<T> {
@@ -210,10 +227,22 @@ export const visitorsApi = {
     unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {})),
   checkOut: (id: string) =>
     unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, {})),
+  getFeedback: async (id: string) => {
+    const { data } = await api.get<ApiResponse<VisitFeedbackDto | null>>(`/visitors/${id}/feedback`)
+    if (!data.success) {
+      throw new Error(data.message || data.errors?.join(', ') || 'Request failed')
+    }
+    return data.data ?? null
+  },
+  submitFeedback: (id: string, body: SubmitVisitFeedbackRequest) =>
+    unwrap(api.post<ApiResponse<VisitFeedbackDto>>(`/visitors/${id}/feedback`, body)),
   faceSearch: (photoBase64: string) =>
     unwrap(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { photoBase64 })),
   faceIdentifyInside: (photoBase64: string) =>
     unwrap(api.post<ApiResponse<FaceCheckoutMatchDto | null>>('/visitors/face-identify-inside', { photoBase64 })),
+  /** Exactly-one-face gate before accepting a visitor registration photo. Does not store the image. */
+  validatePhoto: (photoBase64: string) =>
+    unwrap(api.post<ApiResponse<FacePhotoValidationDto>>('/visitors/validate-photo', { photoBase64 })),
 }
 
 export const approvalsApi = {
@@ -261,6 +290,24 @@ export const mastersApi = {
     unwrap(api.put<ApiResponse<MasterItemDto>>(`/masters/locations/${id}`, body)),
   idTypes: (activeOnly = true) =>
     unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/id-types', { params: { activeOnly } })),
+  feedbackQuestions: (activeOnly = true) =>
+    unwrap(
+      api.get<ApiResponse<FeedbackQuestionDto[]>>('/masters/feedback-questions', {
+        params: { activeOnly },
+      }),
+    ),
+  feedbackResponses: (take = 50) =>
+    unwrap(
+      api.get<ApiResponse<VisitFeedbackDto[]>>('/masters/feedback-responses', {
+        params: { take },
+      }),
+    ),
+  createFeedbackQuestion: (body: FeedbackQuestionUpsertRequest) =>
+    unwrap(api.post<ApiResponse<FeedbackQuestionDto>>('/masters/feedback-questions', body)),
+  updateFeedbackQuestion: (id: string, body: FeedbackQuestionUpsertRequest) =>
+    unwrap(api.put<ApiResponse<FeedbackQuestionDto>>(`/masters/feedback-questions/${id}`, body)),
+  deactivateFeedbackQuestion: (id: string) =>
+    unwrap(api.post<ApiResponse<object>>(`/masters/feedback-questions/${id}/deactivate`)),
   deactivate: (type: string, id: string) =>
     unwrap(api.post<ApiResponse<object>>(`/masters/${type}/${id}/deactivate`)),
 }
@@ -278,6 +325,15 @@ export const settingsApi = {
       }),
     )
   },
+  getPassSeries: () => unwrap(api.get<ApiResponse<PassNumberSeriesDto | null>>('/pass-numbers/series')),
+  upsertPassSeries: (body: UpsertPassNumberSeriesRequest) =>
+    unwrap(api.put<ApiResponse<PassNumberSeriesDto>>('/pass-numbers/series', body)),
+  listPassAllocations: () =>
+    unwrap(api.get<ApiResponse<PassNumberAllocationDto[]>>('/pass-numbers/allocations')),
+  upsertPassAllocation: (body: UpsertPassNumberAllocationRequest) =>
+    unwrap(api.put<ApiResponse<PassNumberAllocationDto>>('/pass-numbers/allocations', body)),
+  sendTestEmail: (to: string) =>
+    unwrap(api.post<ApiResponse<object>>('/settings/test-email', { to })),
 }
 
 export const sitesApi = {
@@ -306,16 +362,4 @@ export const reportsApi = {
     })
     return res.data as Blob
   },
-}
-
-export const emergencyApi = {
-  roster: () => unwrap(api.get<ApiResponse<EmergencyRosterDto>>('/emergency/roster')),
-  rollCall: (visitId: string, status: EmergencyRollCallStatus, notes?: string) =>
-    unwrap(
-      api.post<ApiResponse<EmergencyRollCallResultDto>>('/emergency/roll-call', {
-        visitId,
-        status,
-        notes: notes ?? null,
-      }),
-    ),
 }

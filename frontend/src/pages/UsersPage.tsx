@@ -6,7 +6,11 @@ import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/ui/Field'
 import { menusForRole, type MenuKey } from '../lib/roles'
 
-const ROLES = ['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host']
+const ROLES = ['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host'] as const
+
+function roleLabel(role: string): string {
+  return role === 'Host' ? 'Person to meet' : role
+}
 
 function defaultMenusForRole(role: string): string[] {
   return menusForRole(role).map((m) => m.key)
@@ -215,7 +219,7 @@ export function UsersPage() {
                       <div className="font-medium">{u.fullName}</div>
                       <div className="text-xs text-gray-500">{u.username} · {u.email}</div>
                     </td>
-                    <td className="px-4 py-3">{u.roles.join(', ')}</td>
+                    <td className="px-4 py-3">{u.roles.map(roleLabel).join(', ')}</td>
                     <td className="px-4 py-3 text-xs text-gray-600">
                       {(u.allowedMenuKeys?.length
                         ? u.allowedMenuKeys
@@ -263,7 +267,7 @@ export function UsersPage() {
                       })
                     }}
                   >
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
                   </TextSelect>
                 </div>
                 <MenuPicker
@@ -331,7 +335,7 @@ export function UsersPage() {
                       })
                     }}
                   >
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
                   </TextSelect>
                 </div>
                 <MenuPicker

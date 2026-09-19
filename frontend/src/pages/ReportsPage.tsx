@@ -17,6 +17,9 @@ interface ReportRow {
   status: string
   purposes: string
   locations: string
+  feedbackAvg?: string
+  feedbackRatings?: string
+  feedbackComments?: string
 }
 
 interface ReportResult {
@@ -176,11 +179,13 @@ export function ReportsPage() {
                 <th className="px-4 py-3">Visit #</th>
                 <th className="px-4 py-3">Visitor</th>
                 <th className="px-4 py-3">Company</th>
-                <th className="px-4 py-3">Host</th>
+                <th className="px-4 py-3">Person to meet</th>
                 <th className="px-4 py-3">Department</th>
                 <th className="px-4 py-3">Date</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Purpose</th>
+                <th className="px-4 py-3">Feedback</th>
+                <th className="px-4 py-3">Ratings</th>
               </tr>
             </thead>
             <tbody>
@@ -196,6 +201,15 @@ export function ReportsPage() {
                     <Badge className={statusBadgeClass(v.status)}>{v.status}</Badge>
                   </td>
                   <td className="px-4 py-3">{v.purposes || '—'}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-amber-600 font-medium">
+                    {v.feedbackAvg ? `${v.feedbackAvg} ★` : '—'}
+                  </td>
+                  <td className="px-4 py-3 max-w-xs text-xs text-ink-muted" title={v.feedbackRatings || undefined}>
+                    {v.feedbackRatings || '—'}
+                    {v.feedbackComments ? (
+                      <div className="mt-1 italic text-ink">{v.feedbackComments}</div>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>

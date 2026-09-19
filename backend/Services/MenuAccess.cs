@@ -11,8 +11,8 @@ public static class MenuAccess
 {
     public static readonly string[] AllKeys =
     [
-        "dashboard", "reception", "security", "host", "visitors", "inside", "expected",
-        "reports", "departments", "purposes", "locations", "sites", "users", "settings"
+        "dashboard", "reception", "host", "visitors", "inside", "expected",
+        "reports", "departments", "purposes", "locations", "feedback", "sites", "users", "settings"
     ];
 
     private static readonly HashSet<string> Known = new(AllKeys, StringComparer.OrdinalIgnoreCase);
@@ -22,7 +22,7 @@ public static class MenuAccess
         [AppRoles.SuperAdmin] = AllKeys,
         [AppRoles.Admin] = AllKeys,
         [AppRoles.Reception] = ["dashboard", "reception", "visitors", "inside", "expected", "reports"],
-        [AppRoles.Security] = ["dashboard", "security", "visitors", "inside", "expected"],
+        [AppRoles.Security] = ["dashboard", "visitors", "inside", "expected"],
         [AppRoles.Host] = ["dashboard", "host", "visitors", "inside", "expected"],
     };
 
@@ -37,6 +37,8 @@ public static class MenuAccess
         var selected = requested
             .Where(k => !string.IsNullOrWhiteSpace(k))
             .Select(k => k.Trim().ToLowerInvariant())
+            // Retired hub keys (Security Desk / Emergency) — map to Currently Inside when still in role ceiling.
+            .Select(k => k is "security" or "emergency" ? "inside" : k)
             .Where(k => Known.Contains(k) && ceiling.Contains(k))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(k => Array.IndexOf(AllKeys, k))

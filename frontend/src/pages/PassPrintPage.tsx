@@ -67,7 +67,7 @@ export function PassPrintPage() {
           <div className="space-y-2 text-sm">
             <Row label="Visitor" value={pass.visitorName} />
             <Row label="Company" value={pass.companyName} />
-            <Row label="Host" value={pass.hostName} />
+            <Row label="Person to meet" value={pass.hostName} />
             <Row label="Department" value={pass.departmentName} />
             <Row label="Visit #" value={pass.visitNumber} />
             <Row label="Check-in" value={formatDateTime(pass.checkInAt)} />

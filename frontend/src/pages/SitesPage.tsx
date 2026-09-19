@@ -97,7 +97,7 @@ export function SitesPage() {
 
       <div className="mb-4">
         <Alert tone="info">
-          Users assigned to a site only see visitors, reports and the emergency roster for that site.
+          Users assigned to a site only see visitors and reports for that site.
           Leave a user unassigned to give them visibility across every site.
         </Alert>
       </div>

@@ -121,7 +121,7 @@ export function VerifyVisitorPage() {
               <div className="font-mono text-lg font-semibold text-primary">{pass.visitNumber}</div>
               <div className="text-lg font-semibold text-ink">{pass.visitorName}</div>
               <div className="text-ink-muted">{pass.companyName}</div>
-              <div>Host: {pass.hostName}</div>
+              <div>Person to meet: {pass.hostName}</div>
               <div>Department: {pass.departmentName}</div>
               <div>Status: {pass.status}</div>
               <div>Check-in: {formatDateTime(pass.checkInAt)}</div>

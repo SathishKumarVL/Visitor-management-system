@@ -17,6 +17,16 @@ const defaults: SettingsDto = {
   idVerificationRequired: false,
   maxVisitDurationWarningMinutes: 240,
   sessionTimeoutMinutes: 480,
+  smtpEnabled: true,
+  smtpHost: '',
+  smtpPort: 587,
+  smtpEnableSsl: true,
+  smtpUsername: '',
+  smtpFromAddress: '',
+  smtpFromName: 'Visitor Management',
+  smtpIgnoreSslErrors: false,
+  smtpPassword: null,
+  smtpPasswordConfigured: false,
 }
 
 interface SettingsState {

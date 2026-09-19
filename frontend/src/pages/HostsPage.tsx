@@ -87,14 +87,14 @@ export function HostsPage() {
   return (
     <div>
       <PageHeader
-        title="Hosts"
+        title="People to meet"
         actions={
           <div className="flex gap-2">
             <TextSelect value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="w-full min-w-[12rem] sm:w-56">
               <option value="">All departments</option>
               {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </TextSelect>
-            <Button variant="amber" onClick={startCreate}>Add host</Button>
+            <Button variant="amber" onClick={startCreate}>Add person to meet</Button>
           </div>
         }
       />
@@ -104,7 +104,7 @@ export function HostsPage() {
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <Panel className="overflow-x-auto p-0">
           {loading ? <Spinner /> : null}
-          {!loading && items.length === 0 ? <div className="p-4"><EmptyState title="No hosts" /></div> : null}
+          {!loading && items.length === 0 ? <div className="p-4"><EmptyState title="No people to meet" /></div> : null}
           {!loading && items.length > 0 ? (
             <table className="min-w-full text-left text-sm">
               <thead className="bg-gray-50 text-gray-500">
@@ -135,7 +135,7 @@ export function HostsPage() {
         </Panel>
 
         <Panel>
-          <h2 className="mb-3 font-semibold text-steel">{editing ? 'Edit host' : 'Create host'}</h2>
+          <h2 className="mb-3 font-semibold text-steel">{editing ? 'Edit person to meet' : 'Create person to meet'}</h2>
           <form onSubmit={save} className="space-y-3">
             <div>
               <FieldLabel>Full name *</FieldLabel>

@@ -65,7 +65,7 @@ export function ExpectedVisitorsPage() {
       return
     }
     if (!form.hostName.trim()) {
-      setError('Enter the host name.')
+      setError('Enter the person to meet.')
       return
     }
     setSaving(true)
@@ -182,12 +182,12 @@ export function ExpectedVisitorsPage() {
               </TextSelect>
             </div>
             <div>
-              <FieldLabel>Host *</FieldLabel>
+              <FieldLabel>Person to meet *</FieldLabel>
               <TextInput
                 required
                 value={form.hostName}
                 onChange={(e) => setForm({ ...form, hostName: e.target.value })}
-                placeholder="Type the host name"
+                placeholder="Type the person to meet"
               />
             </div>
             <div className="sm:col-span-2">
@@ -219,7 +219,7 @@ export function ExpectedVisitorsPage() {
               <Badge className={statusBadgeClass(v.statusLabel)}>{v.statusLabel}</Badge>
             </div>
             <dl className="mt-3 space-y-1 text-sm text-gray-600">
-              <div><span className="text-gray-500">Host:</span> {v.hostName}</div>
+              <div><span className="text-gray-500">Person to meet:</span> {v.hostName}</div>
               <div><span className="text-gray-500">Dept:</span> {v.departmentName}</div>
               <div><span className="text-gray-500">When:</span> {formatDate(v.visitDate)} · {String(v.visitTime).slice(0, 5)}</div>
               {v.phone ? <div><span className="text-gray-500">Phone:</span> {v.phone}</div> : null}

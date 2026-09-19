@@ -110,6 +110,12 @@ public class VisitorVisit
     public string? CreatedBy { get; set; }
     public string? UpdatedBy { get; set; }
 
+    /// <summary>
+    /// SQL Server rowversion used as an EF Core optimistic concurrency token for Visit lifecycle writes.
+    /// </summary>
+    [Timestamp]
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+
     public ICollection<VisitorVisitPurpose> VisitPurposes { get; set; } = new List<VisitorVisitPurpose>();
     public ICollection<VisitorVisitLocation> VisitLocations { get; set; } = new List<VisitorVisitLocation>();
     public ICollection<Approval> Approvals { get; set; } = new List<Approval>();
@@ -354,4 +360,10 @@ public class NotificationOutbox
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? SentAt { get; set; }
     public string? Error { get; set; }
+
+    /// <summary>
+    /// Optional idempotency key (e.g. appointment reminders). Unique per tenant when set.
+    /// </summary>
+    [MaxLength(200)]
+    public string? IdempotencyKey { get; set; }
 }

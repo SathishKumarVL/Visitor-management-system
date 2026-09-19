@@ -84,9 +84,13 @@ builder.Services.AddRateLimiter(options =>
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, TenantContext>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
+builder.Services.AddScoped<INotificationDeliveryProvider, EmailNotificationProvider>();
+builder.Services.AddScoped<INotificationDeliveryProvider, PushNotificationProvider>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IPassNumberService, PassNumberService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
+builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
@@ -94,6 +98,7 @@ builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 builder.Services.AddScoped<IEmergencyService, EmergencyService>();
 builder.Services.AddScoped<ISiteService, SiteService>();
+builder.Services.AddHostedService<AppointmentReminderWorker>();
 
 // Singleton: the ONNX sessions hold ~180 MB of weights and are thread-safe for concurrent inference.
 builder.Services.Configure<FaceRecognitionOptions>(
@@ -146,6 +151,10 @@ var app = builder.Build();
 // Operator commands run against the built container and exit without serving traffic.
 if (ResetPasswordCommand.ShouldRun(args))
     return await ResetPasswordCommand.RunAsync(app.Services, args);
+if (RetryEmailsCommand.ShouldRun(args))
+    return await RetryEmailsCommand.RunAsync(app.Services, args);
+if (SendTestEmailCommand.ShouldRun(args))
+    return await SendTestEmailCommand.RunAsync(app.Services, args);
 
 var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 var brandingRoot = Path.Combine(webRoot, "branding");

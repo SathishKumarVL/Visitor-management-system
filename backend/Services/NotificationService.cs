@@ -1,7 +1,4 @@
-using System.Text;
-using MailKit.Net.Smtp;
-using MailKit.Security;
-using MimeKit;
+using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.Models;
 
@@ -9,60 +6,80 @@ namespace Tiaano.Vms.Api.Services;
 
 public interface INotificationService
 {
-    Task NotifyAsync(string channel, string recipient, string subject, string body);
+    Task NotifyAsync(string channel, string recipient, string subject, string body, string? idempotencyKey = null);
     Task SendVisitorThankYouEmailAsync(string visitorName, string? email, DateTime visitDateTimeLocal);
     Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient);
+    /// <summary>Re-attempts delivery for unsent Email outbox rows (e.g. after SMTP config fix).</summary>
+    Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20);
 }
 
 public class NotificationService : INotificationService
 {
     private readonly ApplicationDbContext _db;
-    private readonly IConfiguration _config;
-    private readonly IWebHostEnvironment _env;
     private readonly ILogger<NotificationService> _logger;
     private readonly ITenantContext _tenant;
+    private readonly IEnumerable<INotificationDeliveryProvider> _providers;
 
     public NotificationService(
         ApplicationDbContext db,
-        IConfiguration config,
-        IWebHostEnvironment env,
         ILogger<NotificationService> logger,
-        ITenantContext tenant)
+        ITenantContext tenant,
+        IEnumerable<INotificationDeliveryProvider> providers)
     {
         _db = db;
-        _config = config;
-        _env = env;
         _logger = logger;
         _tenant = tenant;
+        _providers = providers;
     }
 
-    /// <summary>
-    /// Tenant that owns every row this service queues. Queuing without a tenant is refused so a
-    /// delivery worker can never pick the row up and guess which tenant's configuration to use.
-    /// </summary>
     private Guid QueueingTenantId =>
         _tenant.TenantId is Guid id && id != Guid.Empty
             ? id
             : throw new UnauthorizedAccessException("Tenant context is required to queue a notification.");
 
-    public async Task NotifyAsync(string channel, string recipient, string subject, string body)
+    public async Task NotifyAsync(
+        string channel,
+        string recipient,
+        string subject,
+        string body,
+        string? idempotencyKey = null)
     {
+        var tenantId = QueueingTenantId;
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            var exists = await _db.NotificationOutbox.IgnoreQueryFilters()
+                .AnyAsync(n => n.TenantId == tenantId && n.IdempotencyKey == idempotencyKey);
+            if (exists)
+            {
+                _logger.LogDebug("Skipping duplicate notification {Key}", idempotencyKey);
+                return;
+            }
+        }
+
         var row = new NotificationOutbox
         {
-            TenantId = QueueingTenantId,
+            TenantId = tenantId,
             Channel = channel,
             Recipient = recipient,
             Subject = subject,
             Body = body,
+            IdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim(),
             IsSent = false
         };
         _db.NotificationOutbox.Add(row);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException) when (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            // Concurrent workers raced on the unique (TenantId, IdempotencyKey) index.
+            _db.Entry(row).State = EntityState.Detached;
+            _logger.LogDebug("Idempotent notification already queued: {Key}", idempotencyKey);
+            return;
+        }
 
-        if (string.Equals(channel, "Email", StringComparison.OrdinalIgnoreCase))
-            await TryDeliverAsync(row);
-        else
-            _logger.LogInformation("Notification queued via {Channel} to {Recipient}: {Subject}", channel, recipient, subject);
+        await TryDeliverAsync(row);
     }
 
     public async Task SendVisitorThankYouEmailAsync(string visitorName, string? email, DateTime visitDateTimeLocal)
@@ -76,19 +93,7 @@ public class NotificationService : INotificationService
         var when = visitDateTimeLocal.ToString("MMM dd, yyyy hh:mm tt");
         var subject = "Thank you for visiting Tiaano";
         var body = BuildThankYouBody(visitorName.Trim(), when);
-
-        var row = new NotificationOutbox
-        {
-            TenantId = QueueingTenantId,
-            Channel = "Email",
-            Recipient = email.Trim(),
-            Subject = subject,
-            Body = body,
-            IsSent = false
-        };
-        _db.NotificationOutbox.Add(row);
-        await _db.SaveChangesAsync();
-        await TryDeliverAsync(row);
+        await NotifyAsync("Email", email.Trim(), subject, body);
     }
 
     public async Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient)
@@ -113,6 +118,27 @@ public class NotificationService : INotificationService
             : (false, row.Error ?? "Send failed.");
     }
 
+    public async Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20)
+    {
+        take = Math.Clamp(take, 1, 100);
+        var pending = await _db.NotificationOutbox.IgnoreQueryFilters()
+            .Where(n => n.Channel == "Email" && !n.IsSent)
+            .OrderByDescending(n => n.CreatedAt)
+            .Take(take)
+            .ToListAsync();
+
+        var sent = 0;
+        foreach (var row in pending)
+        {
+            if (row.TenantId is not Guid tenantId || tenantId == Guid.Empty) continue;
+            _tenant.Set(tenantId);
+            await TryDeliverAsync(row);
+            if (row.IsSent) sent++;
+        }
+
+        return (pending.Count, sent);
+    }
+
     private static string BuildThankYouBody(string visitorName, string visitWhen) =>
         $"""
         Dear {visitorName},
@@ -133,27 +159,26 @@ public class NotificationService : INotificationService
 
     private async Task TryDeliverAsync(NotificationOutbox row)
     {
-        var enabled = _config.GetValue("Smtp:Enabled", true);
-        if (!enabled)
+        var provider = _providers.FirstOrDefault(p =>
+            string.Equals(p.Channel, row.Channel, StringComparison.OrdinalIgnoreCase));
+
+        if (provider is null)
         {
-            row.Error = "SMTP disabled";
-            await _db.SaveChangesAsync();
+            _logger.LogInformation(
+                "Notification queued via {Channel} to {Recipient}: {Subject}",
+                row.Channel,
+                row.Recipient,
+                row.Subject);
             return;
         }
 
         try
         {
-            var host = (_config["Smtp:Host"] ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(host))
-                await WritePickupAsync(row);
-            else
-                await SendViaSmtpAsync(row);
-
+            await provider.DeliverAsync(row);
             row.IsSent = true;
             row.SentAt = DateTime.UtcNow;
             row.Error = null;
             await _db.SaveChangesAsync();
-            _logger.LogInformation("Email sent to {Recipient}: {Subject}", row.Recipient, row.Subject);
         }
         catch (Exception ex)
         {
@@ -161,75 +186,7 @@ public class NotificationService : INotificationService
             var detail = ex.GetBaseException().Message;
             row.Error = detail.Length > 480 ? detail[..480] : detail;
             await _db.SaveChangesAsync();
-            _logger.LogError(ex, "Failed to send email to {Recipient}", row.Recipient);
+            _logger.LogError(ex, "Failed to deliver {Channel} to {Recipient}", row.Channel, row.Recipient);
         }
-    }
-
-    private async Task SendViaSmtpAsync(NotificationOutbox row)
-    {
-        var host = (_config["Smtp:Host"] ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(host))
-            throw new InvalidOperationException("Smtp:Host is required for SMTP delivery.");
-        var port = _config.GetValue("Smtp:Port", 587);
-        var timeoutSeconds = Math.Clamp(_config.GetValue("Smtp:TimeoutSeconds", 45), 10, 120);
-        var ignoreSsl = _env.IsDevelopment() && _config.GetValue("Smtp:IgnoreSslErrors", false);
-        if (_env.IsProduction() && _config.GetValue("Smtp:IgnoreSslErrors", false))
-            throw new InvalidOperationException("SMTP TLS certificate validation cannot be disabled in Production.");
-
-        var user = (_config["Smtp:Username"] ?? "").Trim();
-        var pass = _config["Smtp:Password"] ?? "";
-        var fromAddress = (_config["Smtp:FromAddress"] ?? "").Trim();
-        var fromName = (_config["Smtp:FromName"] ?? "Visitor Management").Trim();
-
-        if (string.IsNullOrWhiteSpace(fromAddress))
-            throw new InvalidOperationException("Smtp:FromAddress is required when SMTP host is configured.");
-
-        var message = new MimeMessage();
-        message.From.Add(new MailboxAddress(fromName, fromAddress));
-        message.To.Add(MailboxAddress.Parse(row.Recipient.Trim()));
-        message.Subject = row.Subject;
-        message.Body = new TextPart("plain")
-        {
-            Text = row.Body,
-            ContentTransferEncoding = ContentEncoding.QuotedPrintable
-        };
-
-        using var client = new SmtpClient { Timeout = timeoutSeconds * 1000 };
-        if (ignoreSsl)
-            client.ServerCertificateValidationCallback = static (_, _, _, _) => true;
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-        await client.ConnectAsync(host, port, SecureSocketOptions.StartTls, cts.Token);
-        client.AuthenticationMechanisms.Remove("XOAUTH2");
-
-        if (!string.IsNullOrEmpty(user))
-        {
-            if (string.IsNullOrEmpty(pass))
-                throw new InvalidOperationException("Smtp:Password is required when Smtp:Username is set.");
-            await client.AuthenticateAsync(user, pass, cts.Token);
-        }
-
-        await client.SendAsync(message, cts.Token);
-        await client.DisconnectAsync(true, cts.Token);
-
-        _logger.LogInformation("SMTP success via {Host}:{Port}", host, port);
-    }
-
-    private async Task WritePickupAsync(NotificationOutbox row)
-    {
-        var pickup = _config["Smtp:PickupDirectory"];
-        if (string.IsNullOrWhiteSpace(pickup))
-            pickup = Path.Combine(_env.ContentRootPath, "App_Data", "mail-pickup");
-        Directory.CreateDirectory(pickup);
-
-        var path = Path.Combine(pickup, $"{Guid.NewGuid():N}.eml");
-        var sb = new StringBuilder();
-        sb.AppendLine($"From: {_config["Smtp:FromAddress"] ?? "info@tianode.com"}");
-        sb.AppendLine($"To: {row.Recipient}");
-        sb.AppendLine($"Subject: {row.Subject}");
-        sb.AppendLine($"Date: {DateTime.UtcNow:R}");
-        sb.AppendLine();
-        sb.AppendLine(row.Body);
-        await File.WriteAllTextAsync(path, sb.ToString());
     }
 }

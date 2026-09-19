@@ -8,8 +8,10 @@ import { OfflineBanner } from '../components/layout/OfflineBanner'
 import { apiErrorMessage } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { useSettingsStore } from '../store/settingsStore'
+import { LanguageSwitcher, useI18n } from '../i18n'
 
 export function LoginPage() {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const { login, loading, token, user } = useAuthStore()
@@ -38,13 +40,16 @@ export function LoginPage() {
       const redirect = params.get('redirect')
       navigate(dest === '/change-password' ? dest : redirect || dest, { replace: true })
     } catch (err) {
-      setError(apiErrorMessage(err, 'Invalid username or password.'))
+      setError(apiErrorMessage(err, t('login.invalidCredentials')))
     }
   }
 
   return (
     <div className="relative min-h-screen">
       <OfflineBanner />
+      <div className="absolute right-4 top-4 z-10">
+        <LanguageSwitcher />
+      </div>
       <div className="grid min-h-screen lg:grid-cols-2">
         <section className="relative hidden overflow-hidden bg-brand-hero text-white lg:flex lg:flex-col lg:justify-between lg:p-12 xl:p-16">
           <div className="decorative-orb -left-16 -top-10 h-64 w-64" />
@@ -53,16 +58,16 @@ export function LoginPage() {
           <div>
             <BrandLogo className="h-12" light />
             <p className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-aqua">
-              Visitor Management
+              {t('nav.visitorManagement')}
             </p>
             <h1 className="mt-4 max-w-md text-4xl font-semibold leading-tight tracking-tight">
-              Secure, modern visitor experience for your facility.
+              {t('login.heroTitle')}
             </h1>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/75">
-              Reception-ready workflows with check-in, passes, and live on-site visibility — built for tablets and desks.
+              {t('login.heroBody')}
             </p>
           </div>
-          <p className="text-xs text-white/55">Enterprise visitor & facility access platform</p>
+          <p className="text-xs text-white/55">{t('login.heroFooter')}</p>
         </section>
 
         <section className="relative flex items-center justify-center bg-page px-4 py-10 sm:px-8">
@@ -71,12 +76,12 @@ export function LoginPage() {
             <div className="mb-8 text-center lg:text-left">
               <BrandLogo className="mx-auto h-12 lg:mx-0" />
               <h2 className="mt-5 text-2xl font-semibold text-ink">{company}</h2>
-              <p className="mt-1 text-sm text-ink-muted">Sign in to Visitor Management</p>
+              <p className="mt-1 text-sm text-ink-muted">{t('login.title')}</p>
             </div>
 
             <form onSubmit={onSubmit} className="space-y-4">
               <div>
-                <FieldLabel htmlFor="username">Username</FieldLabel>
+                <FieldLabel htmlFor="username">{t('login.username')}</FieldLabel>
                 <TextInput
                   id="username"
                   autoComplete="username"
@@ -86,7 +91,7 @@ export function LoginPage() {
                 />
               </div>
               <div>
-                <FieldLabel htmlFor="password">Password</FieldLabel>
+                <FieldLabel htmlFor="password">{t('login.password')}</FieldLabel>
                 <PasswordInput
                   id="password"
                   autoComplete="current-password"
@@ -102,13 +107,13 @@ export function LoginPage() {
                   onChange={(e) => setRememberMe(e.target.checked)}
                   className="h-4 w-4 accent-primary"
                 />
-                Remember me on this device
+                {t('login.rememberMe')}
               </label>
 
               {error ? <Alert tone="error">{error}</Alert> : null}
 
               <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}>
-                {loading ? 'Signing in…' : 'Sign in'}
+                {loading ? t('login.signingIn') : t('login.signIn')}
               </Button>
             </form>
           </div>

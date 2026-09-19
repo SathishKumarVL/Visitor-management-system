@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { apiErrorMessage, passApi, visitorsApi } from '../lib/api'
+import { apiErrorMessage, isConflictError, passApi, visitorsApi } from '../lib/api'
 import type { VisitorDetailDto } from '../types/api'
 import { Alert, Badge, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
-import { formatDate, formatDateTime, formatDuration, statusBadgeClass } from '../lib/utils'
+import { formatDate, formatDateTime, formatDuration, statusBadgeClass, cn } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
 import { SecureImage } from '../components/SecureImage'
@@ -43,27 +43,15 @@ export function VisitorDetailPage() {
     if (!id) return
     setBusy(true)
     setMessage(null)
+    setError(null)
     try {
       const pass = await visitorsApi.checkIn(id)
       setMessage('Checked in successfully.')
       navigate(`/passes/${id}/print`, { state: { pass } })
     } catch (e) {
       setError(apiErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function checkOut() {
-    if (!id) return
-    setBusy(true)
-    setMessage(null)
-    try {
-      await visitorsApi.checkOut(id)
-      setMessage('Checked out successfully.')
-      await load()
-    } catch (e) {
-      setError(apiErrorMessage(e))
+      // Conflict means another desk already changed this visit — refresh local state, never retry blindly.
+      if (isConflictError(e)) await load()
     } finally {
       setBusy(false)
     }
@@ -100,7 +88,9 @@ export function VisitorDetailPage() {
               <Button disabled={busy} onClick={() => void checkIn()}>Check in</Button>
             ) : null}
             {canGate && status.includes('inside') ? (
-              <Button variant="danger" disabled={busy} onClick={() => void checkOut()}>Check out</Button>
+              <Link to="/checkout/face">
+                <Button variant="secondary">Go to Check Out</Button>
+              </Link>
             ) : null}
             {canGate ? (
               <Button variant="amber" disabled={busy} onClick={() => void printPass()}>Print pass</Button>
@@ -136,7 +126,7 @@ export function VisitorDetailPage() {
               <Item label="Visitor #" value={visitor.visitorNumber} />
               <Item label="Visit #" value={visitor.visitNumber} />
               <Item label="Visit date" value={formatDate(visitor.visitDate)} />
-              <Item label="Host" value={visitor.hostName} />
+              <Item label="Person to meet" value={visitor.hostName} />
               <Item label="Department" value={visitor.departmentName} />
               <Item label="Phone" value={visitor.phone || '—'} />
               <Item label="Email" value={visitor.email || '—'} />
@@ -154,6 +144,37 @@ export function VisitorDetailPage() {
               <Item label="ID" value={`${visitor.idTypeName || '—'} ${visitor.idNumberMasked || ''}`} />
               <Item label="Notes" value={visitor.notes || '—'} />
             </dl>
+          </Panel>
+
+          <Panel>
+            <h2 className="mb-3 font-semibold text-steel">Checkout feedback</h2>
+            {visitor.feedback ? (
+              <div className="space-y-3 text-sm">
+                <p className="text-ink-muted">
+                  Submitted {formatDateTime(visitor.feedback.submittedAt)}
+                  {visitor.feedback.comments ? ` · “${visitor.feedback.comments}”` : ''}
+                </p>
+                <ul className="space-y-2">
+                  {visitor.feedback.answers.map((a, i) => (
+                    <li
+                      key={`${visitor.feedback!.id}-${i}`}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-gray-50 px-3 py-2"
+                    >
+                      <span className="font-medium text-gray-900">{a.questionText}</span>
+                      <span className="inline-flex gap-0.5 text-amber-500" aria-label={`${a.rating} of 5`}>
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <span key={n} className={cn(n <= a.rating ? 'opacity-100' : 'opacity-25')}>
+                            ★
+                          </span>
+                        ))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No checkout feedback for this visit yet.</p>
+            )}
           </Panel>
 
           <Panel>

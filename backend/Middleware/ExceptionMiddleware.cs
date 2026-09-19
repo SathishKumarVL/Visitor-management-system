@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.DTOs;
+using Tiaano.Vms.Api.Models;
 
 namespace Tiaano.Vms.Api.Middleware;
 
@@ -26,9 +27,18 @@ public class ExceptionMiddleware
         {
             await WriteAsync(context, HttpStatusCode.Forbidden, ex.Message);
         }
+        catch (ConcurrencyConflictException ex)
+        {
+            await WriteAsync(context, HttpStatusCode.Conflict, ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
             await WriteAsync(context, HttpStatusCode.BadRequest, ex.Message);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Safety net if a write path forgets to translate the EF concurrency failure.
+            await WriteAsync(context, HttpStatusCode.Conflict, ConcurrencyConflictException.DefaultVisitMessage);
         }
         catch (DbUpdateException ex)
         {

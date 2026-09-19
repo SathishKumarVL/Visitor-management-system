@@ -124,49 +124,6 @@ export interface VisitorListItemDto {
   numberOfPersons?: number
 }
 
-/** Mirrors the backend EmergencyRollCallStatus enum; serialised as its numeric value. */
-export const EmergencyRollCall = {
-  Unknown: 0,
-  Verified: 1,
-  Evacuated: 2,
-  Missing: 3,
-} as const
-
-export type EmergencyRollCallStatus = (typeof EmergencyRollCall)[keyof typeof EmergencyRollCall]
-
-export interface EmergencyRosterItemDto {
-  visitId: string
-  visitNumber: string
-  visitorName: string
-  companyName: string
-  hostName: string
-  departmentName: string
-  locations: string[]
-  photoUrl?: string | null
-  checkInAt?: string | null
-  statusLabel: string
-  numberOfPersons: number
-  rollCallStatus: EmergencyRollCallStatus
-  rollCallAt?: string | null
-}
-
-export interface EmergencyRosterDto {
-  totalInside: number
-  visitorsInside: number
-  employeeTrackingAvailable: boolean
-  verified: number
-  evacuated: number
-  missing: number
-  unaccounted: number
-  items: EmergencyRosterItemDto[]
-}
-
-export interface EmergencyRollCallResultDto {
-  visitId: string
-  rollCallStatus: EmergencyRollCallStatus
-  rollCallAt: string
-}
-
 export interface ApprovalHistoryDto {
   id: string
   status: number | string
@@ -189,6 +146,7 @@ export interface VisitorDetailDto extends VisitorListItemDto {
   checkedInBy?: string | null
   checkedOutBy?: string | null
   approvalHistory: ApprovalHistoryDto[]
+  feedback?: VisitFeedbackDto | null
 }
 
 export interface RegisterVisitorRequest {
@@ -217,8 +175,8 @@ export interface RegisterVisitorRequest {
   expectedVisitId?: string | null
   recognizedVisitorId?: string | null
   numberOfPersons?: number
-  /** Physical visitor-pass / badge number issued at the desk. */
-  passNumber: string
+  /** Server-allocated when omitted; free-text values are ignored by the API. */
+  passNumber?: string | null
 }
 
 export interface FaceSearchMatchDto {
@@ -233,6 +191,8 @@ export interface FaceSearchMatchDto {
   totalVisits: number
   /** Cosine similarity — higher is a closer match. */
   similarity: number
+  /** True when this visitor already has an open (Inside) visit. */
+  isCurrentlyInside?: boolean
 }
 
 export interface FaceCheckoutMatchDto {
@@ -244,6 +204,47 @@ export interface FaceCheckoutMatchDto {
   photoUrl?: string | null
   checkInAt?: string | null
   similarity: number
+}
+
+export interface FeedbackQuestionDto {
+  id: string
+  prompt: string
+  isRequired: boolean
+  isActive: boolean
+  sortOrder: number
+}
+
+export interface FeedbackQuestionUpsertRequest {
+  prompt: string
+  isRequired: boolean
+  isActive: boolean
+  sortOrder: number
+}
+
+export interface SubmitVisitFeedbackRequest {
+  answers: { questionId: string; rating: number }[]
+  comments?: string | null
+}
+
+export interface VisitFeedbackDto {
+  id: string
+  visitId: string
+  visitorId: string
+  visitorName: string
+  companyName: string
+  email?: string | null
+  phone?: string | null
+  visitNumber: string
+  comments?: string | null
+  submittedAt: string
+  answers: { questionId: string; questionText: string; rating: number }[]
+}
+
+/** Result of POST /visitors/validate-photo — exactly one face required. */
+export interface FacePhotoValidationDto {
+  faceCount: number
+  accepted: boolean
+  status: string
 }
 
 export interface ExpectedVisitorRequest {
@@ -296,6 +297,17 @@ export interface SettingsDto {
   idVerificationRequired: boolean
   maxVisitDurationWarningMinutes: number
   sessionTimeoutMinutes: number
+  smtpEnabled: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpEnableSsl: boolean
+  smtpUsername: string
+  smtpFromAddress: string
+  smtpFromName: string
+  smtpIgnoreSslErrors: boolean
+  /** Write-only: send a new password to update; omit/empty keeps the stored one. */
+  smtpPassword?: string | null
+  smtpPasswordConfigured: boolean
 }
 
 export interface PassDto {
@@ -400,5 +412,50 @@ export interface VisitorWizardDraft {
   isWalkIn: boolean
   expectedVisitId: string | null
   recognizedVisitorId: string | null
+  /** Display-only after server assigns a pass; not sent on register. */
   passNumber: string
+}
+
+export interface PassNumberSeriesDto {
+  id: string
+  siteId?: string | null
+  prefix: string
+  year?: number | null
+  startNumber: number
+  endNumber: number
+  currentNumber: number
+  isActive: boolean
+  formatExample: string
+}
+
+export interface UpsertPassNumberSeriesRequest {
+  siteId?: string | null
+  prefix: string
+  year?: number | null
+  startNumber: number
+  endNumber: number
+  currentNumber?: number | null
+  isActive: boolean
+}
+
+export interface PassNumberAllocationDto {
+  id: string
+  seriesId: string
+  userId: string
+  userName?: string | null
+  fullName?: string | null
+  startNumber: number
+  endNumber: number
+  currentNumber: number
+  isActive: boolean
+}
+
+export interface UpsertPassNumberAllocationRequest {
+  id?: string | null
+  seriesId?: string | null
+  userId: string
+  startNumber: number
+  endNumber: number
+  currentNumber?: number | null
+  isActive: boolean
 }

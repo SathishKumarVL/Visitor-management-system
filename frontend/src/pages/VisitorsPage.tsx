@@ -84,7 +84,7 @@ export function VisitorsPage() {
             <TextInput value={company} onChange={(e) => setCompany(e.target.value)} />
           </div>
           <div>
-            <FieldLabel>Host</FieldLabel>
+            <FieldLabel>Person to meet</FieldLabel>
             <TextInput value={host} onChange={(e) => setHost(e.target.value)} />
           </div>
           <div>
@@ -176,7 +176,7 @@ export function VisitorsPage() {
               <tr>
                 <th className="px-4 py-3 font-medium">Visitor</th>
                 <th className="px-4 py-3 font-medium">Company</th>
-                <th className="px-4 py-3 font-medium">Host</th>
+                <th className="px-4 py-3 font-medium">Person to meet</th>
                 <th className="px-4 py-3 font-medium">Date</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium" />

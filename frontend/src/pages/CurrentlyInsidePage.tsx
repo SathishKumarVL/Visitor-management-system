@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { apiErrorMessage, visitorsApi } from '../lib/api'
 import type { VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
@@ -8,28 +8,25 @@ import { FieldLabel, TextInput, TextSelect } from '../components/ui/Field'
 import { formatDateTime, formatDuration, statusBadgeClass } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
+import { useI18n } from '../i18n'
 
 type SortKey = 'longest' | 'recent' | 'name' | 'company' | 'host'
 
-const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-  { value: 'longest', label: 'Longest on site' },
-  { value: 'recent', label: 'Most recent arrival' },
-  { value: 'name', label: 'Visitor name' },
-  { value: 'company', label: 'Company' },
-  { value: 'host', label: 'Host' },
-]
-
 export function CurrentlyInsidePage() {
-  const [params] = useSearchParams()
-  const checkoutMode = params.get('action') === 'checkout'
+  const { t } = useI18n()
   const roles = useAuthStore((s) => s.user?.roles ?? [])
-  const canCheckout = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Security'])
+  const canUseCheckout = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Security'])
+  const sortOptions: { value: SortKey; label: string }[] = [
+    { value: 'longest', label: t('inside.longest') },
+    { value: 'recent', label: t('inside.recent') },
+    { value: 'name', label: t('inside.visitorName') },
+    { value: 'company', label: t('common.company') },
+    { value: 'host', label: t('common.host') },
+  ]
 
   const [items, setItems] = useState<VisitorListItemDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('longest')
 
@@ -39,11 +36,11 @@ export function CurrentlyInsidePage() {
     try {
       setItems(await visitorsApi.inside())
     } catch (e) {
-      setError(apiErrorMessage(e, 'Unable to load visitors currently inside.'))
+      setError(apiErrorMessage(e, t('inside.loadError')))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -81,49 +78,35 @@ export function CurrentlyInsidePage() {
     return sorted
   }, [items, query, sort])
 
-  async function checkout(id: string) {
-    setBusyId(id)
-    setMessage(null)
-    try {
-      await visitorsApi.checkOut(id)
-      setMessage('Visitor checked out.')
-      await load()
-    } catch (e) {
-      setError(apiErrorMessage(e))
-    } finally {
-      setBusyId(null)
-    }
-  }
-
   return (
     <div>
       <PageHeader
-        eyebrow="On site"
-        title="Currently Inside"
-        subtitle={checkoutMode ? 'Select a visitor to check out' : 'Live list of visitors on the premises'}
-        actions={<Button variant="secondary" onClick={() => void load()}>Refresh</Button>}
+        eyebrow={t('inside.eyebrow')}
+        title={t('inside.title')}
+        subtitle={t('inside.subtitle')}
+        actions={<Button variant="secondary" onClick={() => void load()}>{t('common.retry')}</Button>}
       />
 
       <div className="mb-6 grid gap-3 sm:grid-cols-[auto_1fr] sm:items-end">
         <Panel className="bg-brand-soft px-6 py-5 sm:min-w-[180px]">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink-muted">Total inside</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink-muted">{t('inside.title')}</p>
           <p className="mt-1 text-4xl font-semibold text-ink">{items.length}</p>
         </Panel>
         <Panel className="grid gap-3 sm:grid-cols-[2fr_1fr]">
           <div>
-            <FieldLabel htmlFor="insideSearch">Search</FieldLabel>
+            <FieldLabel htmlFor="insideSearch">{t('common.search')}</FieldLabel>
             <TextInput
               id="insideSearch"
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Name, company, host, location, or visit number"
+              placeholder={t('inside.searchPlaceholder')}
             />
           </div>
           <div>
-            <FieldLabel htmlFor="insideSort">Sort by</FieldLabel>
+            <FieldLabel htmlFor="insideSort">{t('inside.sortBy')}</FieldLabel>
             <TextSelect id="insideSort" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
-              {SORT_OPTIONS.map((o) => (
+              {sortOptions.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
@@ -139,16 +122,11 @@ export function CurrentlyInsidePage() {
             <Alert tone="error">{error}</Alert>
           </div>
         ) : null}
-        {message ? (
-          <div className="mb-4">
-            <Alert tone="success">{message}</Alert>
-          </div>
-        ) : null}
       </div>
       {loading ? <Spinner /> : null}
       {!loading && filtered.length === 0 ? (
         <EmptyState
-          title="No visitors currently inside"
+          title={t('inside.empty')}
           description={query ? 'No matches for your search.' : 'Checked-in visitors will appear here.'}
         />
       ) : null}
@@ -166,7 +144,7 @@ export function CurrentlyInsidePage() {
                   {v.isLongStay ? <Badge className="bg-red-100 text-danger ring-1 ring-red-200">Long stay</Badge> : null}
                 </div>
                 <p className="mt-1 text-sm text-ink-muted">
-                  {v.companyName} · Host {v.hostName}
+                  {v.companyName} · Person to meet {v.hostName}
                   {v.locations.length ? ` · ${v.locations.join(', ')}` : ''}
                 </p>
                 <p className="mt-0.5 text-sm text-ink-muted">
@@ -177,15 +155,10 @@ export function CurrentlyInsidePage() {
                 <Link to={`/visitors/${v.visitId}`}>
                   <Button variant="secondary">View</Button>
                 </Link>
-                {canCheckout ? (
-                  <Button
-                    variant="primary"
-                    disabled={busyId === v.visitId}
-                    loading={busyId === v.visitId}
-                    onClick={() => void checkout(v.visitId)}
-                  >
-                    Check Out
-                  </Button>
+                {canUseCheckout ? (
+                  <Link to="/checkout/face">
+                    <Button variant="secondary">{t('inside.checkOutFace')}</Button>
+                  </Link>
                 ) : null}
               </div>
             </div>

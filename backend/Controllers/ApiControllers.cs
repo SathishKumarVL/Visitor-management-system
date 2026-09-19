@@ -2,11 +2,15 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Configuration;
+using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
+using Tiaano.Vms.Api.Models;
 using Tiaano.Vms.Api.Models.Enums;
 using Tiaano.Vms.Api.Security;
 using Tiaano.Vms.Api.Services;
+using Tiaano.Vms.Api.Services.Face;
 
 namespace Tiaano.Vms.Api.Controllers;
 
@@ -81,13 +85,20 @@ public class VisitorsController : ControllerBase
 {
     private readonly IVisitorService _visitors;
     private readonly ISettingsService _settings;
+    private readonly IFeedbackService _feedback;
     private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _config;
 
-    public VisitorsController(IVisitorService visitors, ISettingsService settings, IWebHostEnvironment env, IConfiguration config)
+    public VisitorsController(
+        IVisitorService visitors,
+        ISettingsService settings,
+        IFeedbackService feedback,
+        IWebHostEnvironment env,
+        IConfiguration config)
     {
         _visitors = visitors;
         _settings = settings;
+        _feedback = feedback;
         _env = env;
         _config = config;
     }
@@ -152,7 +163,26 @@ public class VisitorsController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new ApiResponse<FaceSearchMatchDto>(false, null, ex.Message));
+            return BadRequest(PhotoValidationResponse<FaceSearchMatchDto>(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Validates that a visitor registration photo contains exactly one face.
+    /// Does not store the image. Used by the camera capture step before accepting a photo.
+    /// </summary>
+    [HttpPost("validate-photo")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public ActionResult<ApiResponse<FacePhotoValidationDto>> ValidatePhoto([FromBody] FaceSearchRequest request)
+    {
+        try
+        {
+            var result = _visitors.ValidateVisitorPhoto(request.PhotoBase64);
+            return Ok(new ApiResponse<FacePhotoValidationDto>(true, result, result.Status));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(PhotoValidationResponse<FacePhotoValidationDto>(ex.Message));
         }
     }
 
@@ -170,8 +200,21 @@ public class VisitorsController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new ApiResponse<FaceCheckoutMatchDto>(false, null, ex.Message));
+            return BadRequest(PhotoValidationResponse<FaceCheckoutMatchDto>(ex.Message));
         }
+    }
+
+    private static ApiResponse<T> PhotoValidationResponse<T>(string message)
+    {
+        string? code = null;
+        if (message.Contains("Multiple faces", StringComparison.OrdinalIgnoreCase))
+            code = FacePhotoRules.ErrorCodeMultipleFaces;
+        else if (message.Contains("No face detected", StringComparison.OrdinalIgnoreCase))
+            code = FacePhotoRules.ErrorCodeNoFace;
+        else if (message.Contains("not available", StringComparison.OrdinalIgnoreCase))
+            code = FacePhotoRules.ErrorCodeDetectorUnavailable;
+
+        return new ApiResponse<T>(false, default, message, code is null ? null : [code]);
     }
 
     [HttpGet("inside")]
@@ -196,6 +239,10 @@ public class VisitorsController : ControllerBase
             var result = await _visitors.CheckInAsync(id, request ?? new CheckInRequest(), User, _env.WebRootPath);
             return Ok(new ApiResponse<PassDto>(true, result, "Visitor checked in."));
         }
+        catch (ConcurrencyConflictException ex)
+        {
+            return Conflict(new ApiResponse<PassDto>(false, null, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<PassDto>(false, null, ex.Message));
@@ -211,9 +258,36 @@ public class VisitorsController : ControllerBase
             var result = await _visitors.CheckOutAsync(id, request ?? new CheckOutRequest(), User);
             return Ok(new ApiResponse<VisitorListItemDto>(true, result, "Visitor checked out."));
         }
+        catch (ConcurrencyConflictException ex)
+        {
+            return Conflict(new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpGet("{id:guid}/feedback")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Security}")]
+    public async Task<ActionResult<ApiResponse<VisitFeedbackDto>>> GetFeedback(Guid id)
+    {
+        var result = await _feedback.GetForVisitAsync(id);
+        return Ok(new ApiResponse<VisitFeedbackDto>(true, result));
+    }
+
+    [HttpPost("{id:guid}/feedback")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Security}")]
+    public async Task<ActionResult<ApiResponse<VisitFeedbackDto>>> SubmitFeedback(Guid id, [FromBody] SubmitVisitFeedbackRequest request)
+    {
+        try
+        {
+            var result = await _feedback.SubmitForVisitAsync(id, request, User.Identity?.Name);
+            return Ok(new ApiResponse<VisitFeedbackDto>(true, result, "Feedback saved."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<VisitFeedbackDto>(false, null, ex.Message));
         }
     }
 }
@@ -243,6 +317,10 @@ public class ApprovalsController : ControllerBase
         {
             return StatusCode(403, new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
         }
+        catch (ConcurrencyConflictException ex)
+        {
+            return Conflict(new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
@@ -259,6 +337,10 @@ public class ApprovalsController : ControllerBase
         catch (UnauthorizedAccessException ex)
         {
             return StatusCode(403, new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
+        }
+        catch (ConcurrencyConflictException ex)
+        {
+            return Conflict(new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
         }
         catch (InvalidOperationException ex)
         {
@@ -345,8 +427,13 @@ public class DashboardController : ControllerBase
 public class MastersController : ControllerBase
 {
     private readonly IMasterDataService _masters;
+    private readonly IFeedbackService _feedback;
 
-    public MastersController(IMasterDataService masters) => _masters = masters;
+    public MastersController(IMasterDataService masters, IFeedbackService feedback)
+    {
+        _masters = masters;
+        _feedback = feedback;
+    }
 
     [HttpGet("departments")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Departments([FromQuery] bool activeOnly = true) =>
@@ -420,6 +507,58 @@ public class MastersController : ControllerBase
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
     public async Task<ActionResult<ApiResponse<MasterItemDto>>> CreateIdType([FromBody] MasterUpsertRequest request) =>
         Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertIdTypeAsync(null, request, User.Identity?.Name)));
+
+    [HttpGet("feedback-questions")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<FeedbackQuestionDto>>>> FeedbackQuestions([FromQuery] bool activeOnly = true) =>
+        Ok(new ApiResponse<IReadOnlyList<FeedbackQuestionDto>>(true, await _feedback.GetQuestionsAsync(activeOnly)));
+
+    [HttpGet("feedback-responses")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<VisitFeedbackDto>>>> FeedbackResponses([FromQuery] int take = 50) =>
+        Ok(new ApiResponse<IReadOnlyList<VisitFeedbackDto>>(true, await _feedback.ListResponsesAsync(take)));
+
+    [HttpPost("feedback-questions")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<FeedbackQuestionDto>>> CreateFeedbackQuestion([FromBody] FeedbackQuestionUpsertRequest request)
+    {
+        try
+        {
+            return Ok(new ApiResponse<FeedbackQuestionDto>(true, await _feedback.UpsertQuestionAsync(null, request, User.Identity?.Name)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<FeedbackQuestionDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPut("feedback-questions/{id:guid}")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<FeedbackQuestionDto>>> UpdateFeedbackQuestion(Guid id, [FromBody] FeedbackQuestionUpsertRequest request)
+    {
+        try
+        {
+            return Ok(new ApiResponse<FeedbackQuestionDto>(true, await _feedback.UpsertQuestionAsync(id, request, User.Identity?.Name)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<FeedbackQuestionDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPost("feedback-questions/{id:guid}/deactivate")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<object>>> DeactivateFeedbackQuestion(Guid id)
+    {
+        try
+        {
+            await _feedback.DeactivateQuestionAsync(id, User.Identity?.Name);
+            return Ok(new ApiResponse<object>(true, null, "Deactivated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
+    }
 
     [HttpPost("{type}/{id:guid}/deactivate")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
@@ -540,6 +679,106 @@ public class SettingsController : ControllerBase
 public class TestEmailRequest
 {
     public string To { get; set; } = string.Empty;
+}
+
+[ApiController]
+[Route("api/pass-numbers")]
+[Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+[RequireModule(ModuleKeys.VisitorManagement)]
+public class PassNumbersController : ControllerBase
+{
+    private readonly IPassNumberService _passNumbers;
+
+    public PassNumbersController(IPassNumberService passNumbers) => _passNumbers = passNumbers;
+
+    [HttpGet("series")]
+    public async Task<ActionResult<ApiResponse<PassNumberSeriesDto?>>> GetSeries() =>
+        Ok(new ApiResponse<PassNumberSeriesDto?>(true, await _passNumbers.GetSeriesAsync()));
+
+    [HttpPut("series")]
+    public async Task<ActionResult<ApiResponse<PassNumberSeriesDto>>> UpsertSeries(
+        [FromBody] UpsertPassNumberSeriesRequest request)
+    {
+        try
+        {
+            return Ok(new ApiResponse<PassNumberSeriesDto>(true, await _passNumbers.UpsertSeriesAsync(request)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<PassNumberSeriesDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpGet("allocations")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<PassNumberAllocationDto>>>> ListAllocations() =>
+        Ok(new ApiResponse<IReadOnlyList<PassNumberAllocationDto>>(true, await _passNumbers.ListAllocationsAsync()));
+
+    [HttpPut("allocations")]
+    public async Task<ActionResult<ApiResponse<PassNumberAllocationDto>>> UpsertAllocation(
+        [FromBody] UpsertPassNumberAllocationRequest request)
+    {
+        try
+        {
+            return Ok(new ApiResponse<PassNumberAllocationDto>(true, await _passNumbers.UpsertAllocationAsync(request)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<PassNumberAllocationDto>(false, null, ex.Message));
+        }
+    }
+}
+
+[ApiController]
+[Route("api/devices")]
+[Authorize]
+[RequireModule(ModuleKeys.VisitorManagement)]
+public class DevicesController : ControllerBase
+{
+    private readonly ApplicationDbContext _db;
+    private readonly ITenantContext _tenant;
+
+    public DevicesController(ApplicationDbContext db, ITenantContext tenant)
+    {
+        _db = db;
+        _tenant = tenant;
+    }
+
+    /// <summary>Stub endpoint to register a push device token for the signed-in user.</summary>
+    [HttpPost("push-token")]
+    public async Task<ActionResult<ApiResponse<object>>> RegisterPushToken([FromBody] RegisterDevicePushTokenRequest request)
+    {
+        if (_tenant.TenantId is not Guid tenantId)
+            return Unauthorized(new ApiResponse<object>(false, null, "Tenant required."));
+        var userId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        if (string.IsNullOrWhiteSpace(userId))
+            return Unauthorized(new ApiResponse<object>(false, null, "User required."));
+        if (string.IsNullOrWhiteSpace(request.Token))
+            return BadRequest(new ApiResponse<object>(false, null, "Token is required."));
+
+        var token = request.Token.Trim();
+        var existing = await _db.DevicePushTokens
+            .FirstOrDefaultAsync(t => t.Token == token);
+        if (existing is null)
+        {
+            _db.DevicePushTokens.Add(new DevicePushToken
+            {
+                TenantId = tenantId,
+                UserId = userId,
+                Token = token,
+                Platform = string.IsNullOrWhiteSpace(request.Platform) ? "unknown" : request.Platform.Trim()
+            });
+        }
+        else
+        {
+            existing.UserId = userId;
+            existing.Platform = string.IsNullOrWhiteSpace(request.Platform) ? existing.Platform : request.Platform.Trim();
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync();
+        return Ok(new ApiResponse<object>(true, null, "Device token registered."));
+    }
 }
 
 [ApiController]

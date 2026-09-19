@@ -10,7 +10,6 @@ import { HomeRedirect } from './pages/HomeRedirect'
 import { UnauthorizedPage } from './pages/UnauthorizedPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ReceptionModePage } from './pages/ReceptionModePage'
-import { SecurityModePage } from './pages/SecurityModePage'
 import { HostModePage } from './pages/HostModePage'
 import { NewVisitorWizardPage } from './pages/NewVisitorWizardPage'
 import { VisitorsPage } from './pages/VisitorsPage'
@@ -20,10 +19,10 @@ import { ExpectedVisitorsPage } from './pages/ExpectedVisitorsPage'
 import { VisitorPassesPage } from './pages/VisitorPassesPage'
 import { PassPrintPage } from './pages/PassPrintPage'
 import { VerifyVisitorPage } from './pages/VerifyVisitorPage'
-import { EmergencyModePage } from './pages/EmergencyModePage'
 import { FaceCheckoutPage } from './pages/FaceCheckoutPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
+import { FeedbackQuestionsPage } from './pages/FeedbackQuestionsPage'
 import { SitesPage } from './pages/SitesPage'
 import { HostsPage } from './pages/HostsPage'
 import { UsersPage } from './pages/UsersPage'
@@ -68,8 +67,8 @@ export default function App() {
             </Route>
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Security']} />}>
-              <Route path="/security" element={<SecurityModePage />} />
-              <Route path="/emergency" element={<EmergencyModePage />} />
+              <Route path="/security" element={<Navigate to="/visitors/inside" replace />} />
+              <Route path="/emergency" element={<Navigate to="/visitors/inside" replace />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Host']} />}>
@@ -93,6 +92,7 @@ export default function App() {
               <Route path="/masters/hosts" element={<HostsPage />} />
               <Route path="/masters/purposes" element={<PurposesPage />} />
               <Route path="/masters/locations" element={<LocationsPage />} />
+              <Route path="/masters/feedback" element={<FeedbackQuestionsPage />} />
               <Route path="/masters/sites" element={<SitesPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/settings" element={<SettingsPage />} />
