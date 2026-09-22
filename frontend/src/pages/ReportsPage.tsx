@@ -32,9 +32,11 @@ interface ReportResult {
 
 export function ReportsPage() {
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
+  const [locations, setLocations] = useState<MasterItemDto[]>([])
   const [dateFrom, setDateFrom] = useState(todayIsoDate())
   const [dateTo, setDateTo] = useState(todayIsoDate())
   const [departmentId, setDepartmentId] = useState('')
+  const [locationId, setLocationId] = useState('')
   const [company, setCompany] = useState('')
   const [reportType, setReportType] = useState('daily')
   const [rows, setRows] = useState<ReportRow[]>([])
@@ -46,6 +48,7 @@ export function ReportsPage() {
 
   useEffect(() => {
     void mastersApi.departments().then(setDepartments)
+    void mastersApi.locations(true).then(setLocations)
   }, [])
 
   function onReportTypeChange(next: string) {
@@ -66,6 +69,7 @@ export function ReportsPage() {
       dateFrom: from,
       dateTo: to,
       departmentId: departmentId || undefined,
+      locationId: locationId || undefined,
       company: company || undefined,
     }
   }
@@ -106,7 +110,7 @@ export function ReportsPage() {
       <PageHeader title="Reports" subtitle="Visitor activity reports with export" />
 
       <Panel className="mb-4">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <div>
             <FieldLabel>Report type</FieldLabel>
             <TextSelect value={reportType} onChange={(e) => onReportTypeChange(e.target.value)}>
@@ -139,6 +143,15 @@ export function ReportsPage() {
               <option value="">All</option>
               {departments.map((d) => (
                 <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </TextSelect>
+          </div>
+          <div>
+            <FieldLabel>Location</FieldLabel>
+            <TextSelect value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+              <option value="">All</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
               ))}
             </TextSelect>
           </div>
@@ -184,6 +197,7 @@ export function ReportsPage() {
                 <th className="px-4 py-3">Date</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Purpose</th>
+                <th className="px-4 py-3">Location</th>
                 <th className="px-4 py-3">Feedback</th>
                 <th className="px-4 py-3">Ratings</th>
               </tr>
@@ -201,6 +215,7 @@ export function ReportsPage() {
                     <Badge className={statusBadgeClass(v.status)}>{v.status}</Badge>
                   </td>
                   <td className="px-4 py-3">{v.purposes || '—'}</td>
+                  <td className="px-4 py-3">{v.locations || '—'}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-amber-600 font-medium">
                     {v.feedbackAvg ? `${v.feedbackAvg} ★` : '—'}
                   </td>

@@ -18,7 +18,7 @@ public interface IAuthService
     Task<UserDto?> GetCurrentUserAsync(ClaimsPrincipal principal);
     Task<LoginResponse?> RefreshAsync(string refreshToken, string? ipAddress);
     Task LogoutAsync(ClaimsPrincipal principal, string? refreshToken);
-    Task ChangePasswordAsync(ClaimsPrincipal principal, ChangePasswordRequest request);
+    Task<LoginResponse> ChangePasswordAsync(ClaimsPrincipal principal, ChangePasswordRequest request, string? ipAddress);
 }
 
 public class AuthService : IAuthService
@@ -45,7 +45,7 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse?> LoginAsync(LoginRequest request, string? ipAddress)
     {
-        var user = await _userManager.Users.IgnoreQueryFilters().Include(u => u.Department)
+        var user = await _userManager.Users.IgnoreQueryFilters().Include(u => u.Department).Include(u => u.Location)
             .FirstOrDefaultAsync(u => u.UserName == request.Username);
         if (user is null || !user.IsActive)
         {
@@ -76,7 +76,7 @@ public class AuthService : IAuthService
     {
         var id = principal.FindFirstValue(ClaimTypes.NameIdentifier);
         if (id is null) return null;
-        var user = await _userManager.Users.Include(u => u.Department).FirstOrDefaultAsync(u => u.Id == id);
+        var user = await _userManager.Users.Include(u => u.Department).Include(u => u.Location).FirstOrDefaultAsync(u => u.Id == id);
         if (user is null || !user.IsActive) return null;
         var roles = await _userManager.GetRolesAsync(user);
         return MapUser(user, roles);
@@ -88,6 +88,7 @@ public class AuthService : IAuthService
         var hash = HashToken(refreshToken);
         var existing = await _db.RefreshTokens.IgnoreQueryFilters()
             .Include(t => t.User).ThenInclude(u => u!.Department)
+            .Include(t => t.User).ThenInclude(u => u!.Location)
             .FirstOrDefaultAsync(t => t.TokenHash == hash);
         if (existing is null || !existing.IsActive || existing.User is null || !existing.User.IsActive)
             return null;
@@ -121,11 +122,15 @@ public class AuthService : IAuthService
         await _db.SaveChangesAsync();
     }
 
-    public async Task ChangePasswordAsync(ClaimsPrincipal principal, ChangePasswordRequest request)
+    public async Task<LoginResponse> ChangePasswordAsync(
+        ClaimsPrincipal principal, ChangePasswordRequest request, string? ipAddress)
     {
         var id = principal.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? throw new UnauthorizedAccessException("Not authenticated.");
-        var user = await _userManager.FindByIdAsync(id)
+        var user = await _userManager.Users.IgnoreQueryFilters()
+            .Include(u => u.Department)
+            .Include(u => u.Location)
+            .FirstOrDefaultAsync(u => u.Id == id)
             ?? throw new UnauthorizedAccessException("User not found.");
 
         var result = await _userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
@@ -136,10 +141,13 @@ public class AuthService : IAuthService
         user.UpdatedAt = DateTime.UtcNow;
         await _userManager.UpdateAsync(user);
 
-        // Revoke refresh tokens after password change
+        // Revoke previous sessions, then issue a fresh JWT without the mcp claim.
         var tokens = await _db.RefreshTokens.Where(t => t.UserId == user.Id && t.RevokedAt == null).ToListAsync();
         foreach (var t in tokens) t.RevokedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
+
+        var roles = await _userManager.GetRolesAsync(user);
+        return await IssueTokensAsync(user, roles, rememberMe: false, ipAddress);
     }
 
     private async Task<LoginResponse> IssueTokensAsync(
@@ -196,8 +204,8 @@ public class AuthService : IAuthService
             claims.Add(new Claim("departmentId", user.DepartmentId.Value.ToString()));
         // Tenant claim is mandatory for authenticated API access (middleware fails closed without it).
         claims.Add(new Claim("tenantId", user.TenantId.ToString()));
-        if (user.SiteId.HasValue)
-            claims.Add(new Claim("siteId", user.SiteId.Value.ToString()));
+        if (user.LocationId.HasValue)
+            claims.Add(new Claim("locationId", user.LocationId.Value.ToString()));
 
         var token = new JwtSecurityToken(
             issuer: _config["Jwt:Issuer"],
@@ -227,8 +235,8 @@ public class AuthService : IAuthService
             Roles = roles.ToList(),
             DepartmentId = user.DepartmentId,
             DepartmentName = user.Department?.Name,
-            SiteId = user.SiteId,
-            SiteName = user.Site?.Name,
+            LocationId = user.LocationId,
+            LocationName = user.Location?.Name,
             AllowedMenuKeys = MenuAccess.Deserialize(user.AllowedMenuKeysJson, primaryRole),
             MustChangePassword = user.MustChangePassword,
             IsActive = user.IsActive

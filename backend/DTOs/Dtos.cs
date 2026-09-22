@@ -60,9 +60,9 @@ public class UserDto
     public Guid? DepartmentId { get; set; }
     public string? DepartmentName { get; set; }
 
-    /// <summary>Null means the user is not bound to a site and keeps tenant-wide visibility.</summary>
-    public Guid? SiteId { get; set; }
-    public string? SiteName { get; set; }
+    /// <summary>Null means the user is not bound to a location and keeps tenant-wide visibility.</summary>
+    public Guid? LocationId { get; set; }
+    public string? LocationName { get; set; }
 
     /// <summary>Menu keys visible to this user (already intersected with role). Empty uses role defaults on the client.</summary>
     public IReadOnlyList<string> AllowedMenuKeys { get; set; } = Array.Empty<string>();
@@ -87,8 +87,8 @@ public class CreateUserRequest
 
     public Guid? DepartmentId { get; set; }
 
-    /// <summary>Leave null to grant tenant-wide visibility (Admin); set it to lock the user to one site.</summary>
-    public Guid? SiteId { get; set; }
+    /// <summary>Leave null to grant tenant-wide visibility; set it to lock the user to one location.</summary>
+    public Guid? LocationId { get; set; }
 
     /// <summary>Sidebar menus this user may see. Restricted to menus allowed for <see cref="Role"/>.</summary>
     public List<string>? AllowedMenuKeys { get; set; }
@@ -110,8 +110,8 @@ public class UpdateUserRequest
 
     public Guid? DepartmentId { get; set; }
 
-    /// <summary>Leave null to grant tenant-wide visibility (Admin); set it to lock the user to one site.</summary>
-    public Guid? SiteId { get; set; }
+    /// <summary>Leave null to grant tenant-wide visibility; set it to lock the user to one location.</summary>
+    public Guid? LocationId { get; set; }
 
     /// <summary>Sidebar menus this user may see. Restricted to menus allowed for <see cref="Role"/>.</summary>
     public List<string>? AllowedMenuKeys { get; set; }
@@ -129,40 +129,6 @@ public class MasterItemDto
     public string? Intercom { get; set; }
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
-    public bool IsDefault { get; set; }
-
-    /// <summary>Set for locations only. Null means the area is shared by every site.</summary>
-    public Guid? SiteId { get; set; }
-    public string? SiteName { get; set; }
-}
-
-public class SiteDto
-{
-    public Guid Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string? Code { get; set; }
-    public string? Address { get; set; }
-    public bool IsActive { get; set; }
-    public bool IsDefault { get; set; }
-
-    /// <summary>Counts help an admin understand the blast radius before deactivating a site.</summary>
-    public int UserCount { get; set; }
-    public int LocationCount { get; set; }
-    public int InsideCount { get; set; }
-}
-
-public class SiteUpsertRequest
-{
-    [Required, MaxLength(150)]
-    public string Name { get; set; } = string.Empty;
-
-    [MaxLength(50)]
-    public string? Code { get; set; }
-
-    [MaxLength(300)]
-    public string? Address { get; set; }
-
-    public bool IsActive { get; set; } = true;
     public bool IsDefault { get; set; }
 }
 
@@ -257,7 +223,6 @@ public class RegisterVisitorRequest
 public class PassNumberSeriesDto
 {
     public Guid Id { get; set; }
-    public Guid? SiteId { get; set; }
     public string Prefix { get; set; } = "VMS-";
     public int? Year { get; set; }
     public int StartNumber { get; set; }
@@ -269,8 +234,6 @@ public class PassNumberSeriesDto
 
 public class UpsertPassNumberSeriesRequest
 {
-    public Guid? SiteId { get; set; }
-
     [Required, MaxLength(20)]
     public string Prefix { get; set; } = "VMS-";
 
@@ -629,9 +592,6 @@ public class MasterUpsertRequest
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
     public bool IsDefault { get; set; }
-
-    /// <summary>Locations only: the site this area belongs to. Null keeps it shared across sites.</summary>
-    public Guid? SiteId { get; set; }
 }
 
 public class FeedbackQuestionDto

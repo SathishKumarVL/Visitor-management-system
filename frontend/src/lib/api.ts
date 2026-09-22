@@ -18,8 +18,6 @@ import type {
   PublicBrandingDto,
   RegisterVisitorRequest,
   SettingsDto,
-  SiteDto,
-  SiteUpsertRequest,
   UpdateUserRequest,
   UserDto,
   VisitorDetailDto,
@@ -67,6 +65,10 @@ export function clearRefreshToken() {
 
 function prefersRememberMeStorage(): boolean {
   return !!localStorage.getItem(TOKEN_KEY) || !!localStorage.getItem(REFRESH_KEY)
+}
+
+export function isRememberMeSession(): boolean {
+  return prefersRememberMeStorage()
 }
 
 export function storeAuthTokens(token: string, refreshToken: string | undefined, rememberMe: boolean) {
@@ -202,12 +204,8 @@ export const authApi = {
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/login', { username, password, rememberMe })),
   me: () => unwrap(api.get<ApiResponse<UserDto>>('/auth/me')),
   logout: () => api.post<ApiResponse<object>>('/auth/logout'),
-  changePassword: async (body: ChangePasswordRequest) => {
-    const { data } = await api.post<ApiResponse<object | null>>('/auth/change-password', body)
-    if (!data.success) {
-      throw new Error(data.message || data.errors?.join(', ') || 'Password change failed')
-    }
-  },
+  changePassword: (body: ChangePasswordRequest) =>
+    unwrap(api.post<ApiResponse<LoginResponse>>('/auth/change-password', body)),
   refresh: (refreshToken: string) =>
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/refresh', { refreshToken })),
 }
@@ -334,15 +332,6 @@ export const settingsApi = {
     unwrap(api.put<ApiResponse<PassNumberAllocationDto>>('/pass-numbers/allocations', body)),
   sendTestEmail: (to: string) =>
     unwrap(api.post<ApiResponse<object>>('/settings/test-email', { to })),
-}
-
-export const sitesApi = {
-  list: (activeOnly = false) =>
-    unwrap(api.get<ApiResponse<SiteDto[]>>('/sites', { params: { activeOnly } })),
-  create: (body: SiteUpsertRequest) => unwrap(api.post<ApiResponse<SiteDto>>('/sites', body)),
-  update: (id: string, body: SiteUpsertRequest) =>
-    unwrap(api.put<ApiResponse<SiteDto>>(`/sites/${id}`, body)),
-  deactivate: (id: string) => unwrap(api.post<ApiResponse<null>>(`/sites/${id}/deactivate`, {})),
 }
 
 export const usersApi = {

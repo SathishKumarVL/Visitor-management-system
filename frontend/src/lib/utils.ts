@@ -55,7 +55,7 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
       preferred = '/visitors/inside'
       break
     case 'Host':
-      preferred = '/host'
+      preferred = '/dashboard'
       break
     default:
       preferred = '/dashboard'
@@ -69,7 +69,6 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
     '/dashboard': 'dashboard',
     '/reception': 'reception',
     '/visitors/inside': 'inside',
-    '/host': 'host',
   }
   const preferredKey = keyForPath[preferred]
   const allow = new Set(allowedMenuKeys.map((k) => k.toLowerCase()))
@@ -82,13 +81,12 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
   if (preferredKey && allow.has(preferredKey)) return preferred
 
   const order = [
-    'dashboard', 'reception', 'host', 'visitors', 'inside', 'expected',
-    'reports', 'departments', 'purposes', 'locations', 'feedback', 'sites', 'users', 'settings',
+    'dashboard', 'reception', 'visitors', 'inside', 'expected',
+    'reports', 'departments', 'purposes', 'locations', 'feedback', 'users', 'settings',
   ]
   const pathByKey: Record<string, string> = {
     dashboard: '/dashboard',
     reception: '/reception',
-    host: '/host',
     visitors: '/visitors',
     inside: '/visitors/inside',
     expected: '/visitors/expected',
@@ -97,7 +95,6 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
     purposes: '/masters/purposes',
     locations: '/masters/locations',
     feedback: '/masters/feedback',
-    sites: '/masters/sites',
     users: '/users',
     settings: '/settings',
   }

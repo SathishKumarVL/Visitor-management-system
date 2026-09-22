@@ -31,11 +31,13 @@ public class MasterDataService : IMasterDataService
 {
     private readonly ApplicationDbContext _db;
     private readonly ITenantContext _tenant;
+    private readonly IEntitlementService _entitlements;
 
-    public MasterDataService(ApplicationDbContext db, ITenantContext tenant)
+    public MasterDataService(ApplicationDbContext db, ITenantContext tenant, IEntitlementService entitlements)
     {
         _db = db;
         _tenant = tenant;
+        _entitlements = entitlements;
     }
 
     private Guid CurrentTenantId =>
@@ -173,24 +175,15 @@ public class MasterDataService : IMasterDataService
         return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto
         {
             Id = x.Id, Name = x.Name, IsActive = x.IsActive, SortOrder = x.SortOrder,
-            RequiresPlantNumber = x.RequiresPlantNumber, RequiresOtherText = x.RequiresOtherText,
-            SiteId = x.SiteId, SiteName = x.Site != null ? x.Site.Name : null
+            RequiresPlantNumber = x.RequiresPlantNumber, RequiresOtherText = x.RequiresOtherText
         }).ToListAsync();
-    }
-
-    /// <summary>Null keeps an area shared across sites; a value must name an active site in this tenant.</summary>
-    private async Task<Guid?> ValidateSiteAsync(Guid? siteId)
-    {
-        if (siteId is not Guid id || id == Guid.Empty) return null;
-
-        if (!await _db.Sites.AnyAsync(s => s.Id == id && s.IsActive))
-            throw new InvalidOperationException("Selected site was not found or is inactive.");
-
-        return id;
     }
 
     public async Task<MasterItemDto> UpsertLocationAsync(Guid? id, MasterUpsertRequest request, string? user)
     {
+        if (id is null)
+            await _entitlements.EnsureCanCreateLocationAsync();
+
         Location entity;
         if (id.HasValue)
         {
@@ -203,18 +196,12 @@ public class MasterDataService : IMasterDataService
         entity.IsActive = request.IsActive;
         entity.RequiresPlantNumber = request.RequiresPlantNumber;
         entity.RequiresOtherText = request.RequiresOtherText;
-        entity.SiteId = await ValidateSiteAsync(request.SiteId);
         await _db.SaveChangesAsync();
-
-        var siteName = entity.SiteId is Guid sid
-            ? await _db.Sites.AsNoTracking().Where(s => s.Id == sid).Select(s => s.Name).FirstOrDefaultAsync()
-            : null;
 
         return new MasterItemDto
         {
             Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder,
-            RequiresPlantNumber = entity.RequiresPlantNumber, RequiresOtherText = entity.RequiresOtherText,
-            SiteId = entity.SiteId, SiteName = siteName
+            RequiresPlantNumber = entity.RequiresPlantNumber, RequiresOtherText = entity.RequiresOtherText
         };
     }
 
@@ -561,7 +548,7 @@ public class UserAdminService : IUserAdminService
     {
         var users = await _userManager.Users
             .Include(u => u.Department)
-            .Include(u => u.Site)
+            .Include(u => u.Location)
             .OrderBy(u => u.FullName)
             .ToListAsync();
         var result = new List<UserDto>();
@@ -578,8 +565,8 @@ public class UserAdminService : IUserAdminService
                 Roles = roles.ToList(),
                 DepartmentId = u.DepartmentId,
                 DepartmentName = u.Department?.Name,
-                SiteId = u.SiteId,
-                SiteName = u.Site?.Name,
+                LocationId = u.LocationId,
+                LocationName = u.Location?.Name,
                 AllowedMenuKeys = MenuAccess.Deserialize(u.AllowedMenuKeysJson, primaryRole),
                 MustChangePassword = u.MustChangePassword,
                 IsActive = u.IsActive
@@ -589,16 +576,16 @@ public class UserAdminService : IUserAdminService
     }
 
     /// <summary>
-    /// Binding a user to a site controls what they can see, so the target site must belong to the
-    /// caller's tenant and still be open for business.
+    /// Binding a user to a location controls what they can see, so the target location must belong to the
+    /// caller's tenant and still be active.
     /// </summary>
-    private async Task<Guid?> ValidateSiteAsync(Guid? siteId)
+    private async Task<Guid?> ValidateLocationAsync(Guid? locationId)
     {
-        if (siteId is not Guid id || id == Guid.Empty) return null;
+        if (locationId is not Guid id || id == Guid.Empty) return null;
 
-        var exists = await _db.Sites.AnyAsync(s => s.Id == id && s.IsActive);
+        var exists = await _db.Locations.AnyAsync(l => l.Id == id && l.IsActive);
         if (!exists)
-            throw new InvalidOperationException("Selected site was not found or is inactive.");
+            throw new InvalidOperationException("Selected location was not found or is inactive.");
 
         return id;
     }
@@ -608,8 +595,8 @@ public class UserAdminService : IUserAdminService
         await _entitlements.EnsureCanCreateUserAsync();
         if (!AppRoles.All.Contains(request.Role))
             throw new InvalidOperationException("Invalid role.");
-        var tenantId = _tenant.TenantId is Guid id && id != Guid.Empty
-            ? id
+        var tenantId = _tenant.TenantId is Guid tid && tid != Guid.Empty
+            ? tid
             : throw new UnauthorizedAccessException("Tenant context is required.");
         var menus = MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys);
         var user = new ApplicationUser
@@ -619,7 +606,7 @@ public class UserAdminService : IUserAdminService
             FullName = request.FullName.Trim(),
             TenantId = tenantId,
             DepartmentId = request.DepartmentId,
-            SiteId = await ValidateSiteAsync(request.SiteId),
+            LocationId = await ValidateLocationAsync(request.LocationId),
             AllowedMenuKeysJson = MenuAccess.Serialize(menus),
             IsActive = true,
             MustChangePassword = true,
@@ -640,7 +627,7 @@ public class UserAdminService : IUserAdminService
         user.FullName = request.FullName.Trim();
         user.Email = request.Email.Trim();
         user.DepartmentId = request.DepartmentId;
-        user.SiteId = await ValidateSiteAsync(request.SiteId);
+        user.LocationId = await ValidateLocationAsync(request.LocationId);
         user.AllowedMenuKeysJson = MenuAccess.Serialize(
             MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys));
         user.IsActive = request.IsActive;

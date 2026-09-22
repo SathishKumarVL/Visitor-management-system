@@ -9,7 +9,7 @@ namespace Tiaano.Vms.Api.Controllers;
 
 /// <summary>Emergency roster — requires emergency-management entitlement (backend enforced).</summary>
 [ApiController]
-[Route("api/emergency")]
+[Route("emergency")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Security}")]
 [RequireModule(ModuleKeys.EmergencyManagement)]
 public class EmergencyController : ControllerBase
@@ -60,7 +60,7 @@ public class EmergencyController : ControllerBase
 
 /// <summary>Analytics — requires analytics entitlement (backend enforced).</summary>
 [ApiController]
-[Route("api/analytics")]
+[Route("analytics")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
 [RequireModule(ModuleKeys.Analytics)]
 public class AnalyticsController : ControllerBase

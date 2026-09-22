@@ -22,8 +22,8 @@ export interface UserDto {
   roles: string[]
   departmentId?: string | null
   departmentName?: string | null
-  siteId?: string | null
-  siteName?: string | null
+  locationId?: string | null
+  locationName?: string | null
   /** Sidebar menus this user may see (intersected with role). */
   allowedMenuKeys?: string[]
   mustChangePassword: boolean
@@ -58,29 +58,6 @@ export interface MasterItemDto {
   intercom?: string | null
   requiresPlantNumber: boolean
   requiresOtherText: boolean
-  isDefault: boolean
-  /** Locations only. Null means the area is shared by every site. */
-  siteId?: string | null
-  siteName?: string | null
-}
-
-export interface SiteDto {
-  id: string
-  name: string
-  code?: string | null
-  address?: string | null
-  isActive: boolean
-  isDefault: boolean
-  userCount: number
-  locationCount: number
-  insideCount: number
-}
-
-export interface SiteUpsertRequest {
-  name: string
-  code?: string | null
-  address?: string | null
-  isActive: boolean
   isDefault: boolean
 }
 
@@ -332,8 +309,8 @@ export interface CreateUserRequest {
   email: string
   role: string
   departmentId?: string | null
-  /** Null grants tenant-wide visibility; a value locks the user to that one site. */
-  siteId?: string | null
+  /** Null grants tenant-wide visibility; a value locks the user to that one location. */
+  locationId?: string | null
   allowedMenuKeys?: string[]
   password: string
 }
@@ -343,8 +320,8 @@ export interface UpdateUserRequest {
   email: string
   role: string
   departmentId?: string | null
-  /** Null grants tenant-wide visibility; a value locks the user to that one site. */
-  siteId?: string | null
+  /** Null grants tenant-wide visibility; a value locks the user to that one location. */
+  locationId?: string | null
   allowedMenuKeys?: string[]
   isActive: boolean
 }
@@ -368,8 +345,6 @@ export interface MasterUpsertRequest {
   requiresPlantNumber: boolean
   requiresOtherText: boolean
   isDefault: boolean
-  /** Locations only: null keeps the area shared across sites. */
-  siteId?: string | null
 }
 
 export interface VisitorSearchParams {
@@ -418,7 +393,6 @@ export interface VisitorWizardDraft {
 
 export interface PassNumberSeriesDto {
   id: string
-  siteId?: string | null
   prefix: string
   year?: number | null
   startNumber: number
@@ -429,7 +403,6 @@ export interface PassNumberSeriesDto {
 }
 
 export interface UpsertPassNumberSeriesRequest {
-  siteId?: string | null
   prefix: string
   year?: number | null
   startNumber: number

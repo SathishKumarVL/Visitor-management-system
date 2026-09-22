@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 namespace Tiaano.Vms.Api.Models;
 
 /// <summary>
-/// Tenant (optional site) sequence for allocated visitor pass codes.
+/// Tenant-wide sequence for allocated visitor pass codes.
 /// Format: <c>{Prefix}{Year}-{number:D6}</c> e.g. <c>VMS-2026-000184</c>
 /// (Year comes from the series when set, otherwise the current calendar year).
 /// </summary>
@@ -13,9 +13,6 @@ public class PassNumberSeries
 
     public Guid TenantId { get; set; }
     public Tenant? Tenant { get; set; }
-
-    public Guid? SiteId { get; set; }
-    public Site? Site { get; set; }
 
     [Required, MaxLength(20)]
     public string Prefix { get; set; } = "VMS-";

@@ -13,39 +13,38 @@ using Xunit;
 namespace Tiaano.Vms.Api.Tests;
 
 /// <summary>
-/// Site scoping is the second isolation axis inside a tenant: a user bound to a site must never see
-/// another site's visitors, and a user with no site keeps tenant-wide visibility. These tests use two
-/// sites in the SAME tenant so a passing result cannot be explained by tenant isolation alone.
+/// Location scoping is the second isolation axis inside a tenant: a user bound to a location must never
+/// see visits that do not include that location, while a user with no location keeps tenant-wide visibility.
 /// </summary>
-public class SiteScopingTests : IClassFixture<TestApiFactory>
+public class LocationScopingTests : IClassFixture<TestApiFactory>
 {
     private readonly TestApiFactory _factory;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    private const string NorthSiteName = "Scoping North";
-    private const string SouthSiteName = "Scoping South";
+    private const string NorthLocationName = "Scoping North";
+    private const string SouthLocationName = "Scoping South";
     private const string NorthUser = "scoping-north-reception";
     private const string SouthUser = "scoping-south-reception";
     private const string RoamingUser = "scoping-roaming-admin";
-    private const string Password = "SiteScoping_Pass1!";
+    private const string Password = "LocationScoping_Pass1!";
 
-    private const string NorthVisitorName = "North Site Visitor";
-    private const string SouthVisitorName = "South Site Visitor";
-
-    /// <summary>
-    /// Narrowed to the two fixture visitors. Listing everything would let visitors created by other
-    /// tests push the fixtures off the first page and fail these assertions for the wrong reason.
-    /// </summary>
-    private const string FixtureQuery = "/api/visitors?page=1&pageSize=100&query=Site%20Visitor";
-
-    public SiteScopingTests(TestApiFactory factory) => _factory = factory;
-
-    private sealed record Fixture(Guid TenantId, Guid NorthSiteId, Guid SouthSiteId, Guid NorthVisitId, Guid SouthVisitId);
+    private const string NorthVisitorName = "North Location Visitor";
+    private const string SouthVisitorName = "South Location Visitor";
 
     /// <summary>
-    /// Builds two sites in the default tenant, one checked-in visitor in each, and three users:
-    /// reception bound to north, reception bound to south, and an admin bound to nothing.
+    /// Narrowed to the two fixture visitors so siblings created by other tests cannot push them off page 1.
     /// </summary>
+    private const string FixtureQuery = "/api/visitors?page=1&pageSize=100&query=Location%20Visitor";
+
+    public LocationScopingTests(TestApiFactory factory) => _factory = factory;
+
+    private sealed record Fixture(
+        Guid TenantId,
+        Guid NorthLocationId,
+        Guid SouthLocationId,
+        Guid NorthVisitId,
+        Guid SouthVisitId);
+
     private async Task<Fixture> EnsureFixtureAsync()
     {
         using var scope = _factory.Services.CreateScope();
@@ -55,8 +54,8 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         var seededReception = await users.Users.IgnoreQueryFilters().FirstAsync(u => u.UserName == "reception");
         var tenantId = seededReception.TenantId;
 
-        var north = await EnsureSiteAsync(db, tenantId, NorthSiteName, "SCN");
-        var south = await EnsureSiteAsync(db, tenantId, SouthSiteName, "SCS");
+        var north = await EnsureLocationAsync(db, tenantId, NorthLocationName);
+        var south = await EnsureLocationAsync(db, tenantId, SouthLocationName);
 
         var dept = await db.Departments.IgnoreQueryFilters().FirstAsync(d => d.TenantId == tenantId);
         var host = await db.Employees.IgnoreQueryFilters().FirstAsync(e => e.TenantId == tenantId);
@@ -71,10 +70,10 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         return new Fixture(tenantId, north, south, northVisitId, southVisitId);
     }
 
-    private static async Task<Guid> EnsureSiteAsync(ApplicationDbContext db, Guid tenantId, string name, string code)
+    private static async Task<Guid> EnsureLocationAsync(ApplicationDbContext db, Guid tenantId, string name)
     {
-        var existing = await db.Sites.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(s => s.TenantId == tenantId && s.Name == name);
+        var existing = await db.Locations.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.Name == name);
         if (existing is not null)
         {
             if (!existing.IsActive)
@@ -85,25 +84,28 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
             return existing.Id;
         }
 
-        var site = new Site
+        var location = new Location
         {
             TenantId = tenantId,
             Name = name,
-            Code = code,
             IsActive = true,
-            IsDefault = false,
             CreatedBy = "test"
         };
-        db.Sites.Add(site);
+        db.Locations.Add(location);
         await db.SaveChangesAsync();
-        return site.Id;
+        return location.Id;
     }
 
     private static async Task<Guid> EnsureVisitAsync(
-        ApplicationDbContext db, Guid tenantId, Guid siteId, string visitorName, string prefix, Guid deptId, Guid hostId)
+        ApplicationDbContext db, Guid tenantId, Guid locationId, string visitorName, string prefix, Guid deptId, Guid hostId)
     {
         var existing = await db.VisitorVisits.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(v => v.TenantId == tenantId && v.SiteId == siteId && v.Visitor.FullName == visitorName);
+            .Include(v => v.VisitLocations)
+            .Include(v => v.Visitor)
+            .FirstOrDefaultAsync(v =>
+                v.TenantId == tenantId
+                && v.Visitor.FullName == visitorName
+                && v.VisitLocations.Any(vl => vl.LocationId == locationId));
         if (existing is not null)
         {
             if (existing.Status != VisitStatus.Inside)
@@ -129,7 +131,6 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         var visit = new VisitorVisit
         {
             TenantId = tenantId,
-            SiteId = siteId,
             VisitorId = visitor.Id,
             VisitNumber = $"{prefix}-{Guid.NewGuid():N}"[..20],
             VisitDate = DateOnly.FromDateTime(DateTime.Today),
@@ -141,13 +142,14 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
             NumberOfPersons = 1,
             CreatedBy = "test"
         };
+        visit.VisitLocations.Add(new VisitorVisitLocation { LocationId = locationId });
         db.VisitorVisits.Add(visit);
         await db.SaveChangesAsync();
         return visit.Id;
     }
 
     private static async Task EnsureUserAsync(
-        UserManager<ApplicationUser> users, string username, Guid tenantId, Guid? siteId, string role, Guid deptId)
+        UserManager<ApplicationUser> users, string username, Guid tenantId, Guid? locationId, string role, Guid deptId)
     {
         var user = await users.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.UserName == username);
         if (user is null)
@@ -159,7 +161,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
                 EmailConfirmed = true,
                 FullName = username,
                 TenantId = tenantId,
-                SiteId = siteId,
+                LocationId = locationId,
                 DepartmentId = deptId,
                 IsActive = true,
                 MustChangePassword = false
@@ -170,9 +172,8 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
             return;
         }
 
-        // Re-assert the fields the tests depend on; earlier runs may have mutated them.
         user.TenantId = tenantId;
-        user.SiteId = siteId;
+        user.LocationId = locationId;
         user.IsActive = true;
         user.MustChangePassword = false;
         await users.UpdateAsync(user);
@@ -205,7 +206,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Site_Bound_User_Search_Excludes_Other_Site()
+    public async Task Location_Bound_User_Search_Excludes_Other_Location()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
@@ -217,7 +218,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Site_Bound_User_Inside_List_Excludes_Other_Site()
+    public async Task Location_Bound_User_Inside_List_Excludes_Other_Location()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(SouthUser);
@@ -229,7 +230,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Site_Bound_User_Cannot_Open_Other_Site_Visit_By_Id()
+    public async Task Location_Bound_User_Cannot_Open_Other_Location_Visit_By_Id()
     {
         var fixture = await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
@@ -240,19 +241,18 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Site_Bound_User_Can_Open_Own_Site_Visit_By_Id()
+    public async Task Location_Bound_User_Can_Open_Own_Location_Visit_By_Id()
     {
         var fixture = await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
 
         var response = await client.GetAsync($"/api/visitors/{fixture.NorthVisitId}");
 
-        // Positive control: proves the 404 above is site scoping, not a broken fixture.
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
-    public async Task Unassigned_User_Sees_Every_Site()
+    public async Task Unassigned_User_Sees_Every_Location()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(RoamingUser);
@@ -264,7 +264,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Dashboard_Counts_Are_Site_Scoped()
+    public async Task Dashboard_Counts_Are_Location_Scoped()
     {
         await EnsureFixtureAsync();
 
@@ -276,14 +276,14 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         var roamingInside = JsonDocument.Parse(roamingBody).RootElement
             .GetProperty("data").GetProperty("currentlyInside").GetInt32();
 
-        Assert.True(northInside >= 1, "North site should count its own visitor.");
+        Assert.True(northInside >= 1, "North location should count its own visitor.");
         Assert.True(
             roamingInside > northInside,
-            $"Tenant-wide count ({roamingInside}) should exceed one site's count ({northInside}).");
+            $"Tenant-wide count ({roamingInside}) should exceed one location's count ({northInside}).");
     }
 
     [Fact]
-    public async Task Emergency_Roster_Is_Site_Scoped()
+    public async Task Emergency_Roster_Is_Location_Scoped()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(RoamingUser);
@@ -291,13 +291,11 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         Assert.Contains(NorthVisitorName, all);
         Assert.Contains(SouthVisitorName, all);
 
-        // Security role is required for the roster, so bind the roaming admin's site temporarily instead
-        // of creating a fourth account: re-read as the north reception user.
         var northClient = await LoginAsync(NorthUser);
         var northRoster = await northClient.GetAsync("/api/emergency/roster");
 
         if (northRoster.StatusCode == HttpStatusCode.Forbidden)
-            return; // Reception is not entitled to the roster; the tenant-wide assertion above still holds.
+            return;
 
         var body = await BodyAsync(northRoster);
         Assert.Contains(NorthVisitorName, body);
@@ -305,7 +303,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Visitor_Report_Is_Site_Scoped()
+    public async Task Visitor_Report_Is_Location_Scoped_For_Bound_User()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
@@ -317,36 +315,20 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Locations_Are_Site_Scoped()
+    public async Task Visitor_Report_LocationId_Filter_Returns_Only_Matching_Visits()
     {
         var fixture = await EnsureFixtureAsync();
+        var client = await LoginAsync(RoamingUser);
 
-        using (var scope = _factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            if (!await db.Locations.IgnoreQueryFilters().AnyAsync(l => l.SiteId == fixture.SouthSiteId && l.Name == "South Only Area"))
-            {
-                db.Locations.Add(new Location
-                {
-                    TenantId = fixture.TenantId,
-                    SiteId = fixture.SouthSiteId,
-                    Name = "South Only Area",
-                    IsActive = true,
-                    CreatedBy = "test"
-                });
-                await db.SaveChangesAsync();
-            }
-        }
+        var body = await BodyAsync(await client.GetAsync(
+            $"/api/reports/visitors?format=json&page=1&pageSize=200&locationId={fixture.SouthLocationId}"));
 
-        var northBody = await BodyAsync(await (await LoginAsync(NorthUser)).GetAsync("/api/masters/locations"));
-        var southBody = await BodyAsync(await (await LoginAsync(SouthUser)).GetAsync("/api/masters/locations"));
-
-        Assert.DoesNotContain("South Only Area", northBody);
-        Assert.Contains("South Only Area", southBody);
+        Assert.Contains(SouthVisitorName, body);
+        Assert.DoesNotContain(NorthVisitorName, body);
     }
 
     [Fact]
-    public async Task New_Registration_Is_Stamped_With_Acting_Users_Site()
+    public async Task New_Registration_Includes_Acting_Users_Location()
     {
         var fixture = await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
@@ -355,7 +337,6 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            // Host must belong to the department it is registered against, so derive both from one row.
             var host = await db.Employees.IgnoreQueryFilters()
                 .Where(e => e.IsActive && e.TenantId == fixture.TenantId)
                 .OrderBy(e => e.FullName)
@@ -373,7 +354,7 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
         var response = await client.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = marker,
-            companyName = "Site Stamp Co",
+            companyName = "Location Stamp Co",
             telephone = "9000000003",
             email = $"{Guid.NewGuid():N}@example.test",
             departmentId = deptId,
@@ -390,71 +371,26 @@ public class SiteScopingTests : IClassFixture<TestApiFactory>
 
         using var verify = _factory.Services.CreateScope();
         var verifyDb = verify.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var stamped = await verifyDb.VisitorVisits.IgnoreQueryFilters()
+        var stampedLocations = await verifyDb.VisitorVisits.IgnoreQueryFilters()
             .Where(v => v.Visitor.FullName == marker)
-            .Select(v => v.SiteId)
-            .FirstAsync();
+            .SelectMany(v => v.VisitLocations.Select(vl => vl.LocationId))
+            .ToListAsync();
 
-        Assert.Equal(fixture.NorthSiteId, stamped);
+        Assert.Contains(fixture.NorthLocationId, stampedLocations);
     }
 
     [Fact]
-    public async Task Site_Write_Endpoints_Reject_Reception()
+    public async Task Location_Write_Endpoints_Reject_Reception()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(NorthUser);
 
-        var response = await client.PostAsJsonAsync("/api/sites", new
+        var response = await client.PostAsJsonAsync("/api/masters/locations", new
         {
-            name = $"Unauthorized Site {Guid.NewGuid():N}",
-            isActive = true,
-            isDefault = false
+            name = $"Unauthorized Location {Guid.NewGuid():N}",
+            isActive = true
         });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Site_With_Visitors_Inside_Cannot_Be_Deactivated()
-    {
-        var fixture = await EnsureFixtureAsync();
-        var client = await LoginAsync(RoamingUser);
-
-        var response = await client.PostAsJsonAsync($"/api/sites/{fixture.NorthSiteId}/deactivate", new { });
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("still inside", body, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Duplicate_Site_Name_Is_Rejected()
-    {
-        await EnsureFixtureAsync();
-        var client = await LoginAsync(RoamingUser);
-
-        var response = await client.PostAsJsonAsync("/api/sites", new
-        {
-            name = NorthSiteName,
-            isActive = true,
-            isDefault = false
-        });
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("already exists", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Site_List_Reports_Assignment_Counts()
-    {
-        var fixture = await EnsureFixtureAsync();
-        var client = await LoginAsync(RoamingUser);
-
-        var body = await BodyAsync(await client.GetAsync("/api/sites"));
-        var sites = JsonDocument.Parse(body).RootElement.GetProperty("data");
-
-        var north = sites.EnumerateArray().First(s => s.GetProperty("id").GetGuid() == fixture.NorthSiteId);
-        Assert.True(north.GetProperty("userCount").GetInt32() >= 1, "North site has an assigned reception user.");
-        Assert.True(north.GetProperty("insideCount").GetInt32() >= 1, "North site has a visitor inside.");
     }
 }

@@ -37,17 +37,16 @@ public class TenantResolutionMiddleware
                 return;
             }
 
-            Guid? siteId = null;
-            var siteRaw = context.User.FindFirstValue(TenantClaims.SiteIdClaim);
-            if (Guid.TryParse(siteRaw, out var sid) && sid != Guid.Empty)
+            Guid? locationId = null;
+            var locationRaw = context.User.FindFirstValue(TenantClaims.LocationIdClaim);
+            if (Guid.TryParse(locationRaw, out var lid) && lid != Guid.Empty)
             {
-                var siteOk = await db.Sites.IgnoreQueryFilters().AsNoTracking()
-                    .AnyAsync(s => s.Id == sid && s.TenantId == tenantId && s.IsActive);
-                if (siteOk) siteId = sid;
-                // Invalid site claim is ignored (site scope is advisory foundation only).
+                var locationOk = await db.Locations.IgnoreQueryFilters().AsNoTracking()
+                    .AnyAsync(l => l.Id == lid && l.TenantId == tenantId && l.IsActive);
+                if (locationOk) locationId = lid;
             }
 
-            tenantContext.Set(tenantId, siteId);
+            tenantContext.Set(tenantId, locationId);
         }
 
         await _next(context);

@@ -29,7 +29,6 @@ const MENU_ICONS: Record<string, string> = {
   purposes: '◇',
   locations: '⌖',
   feedback: '★',
-  sites: '⬡',
   users: '👥',
   settings: '⚙',
 }

@@ -153,7 +153,7 @@ public class PassNumberService : IPassNumberService
             SELECT TOP (1) Id, Prefix, Year
             FROM PassNumberSeries
             WHERE TenantId = @TenantId AND IsActive = 1 AND CurrentNumber < EndNumber
-            ORDER BY CASE WHEN SiteId IS NULL THEN 0 ELSE 1 END, CreatedAt
+            ORDER BY CreatedAt
             """;
 
         Guid seriesId;
@@ -194,8 +194,7 @@ public class PassNumberService : IPassNumberService
     {
         RequireTenantId();
         var series = await _db.PassNumberSeries.AsNoTracking()
-            .OrderBy(s => s.SiteId == null ? 0 : 1)
-            .ThenBy(s => s.CreatedAt)
+            .OrderBy(s => s.CreatedAt)
             .FirstOrDefaultAsync(ct);
         return series is null ? null : ToSeriesDto(series);
     }
@@ -206,8 +205,7 @@ public class PassNumberService : IPassNumberService
         ValidateSeriesRequest(request);
 
         var series = await _db.PassNumberSeries
-            .OrderBy(s => s.SiteId == null ? 0 : 1)
-            .ThenBy(s => s.CreatedAt)
+            .OrderBy(s => s.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
         if (series is null)
@@ -215,7 +213,6 @@ public class PassNumberService : IPassNumberService
             series = new PassNumberSeries
             {
                 TenantId = tenantId,
-                SiteId = request.SiteId,
                 Prefix = request.Prefix.Trim(),
                 Year = request.Year,
                 StartNumber = request.StartNumber,
@@ -227,7 +224,6 @@ public class PassNumberService : IPassNumberService
         }
         else
         {
-            series.SiteId = request.SiteId;
             series.Prefix = request.Prefix.Trim();
             series.Year = request.Year;
             series.StartNumber = request.StartNumber;
@@ -326,7 +322,6 @@ public class PassNumberService : IPassNumberService
     private static PassNumberSeriesDto ToSeriesDto(PassNumberSeries s) => new()
     {
         Id = s.Id,
-        SiteId = s.SiteId,
         Prefix = s.Prefix,
         Year = s.Year,
         StartNumber = s.StartNumber,

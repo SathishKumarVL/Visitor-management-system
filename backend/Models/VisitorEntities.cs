@@ -42,9 +42,6 @@ public class VisitorVisit
     public Guid TenantId { get; set; }
     public Tenant? Tenant { get; set; }
 
-    public Guid? SiteId { get; set; }
-    public Site? Site { get; set; }
-
     public Guid VisitorId { get; set; }
     public Visitor Visitor { get; set; } = null!;
 

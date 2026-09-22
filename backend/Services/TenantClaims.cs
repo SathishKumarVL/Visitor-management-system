@@ -6,7 +6,7 @@ namespace Tiaano.Vms.Api.Services;
 public static class TenantClaims
 {
     public const string TenantIdClaim = "tenantId";
-    public const string SiteIdClaim = "siteId";
+    public const string LocationIdClaim = "locationId";
 
     /// <summary>
     /// Resolves tenant from request context or JWT. Does not soft-fallback for authenticated identity

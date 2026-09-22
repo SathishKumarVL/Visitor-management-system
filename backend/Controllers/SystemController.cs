@@ -11,7 +11,7 @@ using Tiaano.Vms.Api.Services;
 namespace Tiaano.Vms.Api.Controllers;
 
 [ApiController]
-[Route("api/system")]
+[Route("system")]
 public class SystemController : ControllerBase
 {
     public const string AppVersion = "0.2.0-overnight";
@@ -81,7 +81,7 @@ public class SystemController : ControllerBase
             status = license?.Status ?? "Active",
             expiresAt = license?.ExpiresAt,
             graceDaysAfterExpiry = license?.GraceDaysAfterExpiry ?? 30,
-            maxSites = license?.MaxSites ?? 1,
+            maxLocations = license?.MaxLocations ?? 25,
             maxUsers = license?.MaxUsers ?? 25,
             modules
         }));

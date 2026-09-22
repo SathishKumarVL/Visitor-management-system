@@ -46,7 +46,6 @@ public class VisitorService : IVisitorService
     private readonly ILogger<VisitorService> _logger;
     private readonly IMediaStorageService _media;
     private readonly ITenantContext _tenant;
-    private readonly ISiteService _sites;
     private readonly IFaceEmbeddingService _faces;
     private readonly IPassNumberService _passNumbers;
     private readonly IFeedbackService _feedback;
@@ -62,7 +61,6 @@ public class VisitorService : IVisitorService
         ILogger<VisitorService> logger,
         IMediaStorageService media,
         ITenantContext tenant,
-        ISiteService sites,
         IFaceEmbeddingService faces,
         IPassNumberService passNumbers,
         IFeedbackService feedback)
@@ -76,7 +74,6 @@ public class VisitorService : IVisitorService
         _logger = logger;
         _media = media;
         _tenant = tenant;
-        _sites = sites;
         _faces = faces;
         _passNumbers = passNumbers;
         _feedback = feedback;
@@ -122,11 +119,16 @@ public class VisitorService : IVisitorService
         if (purposes.Count == 0) throw new InvalidOperationException("At least one valid purpose is required.");
 
         var locationIds = request.LocationIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
+        if (_tenant.LocationId is Guid boundLocation && boundLocation != Guid.Empty
+            && !locationIds.Contains(boundLocation))
+            locationIds.Add(boundLocation);
         var locations = locationIds.Count == 0
             ? []
             : await _db.Locations.Where(l => locationIds.Contains(l.Id) && l.IsActive).ToListAsync();
         if (locationIds.Count > 0 && locations.Count == 0)
             throw new InvalidOperationException("At least one valid location is required.");
+        if (_tenant.LocationId is Guid requiredLoc && !locations.Any(l => l.Id == requiredLoc))
+            throw new InvalidOperationException("Visits must include your assigned location.");
         if (locations.Any(l => l.RequiresPlantNumber) && string.IsNullOrWhiteSpace(request.PlantNumber))
             throw new InvalidOperationException("Plant number is required when Plant No. is selected.");
         if (locations.Any(l => l.RequiresOtherText) && string.IsNullOrWhiteSpace(request.OtherLocationText))
@@ -161,7 +163,7 @@ public class VisitorService : IVisitorService
         else if (request.RecognizedVisitorId.HasValue)
         {
             // Face match the operator confirmed: reuse the visitor so the return visit joins their
-            // history. The query filter keeps this from reaching across tenants or sites.
+            // history. The query filter keeps this from reaching across tenants or locations.
             visitor = await _db.Visitors.FirstOrDefaultAsync(v => v.Id == request.RecognizedVisitorId.Value)
                 ?? throw new InvalidOperationException("Recognised visitor record not found.");
             await EnsureVisitorNotAlreadyInsideAsync(visitor.Id);
@@ -201,7 +203,6 @@ public class VisitorService : IVisitorService
         var visit = new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
-            SiteId = await _sites.ResolveVisitSiteIdAsync(),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected,
@@ -319,7 +320,6 @@ public class VisitorService : IVisitorService
         var visit = new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
-            SiteId = await _sites.ResolveVisitSiteIdAsync(),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             PreRegistrationReference = $"EXP-{DateTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",

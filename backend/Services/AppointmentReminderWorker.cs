@@ -75,7 +75,7 @@ public sealed class AppointmentReminderWorker : BackgroundService
                 if (nowLocal < fireAt || nowLocal >= fireAt + window)
                     continue;
 
-                tenantCtx.Set(visit.TenantId, visit.SiteId);
+                tenantCtx.Set(visit.TenantId);
                 var when = expectedAt.ToString("dd MMM yyyy HH:mm");
                 var subject = $"Reminder: {visit.Visitor.FullName} expected in {hours}h";
                 var body =

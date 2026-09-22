@@ -5,7 +5,7 @@ using Tiaano.Vms.Api.Services;
 namespace Tiaano.Vms.Api.Controllers;
 
 [ApiController]
-[Route("api/media")]
+[Route("media")]
 [Authorize]
 public class MediaController : ControllerBase
 {

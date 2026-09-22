@@ -15,7 +15,7 @@ using Tiaano.Vms.Api.Services.Face;
 namespace Tiaano.Vms.Api.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("[controller]")]
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
@@ -46,16 +46,17 @@ public class AuthController : ControllerBase
 
     [HttpPost("change-password")]
     [Authorize]
-    public async Task<ActionResult<ApiResponse<object>>> ChangePassword([FromBody] ChangePasswordRequest request)
+    public async Task<ActionResult<ApiResponse<LoginResponse>>> ChangePassword([FromBody] ChangePasswordRequest request)
     {
         try
         {
-            await _auth.ChangePasswordAsync(User, request);
-            return Ok(new ApiResponse<object>(true, null, "Password updated."));
+            var result = await _auth.ChangePasswordAsync(
+                User, request, HttpContext.Connection.RemoteIpAddress?.ToString());
+            return Ok(new ApiResponse<LoginResponse>(true, result, "Password updated."));
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+            return BadRequest(new ApiResponse<LoginResponse>(false, null, ex.Message));
         }
     }
 
@@ -78,7 +79,7 @@ public class AuthController : ControllerBase
 }
 
 [ApiController]
-[Route("api/visitors")]
+[Route("visitors")]
 [Authorize]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class VisitorsController : ControllerBase
@@ -293,7 +294,7 @@ public class VisitorsController : ControllerBase
 }
 
 [ApiController]
-[Route("api/approvals")]
+[Route("approvals")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Host}")]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class ApprovalsController : ControllerBase
@@ -350,7 +351,7 @@ public class ApprovalsController : ControllerBase
 }
 
 [ApiController]
-[Route("api/pass")]
+[Route("pass")]
 [Authorize]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class PassController : ControllerBase
@@ -399,7 +400,7 @@ public class PassController : ControllerBase
 }
 
 [ApiController]
-[Route("api/dashboard")]
+[Route("dashboard")]
 [Authorize]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class DashboardController : ControllerBase
@@ -422,7 +423,7 @@ public class DashboardController : ControllerBase
 }
 
 [ApiController]
-[Route("api/masters")]
+[Route("masters")]
 [Authorize]
 public class MastersController : ControllerBase
 {
@@ -570,7 +571,7 @@ public class MastersController : ControllerBase
 }
 
 [ApiController]
-[Route("api/users")]
+[Route("users")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
 public class UsersController : ControllerBase
 {
@@ -613,7 +614,7 @@ public class UsersController : ControllerBase
 }
 
 [ApiController]
-[Route("api/settings")]
+[Route("settings")]
 public class SettingsController : ControllerBase
 {
     private readonly ISettingsService _settings;
@@ -682,7 +683,7 @@ public class TestEmailRequest
 }
 
 [ApiController]
-[Route("api/pass-numbers")]
+[Route("pass-numbers")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class PassNumbersController : ControllerBase
@@ -729,7 +730,7 @@ public class PassNumbersController : ControllerBase
 }
 
 [ApiController]
-[Route("api/devices")]
+[Route("devices")]
 [Authorize]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class DevicesController : ControllerBase
@@ -782,7 +783,7 @@ public class DevicesController : ControllerBase
 }
 
 [ApiController]
-[Route("api/reports")]
+[Route("reports")]
 [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
 [RequireModule(ModuleKeys.VisitorManagement)]
 public class ReportsController : ControllerBase

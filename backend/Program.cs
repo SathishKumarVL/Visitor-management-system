@@ -97,7 +97,6 @@ builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 builder.Services.AddScoped<IEmergencyService, EmergencyService>();
-builder.Services.AddScoped<ISiteService, SiteService>();
 builder.Services.AddHostedService<AppointmentReminderWorker>();
 
 // Singleton: the ONNX sessions hold ~180 MB of weights and are thread-safe for concurrent inference.
@@ -147,6 +146,14 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Hosted under https://visitors.tiaanosoft.com/api (IIS application or reverse proxy).
+// Controllers are routed without a second "api" segment; PathBase supplies the /api prefix.
+var pathBase = builder.Configuration["ASPNETCORE_PATHBASE"]
+    ?? Environment.GetEnvironmentVariable("ASPNETCORE_PATHBASE")
+    ?? "/api";
+if (!string.IsNullOrWhiteSpace(pathBase))
+    app.UsePathBase(pathBase.TrimEnd('/'));
 
 // Operator commands run against the built container and exit without serving traffic.
 if (ResetPasswordCommand.ShouldRun(args))

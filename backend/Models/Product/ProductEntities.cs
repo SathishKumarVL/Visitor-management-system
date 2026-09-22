@@ -41,7 +41,7 @@ public class TenantLicense
     [Required, MaxLength(40)]
     public string Edition { get; set; } = "Starter"; // Starter | Professional | Enterprise
 
-    public int MaxSites { get; set; } = 1;
+    public int MaxLocations { get; set; } = 25;
     public int MaxUsers { get; set; } = 25;
     public DateTime? ExpiresAt { get; set; }
     public bool IsActive { get; set; } = true;

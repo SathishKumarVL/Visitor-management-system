@@ -4,6 +4,7 @@ import {
   clearToken,
   getStoredRefreshToken,
   getStoredToken,
+  isRememberMeSession,
   storeAuthTokens,
 } from '../lib/api'
 import type { ChangePasswordRequest, UserDto } from '../types/api'
@@ -51,9 +52,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   changePassword: async (body) => {
-    await authApi.changePassword(body)
-    const user = get().user
-    if (user) set({ user: { ...user, mustChangePassword: false } })
+    const result = await authApi.changePassword(body)
+    const rememberMe = isRememberMeSession()
+    storeAuthTokens(result.token, result.refreshToken, rememberMe)
+    set({
+      token: result.token,
+      refreshToken: result.refreshToken ?? null,
+      user: result.user,
+    })
   },
 
   logout: async () => {

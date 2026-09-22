@@ -16,7 +16,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     }
 
     public DbSet<Tenant> Tenants => Set<Tenant>();
-    public DbSet<Site> Sites => Set<Site>();
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<VisitPurpose> VisitPurposes => Set<VisitPurpose>();
@@ -57,14 +56,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.Name).IsRequired();
         });
 
-        builder.Entity<Site>(e =>
-        {
-            e.HasIndex(x => new { x.TenantId, x.Code });
-            e.HasOne(x => x.Tenant).WithMany(t => t.Sites).HasForeignKey(x => x.TenantId)
-                .OnDelete(DeleteBehavior.Restrict);
-            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
-        });
-
         builder.Entity<Department>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Name });
@@ -90,7 +81,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasOne(x => x.Department).WithMany(d => d.Users).HasForeignKey(x => x.DepartmentId)
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.SetNull);
             e.Property(x => x.AllowedMenuKeysJson).HasMaxLength(1000);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
@@ -125,12 +116,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasOne(x => x.CheckedOutByUser).WithMany().HasForeignKey(x => x.CheckedOutByUserId)
                 .OnDelete(DeleteBehavior.NoAction);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.SetNull);
-            e.HasIndex(x => new { x.TenantId, x.SiteId, x.Status });
-            // Site scope is additive to tenant scope: a user bound to a site only ever sees that site's visits,
-            // while a user with no site (typically Admin) keeps tenant-wide visibility.
+            // Location scope is additive to tenant scope: a user bound to a location only ever sees
+            // visits that include that location; a user with no location keeps tenant-wide visibility.
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId
-                && (_tenant.SiteId == null || x.SiteId == _tenant.SiteId)));
+                && (_tenant.LocationId == null
+                    || x.VisitLocations.Any(vl => vl.LocationId == _tenant.LocationId))));
         });
 
         builder.Entity<VisitorVisitPurpose>(e =>
@@ -203,8 +193,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.Prefix).HasMaxLength(20).IsRequired();
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
-            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId)
-                .OnDelete(DeleteBehavior.SetNull);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -270,12 +258,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<Location>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.Name });
-            e.HasIndex(x => new { x.TenantId, x.SiteId });
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
-            e.HasOne(x => x.Site).WithMany().HasForeignKey(x => x.SiteId).OnDelete(DeleteBehavior.Restrict);
-            // A site-bound user sees their own site's areas plus any area left unassigned (shared by all sites).
-            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId
-                && (_tenant.SiteId == null || x.SiteId == null || x.SiteId == _tenant.SiteId)));
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<IdType>(e =>

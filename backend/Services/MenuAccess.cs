@@ -11,8 +11,8 @@ public static class MenuAccess
 {
     public static readonly string[] AllKeys =
     [
-        "dashboard", "reception", "host", "visitors", "inside", "expected",
-        "reports", "departments", "purposes", "locations", "feedback", "sites", "users", "settings"
+        "dashboard", "reception", "visitors", "inside", "expected",
+        "reports", "departments", "purposes", "locations", "feedback", "users", "settings"
     ];
 
     private static readonly HashSet<string> Known = new(AllKeys, StringComparer.OrdinalIgnoreCase);
@@ -23,7 +23,7 @@ public static class MenuAccess
         [AppRoles.Admin] = AllKeys,
         [AppRoles.Reception] = ["dashboard", "reception", "visitors", "inside", "expected", "reports"],
         [AppRoles.Security] = ["dashboard", "visitors", "inside", "expected"],
-        [AppRoles.Host] = ["dashboard", "host", "visitors", "inside", "expected"],
+        [AppRoles.Host] = ["dashboard", "visitors", "inside", "expected"],
     };
 
     public static IReadOnlyList<string> KeysForRole(string role) =>

@@ -106,7 +106,7 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
             {
                 TenantId = TenantBId,
                 Edition = "Enterprise",
-                MaxSites = 10,
+                MaxLocations = 10,
                 MaxUsers = 50,
                 IsActive = true,
                 Status = "Active",

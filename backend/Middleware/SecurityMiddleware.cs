@@ -13,20 +13,21 @@ public class MustChangePasswordMiddleware
 
     private static readonly HashSet<string> AllowedPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "/api/auth/change-password",
-        "/api/auth/me",
-        "/api/auth/logout",
-        "/api/auth/refresh",
-        "/api/settings/branding"
+        "/auth/change-password",
+        "/auth/me",
+        "/auth/logout",
+        "/auth/refresh",
+        "/settings/branding"
     };
 
     public MustChangePasswordMiddleware(RequestDelegate next) => _next = next;
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Paths are relative to PathBase (/api). Branding static files stay outside this gate.
         if (context.User.Identity?.IsAuthenticated == true
             && context.User.HasClaim("mcp", "1")
-            && context.Request.Path.StartsWithSegments("/api")
+            && !context.Request.Path.StartsWithSegments("/branding")
             && !AllowedPrefixes.Any(p => context.Request.Path.StartsWithSegments(p)))
         {
             context.Response.StatusCode = (int)HttpStatusCode.Forbidden;

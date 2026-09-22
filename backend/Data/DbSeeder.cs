@@ -170,7 +170,7 @@ public static class DbSeeder
             {
                 TenantId = tenantId,
                 Edition = "Professional",
-                MaxSites = 5,
+                MaxLocations = 25,
                 MaxUsers = 100,
                 IsActive = true,
                 Status = "Active",
@@ -214,15 +214,14 @@ public static class DbSeeder
             await context.SaveChangesAsync();
         }
 
-        if (!await context.Sites.IgnoreQueryFilters().AnyAsync(s => s.TenantId == tenant.Id))
+        if (!await context.Locations.IgnoreQueryFilters().AnyAsync(l => l.TenantId == tenant.Id))
         {
-            context.Sites.Add(new Site
+            context.Locations.Add(new Location
             {
                 TenantId = tenant.Id,
-                Name = "Headquarters",
-                Code = "HQ",
-                IsDefault = true,
-                IsActive = true
+                Name = "Main entrance",
+                IsActive = true,
+                SortOrder = 1
             });
             await context.SaveChangesAsync();
         }
@@ -244,29 +243,6 @@ public static class DbSeeder
             UPDATE SystemSettings SET TenantId = {0} WHERE TenantId = '00000000-0000-0000-0000-000000000000';
             UPDATE NotificationOutbox SET TenantId = {0} WHERE TenantId IS NULL;
             """, tenantId);
-
-        await BackfillSiteIdsAsync(context, tenantId);
-    }
-
-    /// <summary>
-    /// Site scoping filters visits and areas, so anything created before sites existed has to be adopted by
-    /// the tenant default. Without this, a site-bound user would see an empty system.
-    /// </summary>
-    private static async Task BackfillSiteIdsAsync(ApplicationDbContext context, Guid tenantId)
-    {
-        var defaultSiteId = await context.Sites.IgnoreQueryFilters().AsNoTracking()
-            .Where(s => s.TenantId == tenantId && s.IsActive)
-            .OrderByDescending(s => s.IsDefault)
-            .ThenBy(s => s.Name)
-            .Select(s => (Guid?)s.Id)
-            .FirstOrDefaultAsync();
-
-        if (defaultSiteId is not Guid siteId) return;
-
-        await context.Database.ExecuteSqlRawAsync("""
-            UPDATE VisitorVisits SET SiteId = {1} WHERE TenantId = {0} AND SiteId IS NULL;
-            UPDATE Locations SET SiteId = {1} WHERE TenantId = {0} AND SiteId IS NULL;
-            """, tenantId, siteId);
     }
 
     private static async Task EnsureColumnWidthsAsync(ApplicationDbContext context)

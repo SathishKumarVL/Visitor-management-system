@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { apiErrorMessage, mastersApi, sitesApi, usersApi } from '../lib/api'
-import type { CreateUserRequest, MasterItemDto, SiteDto, UpdateUserRequest, UserDto } from '../types/api'
+import { apiErrorMessage, mastersApi, usersApi } from '../lib/api'
+import type { CreateUserRequest, MasterItemDto, UpdateUserRequest, UserDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/ui/Field'
@@ -19,7 +19,7 @@ function defaultMenusForRole(role: string): string[] {
 export function UsersPage() {
   const [users, setUsers] = useState<UserDto[]>([])
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
-  const [sites, setSites] = useState<SiteDto[]>([])
+  const [locations, setLocations] = useState<MasterItemDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -30,7 +30,7 @@ export function UsersPage() {
     email: '',
     role: 'Reception',
     departmentId: null,
-    siteId: null,
+    locationId: null,
     allowedMenuKeys: defaultMenusForRole('Reception'),
     password: '',
   }))
@@ -39,7 +39,7 @@ export function UsersPage() {
     email: '',
     role: 'Reception',
     departmentId: null,
-    siteId: null,
+    locationId: null,
     allowedMenuKeys: defaultMenusForRole('Reception'),
     isActive: true,
   })
@@ -62,7 +62,7 @@ export function UsersPage() {
   useEffect(() => {
     void load()
     void mastersApi.departments(false).then(setDepartments)
-    void sitesApi.list(true).then(setSites)
+    void mastersApi.locations(true).then(setLocations)
   }, [load])
 
   function toggleMenu(
@@ -88,7 +88,7 @@ export function UsersPage() {
       email: user.email,
       role,
       departmentId: user.departmentId ?? null,
-      siteId: user.siteId ?? null,
+      locationId: user.locationId ?? null,
       allowedMenuKeys: allowed.filter((k) => defaultMenusForRole(role).includes(k)),
       isActive: user.isActive,
     })
@@ -102,7 +102,7 @@ export function UsersPage() {
       await usersApi.create({
         ...createForm,
         departmentId: createForm.departmentId || null,
-        siteId: createForm.siteId || null,
+        locationId: createForm.locationId || null,
         allowedMenuKeys: createForm.allowedMenuKeys ?? [],
       })
       setMessage('User created.')
@@ -112,7 +112,7 @@ export function UsersPage() {
         email: '',
         role: 'Reception',
         departmentId: null,
-        siteId: null,
+        locationId: null,
         allowedMenuKeys: defaultMenusForRole('Reception'),
         password: '',
       })
@@ -133,7 +133,7 @@ export function UsersPage() {
       await usersApi.update(editing.id, {
         ...updateForm,
         departmentId: updateForm.departmentId || null,
-        siteId: updateForm.siteId || null,
+        locationId: updateForm.locationId || null,
         allowedMenuKeys: updateForm.allowedMenuKeys ?? [],
       })
       setMessage('User updated.')
@@ -207,7 +207,7 @@ export function UsersPage() {
                   <th className="px-4 py-3">User</th>
                   <th className="px-4 py-3">Roles</th>
                   <th className="px-4 py-3">Menus</th>
-                  <th className="px-4 py-3">Site</th>
+                  <th className="px-4 py-3">Location</th>
                   <th className="px-4 py-3">Active</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -228,7 +228,7 @@ export function UsersPage() {
                       items
                     </td>
                     <td className="px-4 py-3">
-                      {u.siteName ?? <span className="text-gray-500">All sites</span>}
+                      {u.locationName ?? <span className="text-gray-500">All locations</span>}
                     </td>
                     <td className="px-4 py-3">{u.isActive ? 'Yes' : 'No'}</td>
                     <td className="px-4 py-3 text-right">
@@ -286,17 +286,17 @@ export function UsersPage() {
                   </TextSelect>
                 </div>
                 <div>
-                  <FieldLabel htmlFor="edit-site">Site</FieldLabel>
+                  <FieldLabel htmlFor="edit-location">Location</FieldLabel>
                   <TextSelect
-                    id="edit-site"
-                    value={updateForm.siteId || ''}
-                    onChange={(e) => setUpdateForm({ ...updateForm, siteId: e.target.value || null })}
+                    id="edit-location"
+                    value={updateForm.locationId || ''}
+                    onChange={(e) => setUpdateForm({ ...updateForm, locationId: e.target.value || null })}
                   >
-                    <option value="">All sites (no restriction)</option>
-                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    <option value="">All locations (no restriction)</option>
+                    {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </TextSelect>
                   <p className="mt-1 text-xs text-gray-500">
-                    Choosing a site limits this user to that site's visitors, reports and roster.
+                    Choosing a location limits this user to that location&apos;s visitors, reports and roster.
                   </p>
                 </div>
                 <label className="flex min-h-11 items-center gap-2 text-sm">
@@ -354,17 +354,17 @@ export function UsersPage() {
                   </TextSelect>
                 </div>
                 <div>
-                  <FieldLabel htmlFor="create-site">Site</FieldLabel>
+                  <FieldLabel htmlFor="create-location">Location</FieldLabel>
                   <TextSelect
-                    id="create-site"
-                    value={createForm.siteId || ''}
-                    onChange={(e) => setCreateForm({ ...createForm, siteId: e.target.value || null })}
+                    id="create-location"
+                    value={createForm.locationId || ''}
+                    onChange={(e) => setCreateForm({ ...createForm, locationId: e.target.value || null })}
                   >
-                    <option value="">All sites (no restriction)</option>
-                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    <option value="">All locations (no restriction)</option>
+                    {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </TextSelect>
                   <p className="mt-1 text-xs text-gray-500">
-                    Choosing a site limits this user to that site's visitors, reports and roster.
+                    Choosing a location limits this user to that location&apos;s visitors, reports and roster.
                   </p>
                 </div>
                 <div>
