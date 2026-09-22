@@ -135,6 +135,7 @@
     "subtitle": "{company} reception desk — choose an action to continue",
     "pendingApproval": "Visitor “{name}” registered{visit} and is waiting for approval from the person to meet. Check in once they approve.",
     "registeredOk": "Visitor “{name}” registered successfully.",
+    "checkedOutOk": "Visitor “{name}” checked out successfully.",
     "newVisitor": "New visitor",
     "newVisitorDesc": "Register a walk-in visitor now",
     "expectedVisitor": "Expected visitor",

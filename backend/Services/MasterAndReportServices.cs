@@ -160,9 +160,19 @@ public class MasterDataService : IMasterDataService
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
         else { entity = new VisitPurpose { TenantId = CurrentTenantId, CreatedBy = user }; _db.VisitPurposes.Add(entity); }
-        entity.Name = request.Name.Trim(); entity.SortOrder = request.SortOrder; entity.IsActive = request.IsActive;
+        entity.Name = request.Name.Trim();
+        entity.Code = string.IsNullOrWhiteSpace(request.Code) ? null : request.Code.Trim();
+        entity.SortOrder = request.SortOrder;
+        entity.IsActive = request.IsActive;
         await _db.SaveChangesAsync();
-        return new MasterItemDto { Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder };
+        return new MasterItemDto
+        {
+            Id = entity.Id,
+            Name = entity.Name,
+            Code = entity.Code,
+            IsActive = entity.IsActive,
+            SortOrder = entity.SortOrder,
+        };
     }
 
     public Task<IReadOnlyList<MasterItemDto>> GetLocationsAsync(bool activeOnly = true) =>
@@ -174,8 +184,13 @@ public class MasterDataService : IMasterDataService
         if (activeOnly) q = q.Where(x => x.IsActive);
         return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto
         {
-            Id = x.Id, Name = x.Name, IsActive = x.IsActive, SortOrder = x.SortOrder,
-            RequiresPlantNumber = x.RequiresPlantNumber, RequiresOtherText = x.RequiresOtherText
+            Id = x.Id,
+            Name = x.Name,
+            Code = x.Code,
+            IsActive = x.IsActive,
+            SortOrder = x.SortOrder,
+            RequiresPlantNumber = x.RequiresPlantNumber,
+            RequiresOtherText = x.RequiresOtherText,
         }).ToListAsync();
     }
 
@@ -192,6 +207,7 @@ public class MasterDataService : IMasterDataService
         }
         else { entity = new Location { TenantId = CurrentTenantId, CreatedBy = user }; _db.Locations.Add(entity); }
         entity.Name = request.Name.Trim();
+        entity.Code = string.IsNullOrWhiteSpace(request.Code) ? null : request.Code.Trim();
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.IsActive;
         entity.RequiresPlantNumber = request.RequiresPlantNumber;
@@ -200,8 +216,13 @@ public class MasterDataService : IMasterDataService
 
         return new MasterItemDto
         {
-            Id = entity.Id, Name = entity.Name, IsActive = entity.IsActive, SortOrder = entity.SortOrder,
-            RequiresPlantNumber = entity.RequiresPlantNumber, RequiresOtherText = entity.RequiresOtherText
+            Id = entity.Id,
+            Name = entity.Name,
+            Code = entity.Code,
+            IsActive = entity.IsActive,
+            SortOrder = entity.SortOrder,
+            RequiresPlantNumber = entity.RequiresPlantNumber,
+            RequiresOtherText = entity.RequiresOtherText,
         };
     }
 
@@ -254,7 +275,14 @@ public class MasterDataService : IMasterDataService
     {
         var q = set.AsNoTracking().AsQueryable();
         if (activeOnly) q = q.Where(x => x.IsActive);
-        return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto { Id = x.Id, Name = x.Name, IsActive = x.IsActive, SortOrder = x.SortOrder }).ToListAsync();
+        return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto
+        {
+            Id = x.Id,
+            Name = x.Name,
+            Code = x.Code,
+            IsActive = x.IsActive,
+            SortOrder = x.SortOrder,
+        }).ToListAsync();
     }
 
     private async Task<IReadOnlyList<MasterItemDto>> GetSimpleAsync(DbSet<IdType> set, bool activeOnly)

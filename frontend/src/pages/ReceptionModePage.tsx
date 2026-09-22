@@ -9,10 +9,15 @@ export function ReceptionModePage() {
   const location = useLocation()
   const { t } = useI18n()
   const company = useSettingsStore((s) => s.settings.companyName)
-  const registration = location.state as
-    | { visitorName?: string; pendingApproval?: boolean; visitNumber?: string }
+  const notice = location.state as
+    | {
+        visitorName?: string
+        pendingApproval?: boolean
+        visitNumber?: string
+        checkedOut?: boolean
+      }
     | null
-  const registeredName = registration?.visitorName
+  const visitorName = notice?.visitorName
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -32,17 +37,21 @@ export function ReceptionModePage() {
           </p>
         </div>
 
-        {registeredName ? (
+        {visitorName ? (
           <div className="relative mx-auto mt-6 max-w-xl" role="status" aria-live="polite">
-            {registration?.pendingApproval ? (
+            {notice?.pendingApproval ? (
               <Alert tone="warning">
                 {t('reception.pendingApproval')
-                  .replace('{name}', registeredName)
-                  .replace('{visit}', registration.visitNumber ? ` ${registration.visitNumber}` : '')}
+                  .replace('{name}', visitorName)
+                  .replace('{visit}', notice.visitNumber ? ` ${notice.visitNumber}` : '')}
+              </Alert>
+            ) : notice?.checkedOut ? (
+              <Alert tone="success">
+                {t('reception.checkedOutOk').replace('{name}', visitorName)}
               </Alert>
             ) : (
               <Alert tone="success">
-                {t('reception.registeredOk').replace('{name}', registeredName)}
+                {t('reception.registeredOk').replace('{name}', visitorName)}
               </Alert>
             )}
           </div>

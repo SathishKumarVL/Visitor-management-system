@@ -109,6 +109,9 @@ public class VisitPurpose
     [Required, MaxLength(200)]
     public string Name { get; set; } = string.Empty;
 
+    [MaxLength(50)]
+    public string? Code { get; set; }
+
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
 
@@ -127,6 +130,9 @@ public class Location
 
     [Required, MaxLength(150)]
     public string Name { get; set; } = string.Empty;
+
+    [MaxLength(50)]
+    public string? Code { get; set; }
 
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }

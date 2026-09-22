@@ -54,7 +54,6 @@ export function FaceCheckoutPage() {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [matched, setMatched] = useState<FaceCheckoutMatchDto | null>(null)
-  const [filter, setFilter] = useState('')
   const [inside, setInside] = useState<VisitorListItemDto[]>([])
   const [questions, setQuestions] = useState<FeedbackQuestionDto[]>([])
   /** Held in the browser until face capture identifies the visitor. */
@@ -84,7 +83,7 @@ export function FaceCheckoutPage() {
       setCameraReady(true)
       setStatusText('Position the face in frame, then press Capture')
     } catch {
-      setError('Unable to access camera. Allow camera permission or use manual check-out below.')
+      setError('Unable to access camera. Allow camera permission and try Start camera again.')
       setCameraReady(false)
     }
   }, [])
@@ -220,7 +219,7 @@ export function FaceCheckoutPage() {
 
       const hit = await visitorsApi.faceIdentifyInside(canvas.toDataURL('image/jpeg', 0.85))
       if (!hit) {
-        setError('Face did not match anyone currently inside. Try again or use manual check-out.')
+        setError('Face did not match anyone currently inside. Try Capture again.')
         setStatusText('No match — press Capture to retry')
         return
       }
@@ -232,15 +231,15 @@ export function FaceCheckoutPage() {
       await saveFeedbackForVisit(hit.visitId)
       await visitorsApi.checkOut(hit.visitId)
 
-      setMessage(`Checked out: ${hit.visitorName}. Feedback saved with their visit.`)
-      setStatusText('Check-out complete')
-      setInside((list) => list.filter((v) => v.visitId !== hit.visitId))
-      setRatings({})
-      setComments('')
-      setFeedbackReady(false)
-      if (questions.length > 0) {
-        setStep('feedback')
-      }
+      stopCamera()
+      navigate('/reception', {
+        replace: true,
+        state: {
+          visitorName: hit.visitorName,
+          visitNumber: hit.visitNumber,
+          checkedOut: true,
+        },
+      })
     } catch (e) {
       setError(apiErrorMessage(e, 'Check-out failed after face capture.'))
       setMatched(null)
@@ -256,52 +255,6 @@ export function FaceCheckoutPage() {
       setCapturing(false)
     }
   }
-
-  async function manualCheckOut(visitId: string, name: string) {
-    setError(null)
-    setMessage(null)
-    try {
-      if (questions.length > 0) {
-        const msg = validatePendingFeedback()
-        if (msg || !feedbackReady) {
-          setStep('feedback')
-          setError(
-            msg ??
-              `Rate the visit first, then press “Continue to camera” (or check out ${name} again after rating).`,
-          )
-          return
-        }
-        await saveFeedbackForVisit(visitId)
-      }
-      await visitorsApi.checkOut(visitId)
-      setMessage(`Checked out: ${name}. Feedback saved with their visit.`)
-      setInside((list) => list.filter((v) => v.visitId !== visitId))
-      setMatched(null)
-      setRatings({})
-      setComments('')
-      setFeedbackReady(false)
-      if (questions.length > 0) setStep('feedback')
-    } catch (e) {
-      setError(apiErrorMessage(e, 'Manual check-out failed.'))
-      if (isConflictError(e)) {
-        try {
-          setInside(await visitorsApi.inside())
-        } catch {
-          /* keep previous list */
-        }
-      }
-    }
-  }
-
-  const filtered = inside.filter((v) => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return true
-    return (
-      v.visitorName.toLowerCase().includes(q) ||
-      v.companyName.toLowerCase().includes(q) ||
-      (v.phone || '').includes(q)
-    )
-  })
 
   return (
     <div>
@@ -324,7 +277,7 @@ export function FaceCheckoutPage() {
                 void loadData()
               }}
             >
-              Refresh inside list
+              Refresh
             </Button>
           </div>
         }
@@ -333,7 +286,7 @@ export function FaceCheckoutPage() {
       {loading ? <Spinner label="Loading check-out…" /> : null}
 
       {!loading ? (
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="mx-auto max-w-2xl">
           {step === 'feedback' ? (
             <Panel>
               <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-ink-muted">
@@ -393,23 +346,6 @@ export function FaceCheckoutPage() {
             </Panel>
           ) : (
             <Panel>
-              {questions.length > 0 ? (
-                <div className="mb-3 rounded-lg border border-primary/20 bg-aqua-light/50 px-3 py-2 text-sm">
-                  Ratings ready — they will be saved for whoever the camera matches.
-                  <button
-                    type="button"
-                    className="ml-2 text-xs font-medium text-primary underline-offset-2 hover:underline"
-                    onClick={() => {
-                      setStep('feedback')
-                      setFeedbackReady(false)
-                      setMessage(null)
-                      setError(null)
-                    }}
-                  >
-                    Edit ratings
-                  </button>
-                </div>
-              ) : null}
               <div className="overflow-hidden rounded-md border border-gray-200 bg-gray-900">
                 <video ref={videoRef} className="aspect-video w-full object-cover" muted playsInline />
               </div>
@@ -424,6 +360,19 @@ export function FaceCheckoutPage() {
                     {capturing ? 'Matching…' : 'Capture & check out'}
                   </Button>
                 )}
+                {questions.length > 0 ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setStep('feedback')
+                      setFeedbackReady(false)
+                      setMessage(null)
+                      setError(null)
+                    }}
+                  >
+                    Edit ratings
+                  </Button>
+                ) : null}
               </div>
               {error ? (
                 <div className="mt-3">
@@ -449,43 +398,6 @@ export function FaceCheckoutPage() {
               ) : null}
             </Panel>
           )}
-
-          <Panel>
-            <h2 className="mb-2 text-sm font-semibold text-steel">Manual check-out (fallback)</h2>
-            <FieldLabel htmlFor="face-filter">Search currently inside</FieldLabel>
-            <TextInput
-              id="face-filter"
-              className="mb-3"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Name, company, or phone"
-            />
-            {filtered.length === 0 ? (
-              <p className="text-sm text-gray-500">No visitors currently inside.</p>
-            ) : (
-              <ul className="max-h-[28rem] space-y-2 overflow-auto">
-                {filtered.map((v) => (
-                  <li
-                    key={v.visitId}
-                    className="flex items-center justify-between gap-3 rounded-md border border-gray-100 px-3 py-2"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate font-medium text-gray-900">{v.visitorName}</div>
-                      <div className="truncate text-xs text-gray-500">{v.companyName}</div>
-                    </div>
-                    <Button size="sm" variant="danger" onClick={() => void manualCheckOut(v.visitId, v.visitorName)}>
-                      Check out
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="mt-4 text-xs text-gray-500">
-              {questions.length > 0
-                ? 'Complete star ratings first. Manual check-out then saves those ratings for the selected visitor.'
-                : 'Tip: Face match uses the template enrolled at registration.'}
-            </p>
-          </Panel>
         </div>
       ) : null}
     </div>
