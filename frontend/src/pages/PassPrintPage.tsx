@@ -29,7 +29,7 @@ export function PassPrintPage() {
     })()
   }, [visitId])
 
-  if (loading) return <Spinner />
+  if (loading) return <Spinner label="Loading pass…" />
   if (error) return <Alert tone="error">{error}</Alert>
   if (!pass) return null
 

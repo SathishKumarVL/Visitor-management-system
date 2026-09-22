@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { apiErrorMessage, isConflictError, mastersApi, visitorsApi } from '../lib/api'
 import type { FaceCheckoutMatchDto, FeedbackQuestionDto, VisitorListItemDto } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 import { SecureImage } from '../components/SecureImage'
@@ -304,6 +305,7 @@ export function FaceCheckoutPage() {
 
   return (
     <div>
+      {capturing ? <LoadingMask label="Matching face and checking out…" /> : null}
       <PageHeader
         title="Face Check Out"
         subtitle={

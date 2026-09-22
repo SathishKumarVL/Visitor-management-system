@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, visitorsApi } from '../lib/api'
 import type { ExpectedVisitorRequest, MasterItemDto, VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 import { formatDate, nowIsoTime, statusBadgeClass, todayIsoDate, validateVisitorEmail } from '../lib/utils'
@@ -112,6 +113,8 @@ export function ExpectedVisitorsPage() {
 
   return (
     <div>
+      {saving ? <LoadingMask label="Saving appointment…" /> : null}
+      {loading ? <Spinner label="Loading expected visitors…" /> : null}
       <PageHeader
         title="Expected Visitors"
         subtitle="Appointments booked at reception — tap a card to check in with face capture"
@@ -197,7 +200,6 @@ export function ExpectedVisitorsPage() {
         </Panel>
       ) : null}
 
-      {loading ? <Spinner /> : null}
       {!loading && items.length === 0 ? (
         <EmptyState title="No expected visitors for this date" description="Book an appointment from Reception Mode or use Book appointment above." />
       ) : null}

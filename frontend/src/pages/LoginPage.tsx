@@ -4,6 +4,7 @@ import { BrandLogo } from '../components/BrandLogo'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput } from '../components/ui/Field'
 import { Alert } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { OfflineBanner } from '../components/layout/OfflineBanner'
 import { apiErrorMessage } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
@@ -46,6 +47,7 @@ export function LoginPage() {
 
   return (
     <div className="relative min-h-screen">
+      {loading ? <LoadingMask label={t('login.signingIn')} /> : null}
       <OfflineBanner />
       <div className="absolute right-4 top-4 z-10">
         <LanguageSwitcher />

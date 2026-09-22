@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Tiaano VMS">
+  <rect width="64" height="64" rx="12" fill="#0B3A5B"/>
+  <text
+    x="32"
+    y="30"
+    text-anchor="middle"
+    fill="#F4B400"
+    font-family="Segoe UI, Arial, sans-serif"
+    font-size="13"
+    font-weight="700"
+    letter-spacing="1.5"
+  >TIAANO</text>
+  <text
+    x="32"
+    y="48"
+    text-anchor="middle"
+    fill="#E8EEF3"
+    font-family="Segoe UI, Arial, sans-serif"
+    font-size="11"
+    font-weight="600"
+    letter-spacing="2"
+  >VMS</text>
+</svg>

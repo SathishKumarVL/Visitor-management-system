@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { apiErrorMessage, isConflictError, approvalsApi } from '../lib/api'
 import type { VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { FieldError, FieldLabel, TextInput } from '../components/ui/Field'
 import { SecureImage } from '../components/SecureImage'
@@ -113,6 +114,7 @@ export function ApprovalsPage() {
 
   return (
     <div>
+      {busyId ? <LoadingMask label="Updating approval…" /> : null}
       <PageHeader
         eyebrow="Person to meet"
         title="Pending Approvals"

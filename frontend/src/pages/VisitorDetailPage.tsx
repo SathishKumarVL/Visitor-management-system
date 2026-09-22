@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiErrorMessage, isConflictError, passApi, visitorsApi } from '../lib/api'
 import type { VisitorDetailDto } from '../types/api'
 import { Alert, Badge, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { formatDate, formatDateTime, formatDuration, statusBadgeClass, cn } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
@@ -70,7 +71,7 @@ export function VisitorDetailPage() {
     }
   }
 
-  if (loading) return <Spinner />
+  if (loading) return <Spinner label="Loading visitor…" />
   if (error && !visitor) return <Alert tone="error">{error}</Alert>
   if (!visitor) return null
 
@@ -78,6 +79,7 @@ export function VisitorDetailPage() {
 
   return (
     <div>
+      {busy ? <LoadingMask label="Working…" /> : null}
       <PageHeader
         title={visitor.visitorName}
         subtitle={`${visitor.visitNumber} · ${visitor.companyName}`}

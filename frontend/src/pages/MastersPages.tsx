@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { apiErrorMessage, mastersApi } from '../lib/api'
 import type { MasterItemDto, MasterUpsertRequest } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 
@@ -123,6 +124,8 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
 
   return (
     <div>
+      {saving ? <LoadingMask label="Saving…" /> : null}
+      {loading ? <Spinner label={`Loading ${cfg.title.toLowerCase()}…`} /> : null}
       <PageHeader
         title={cfg.title}
         actions={<Button variant="amber" onClick={startCreate}>Add new</Button>}
@@ -132,7 +135,6 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
 
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <Panel className="overflow-x-auto p-0">
-          {loading ? <Spinner /> : null}
           {!loading && items.length === 0 ? <div className="p-4"><EmptyState title="No items" /></div> : null}
           {!loading && items.length > 0 ? (
             <table className="min-w-full text-left text-sm">

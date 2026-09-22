@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, passApi, visitorsApi } from '../lib/api'
 import type { PassDto } from '../types/api'
 import { Alert, PageHeader, Panel } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 import { formatDateTime } from '../lib/utils'
@@ -71,6 +72,7 @@ export function VerifyVisitorPage() {
 
   return (
     <div>
+      {busy ? <LoadingMask label="Working…" /> : null}
       <PageHeader
         eyebrow="Security operations"
         title={checkoutMode ? 'Check Out by Visit Number' : 'Verify Visitor'}

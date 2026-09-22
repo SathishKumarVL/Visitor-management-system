@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { FieldLabel, PasswordInput } from '../components/ui/Field'
 import { Alert, PageHeader, Panel } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { apiErrorMessage } from '../lib/api'
 import { homePathForRoles } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
@@ -45,6 +46,7 @@ export function ChangePasswordPage() {
 
   return (
     <div className="mx-auto max-w-lg">
+      {submitting || loading ? <LoadingMask label="Updating password…" /> : null}
       <PageHeader
         title="Change password"
         subtitle={

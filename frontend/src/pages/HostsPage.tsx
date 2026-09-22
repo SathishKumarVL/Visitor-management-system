@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { apiErrorMessage, mastersApi } from '../lib/api'
 import type { CreateEmployeeRequest, EmployeeDto, MasterItemDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 
@@ -86,6 +87,8 @@ export function HostsPage() {
 
   return (
     <div>
+      {saving ? <LoadingMask label="Saving…" /> : null}
+      {loading ? <Spinner label="Loading people to meet…" /> : null}
       <PageHeader
         title="People to meet"
         actions={
@@ -103,7 +106,6 @@ export function HostsPage() {
 
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <Panel className="overflow-x-auto p-0">
-          {loading ? <Spinner /> : null}
           {!loading && items.length === 0 ? <div className="p-4"><EmptyState title="No people to meet" /></div> : null}
           {!loading && items.length > 0 ? (
             <table className="min-w-full text-left text-sm">

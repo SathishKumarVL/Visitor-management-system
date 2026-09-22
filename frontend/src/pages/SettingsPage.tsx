@@ -7,6 +7,7 @@ import type {
   UserDto,
 } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/ui/Field'
 import { useSettingsStore } from '../store/settingsStore'
@@ -205,10 +206,14 @@ export function SettingsPage() {
     }
   }
 
-  if (!loaded) return <Spinner />
+  if (!loaded) return <Spinner label="Loading settings…" />
 
   return (
     <div>
+      {saving ? <LoadingMask label="Saving settings…" /> : null}
+      {uploading ? <LoadingMask label="Uploading logo…" /> : null}
+      {passSaving ? <LoadingMask label="Saving pass numbers…" /> : null}
+      {testingEmail ? <LoadingMask label="Sending test email…" /> : null}
       <PageHeader
         eyebrow={t('settings.eyebrow')}
         title={t('settings.title')}

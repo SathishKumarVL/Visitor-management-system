@@ -166,7 +166,7 @@ export function VisitorsPage() {
       </Panel>
 
       {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
-      {loading ? <Spinner /> : null}
+      {loading ? <Spinner label="Loading visitors…" /> : null}
       {!loading && items.length === 0 ? <EmptyState title="No visitors found" /> : null}
 
       {!loading && items.length > 0 ? (

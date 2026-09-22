@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, passApi, visitorsApi } from '../lib/api'
-import type { MasterItemDto, PassDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
+import type { MasterItemDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../components/ui/Field'
 import { nowIsoTime, todayIsoDate, validateVisitorEmail } from '../lib/utils'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
-import { BrandLogo } from '../components/BrandLogo'
 import { SecureImage } from '../components/SecureImage'
+import { LoadingMask } from '../components/LoadingMask'
 import type { FaceSearchMatchDto } from '../types/api'
 
 const LEGACY_DRAFT_KEY = 'tiaano_visitor_wizard_draft'
@@ -68,9 +68,6 @@ export function NewVisitorWizardPage() {
   const [purposes, setPurposes] = useState<MasterItemDto[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [completedPass, setCompletedPass] = useState<PassDto | null>(null)
-  const [completedVisitId, setCompletedVisitId] = useState<string | null>(null)
-  const [passPendingApproval, setPassPendingApproval] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [faceStatus, setFaceStatus] = useState<string | null>(null)
   const [faceBusy, setFaceBusy] = useState(false)
@@ -90,10 +87,10 @@ export function NewVisitorWizardPage() {
     [purposes],
   )
 
-  const showSuccess = !!(completedPass || passPendingApproval)
   /** Details form only after a confirmed capture (match resolved or none). */
-  const showDetailsForm = !showSuccess && !!draft.photoBase64 && !faceMatch && !faceBusy
-  const showFaceStage = !showSuccess && !showDetailsForm
+  const showDetailsForm = !!draft.photoBase64 && !faceMatch && !faceBusy
+  const showFaceStage = !showDetailsForm
+  const returningVisitor = !!draft.recognizedVisitorId
 
   function syncOthersPurposeIds(ids: string[], othersChecked: boolean): string[] {
     if (!othersPurpose) return ids
@@ -210,9 +207,6 @@ export function NewVisitorWizardPage() {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setDraft(emptyDraft())
-    setCompletedPass(null)
-    setCompletedVisitId(null)
-    setPassPendingApproval(false)
     setError(null)
     setFaceMatch(null)
     setFaceStatus(null)
@@ -318,11 +312,6 @@ export function NewVisitorWizardPage() {
     setError(null)
   }
 
-  function rejectFaceMatch() {
-    setFaceMatch(null)
-    setFaceStatus(null)
-  }
-
   function retakePhoto() {
     patch({ photoBase64: '', recognizedVisitorId: null })
     setFaceMatch(null)
@@ -331,13 +320,13 @@ export function NewVisitorWizardPage() {
   }
 
   useEffect(() => {
-    if (showSuccess || draft.photoBase64 || loadingExpected) return
+    if (draft.photoBase64 || loadingExpected) return
     void startCamera()
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop())
       streamRef.current = null
     }
-  }, [showSuccess, draft.photoBase64, loadingExpected])
+  }, [draft.photoBase64, loadingExpected])
 
   async function submit() {
     setEmailTouched(true)
@@ -381,41 +370,26 @@ export function NewVisitorWizardPage() {
     }
     try {
       const result = await visitorsApi.register(body)
-      setCompletedVisitId(result.visitId)
-
       const awaitingApproval = String(result.statusLabel ?? '').toLowerCase().includes('pending')
-      if (awaitingApproval) {
-        setPassPendingApproval(true)
-        streamRef.current?.getTracks().forEach((t) => t.stop())
-        streamRef.current = null
-        return
+
+      if (!awaitingApproval) {
+        await Promise.allSettled([
+          passApi.generate(result.visitId),
+          visitorsApi.checkIn(result.visitId),
+        ])
       }
 
-      const [passSettled] = await Promise.allSettled([
-        passApi.generate(result.visitId),
-        visitorsApi.checkIn(result.visitId),
-      ])
-      if (passSettled.status === 'fulfilled') {
-        setCompletedPass(passSettled.value)
-        patch({ passNumber: passSettled.value.passCode || '' })
-      } else {
-        setCompletedPass({
-          passId: result.visitId,
-          visitId: result.visitId,
-          visitNumber: result.visitNumber,
-          visitorName: draft.visitorName.trim(),
-          companyName: draft.companyName.trim(),
-          hostName: draft.hostName.trim(),
-          departmentName: departments.find((d) => d.id === draft.departmentId)?.name || '',
-          purposes: purposes.filter((p) => draft.purposeIds.includes(p.id)).map((p) => p.name),
-          locations: [],
-          passCode: result.visitNumber,
-          photoUrl: null,
-          status: 'Issued',
-        })
-      }
       streamRef.current?.getTracks().forEach((t) => t.stop())
       streamRef.current = null
+
+      navigate('/reception', {
+        replace: true,
+        state: {
+          visitorName: draft.visitorName.trim(),
+          pendingApproval: awaitingApproval,
+          visitNumber: result.visitNumber,
+        },
+      })
     } catch (e) {
       setError(apiErrorMessage(e, 'Registration failed.'))
       formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -430,6 +404,8 @@ export function NewVisitorWizardPage() {
 
   return (
     <div>
+      {faceBusy ? <LoadingMask label="Checking face…" /> : null}
+      {submitting ? <LoadingMask label="Registering visitor…" /> : null}
       <div className="no-print" ref={formTopRef}>
         <PageHeader
           eyebrow="Registration"
@@ -447,11 +423,7 @@ export function NewVisitorWizardPage() {
                 else resetWizard()
               }}
             >
-              {isArrival
-                ? 'Back to expected'
-                : showSuccess
-                  ? 'Register another'
-                  : 'Clear form'}
+              {isArrival ? 'Back to expected' : 'Clear form'}
             </Button>
           }
         />
@@ -468,139 +440,7 @@ export function NewVisitorWizardPage() {
         </div>
       ) : null}
 
-      {showSuccess ? (
-        <Panel>
-          <div id="visitor-registration-print" className="visitor-pass-print space-y-3">
-            {completedPass ? (
-              <div className="no-print">
-                <Alert tone="success">
-                  Visitor registered and checked in. No print needed — use Reception → Check Out (face) when they leave. Print remains optional.
-                </Alert>
-              </div>
-            ) : (
-              <div className="no-print">
-                <Alert tone="info">
-                  Visitor registered and is pending approval. Print the pass after approval from Visitor Passes or the visitor record.
-                </Alert>
-              </div>
-            )}
-
-            {completedPass ? (
-              <div className="mb-2 flex items-start justify-between gap-3 border-b border-gray-200 pb-2">
-                <BrandLogo className="h-12 print:h-10" />
-                <div className="shrink-0 text-right">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Visit #</div>
-                  <div className="font-mono text-sm font-bold text-steel print:text-xs">{completedPass.visitNumber}</div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="grid gap-4 sm:grid-cols-[1fr_auto] print:grid-cols-[1fr_auto] print:gap-3">
-              <div className="space-y-1 text-sm print:space-y-0.5 print:text-xs">
-                <ReviewRow label="Visitor" value={draft.visitorName} />
-                <ReviewRow label="Company" value={draft.companyName} />
-                <ReviewRow label="Mobile" value={draft.telephone ? `+91 ${draft.telephone}` : '—'} />
-                <ReviewRow label="Email" value={draft.email || '—'} />
-                <ReviewRow label="Visit" value={`${draft.visitDate} ${draft.visitTime}`} />
-                <ReviewRow label="Number of persons" value={String(draft.numberOfPersons)} />
-                <ReviewRow
-                  label="Department"
-                  value={departments.find((d) => d.id === draft.departmentId)?.name || '—'}
-                />
-                <ReviewRow label="Person to meet" value={draft.hostName || '—'} />
-                <ReviewRow
-                  label="Purposes"
-                  value={(() => {
-                    const names = purposes.filter((p) => draft.purposeIds.includes(p.id)).map((p) => p.name)
-                    if (draft.othersChecked && !names.some((n) => n.trim().toLowerCase() === 'others')) {
-                      names.push('Others')
-                    }
-                    return names.join(', ') || '—'
-                  })()}
-                />
-                {draft.othersChecked && draft.otherPurposeText.trim() ? (
-                  <ReviewRow label="Other purpose detail" value={draft.otherPurposeText.trim()} />
-                ) : null}
-                {completedPass?.visitNumber ? (
-                  <ReviewRow label="Visit #" value={completedPass.visitNumber} />
-                ) : null}
-                {(completedPass?.passCode || draft.passNumber.trim()) ? (
-                  <ReviewRow
-                    label="Pass number"
-                    value={(completedPass?.passCode || draft.passNumber).trim()}
-                  />
-                ) : null}
-              </div>
-
-              <div className="flex flex-row items-start justify-end gap-3 sm:flex-col print:flex-row">
-                {draft.photoBase64 ? (
-                  <img
-                    src={draft.photoBase64}
-                    alt="Visitor"
-                    className="h-28 w-28 rounded-md object-cover print:h-24 print:w-24"
-                  />
-                ) : (
-                  <div className="flex h-28 w-28 items-center justify-center rounded-md bg-gray-100 text-xs text-gray-400 print:h-24 print:w-24">
-                    No photo
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {completedPass && completedVisitId ? (
-              <div className="no-print mt-4 flex flex-wrap gap-2 border-t border-border/70 pt-4">
-                <Button
-                  variant="amber"
-                  onClick={() => {
-                    const previousTitle = document.title
-                    document.title = ' '
-                    let done = false
-                    const goNewVisitor = () => {
-                      if (done) return
-                      done = true
-                      document.title = previousTitle
-                      window.removeEventListener('afterprint', goNewVisitor)
-                      resetWizard()
-                    }
-                    window.addEventListener('afterprint', goNewVisitor)
-                    window.print()
-                    window.setTimeout(goNewVisitor, 1200)
-                  }}
-                >
-                  Print pass (optional)
-                </Button>
-                <Link to={`/visitors/${completedVisitId}`}>
-                  <Button variant="secondary">Open visitor record</Button>
-                </Link>
-                {!isArrival ? (
-                  <Button variant="primary" onClick={resetWizard}>
-                    Register another
-                  </Button>
-                ) : (
-                  <Button variant="primary" onClick={() => navigate('/visitors/expected')}>
-                    Back to expected
-                  </Button>
-                )}
-              </div>
-            ) : passPendingApproval && completedVisitId ? (
-              <div className="no-print mt-4 flex flex-wrap gap-2 border-t border-border/70 pt-4">
-                <Link to={`/visitors/${completedVisitId}`}>
-                  <Button variant="secondary">Open visitor record</Button>
-                </Link>
-                {!isArrival ? (
-                  <Button variant="primary" onClick={resetWizard}>
-                    Register another
-                  </Button>
-                ) : (
-                  <Button variant="primary" onClick={() => navigate('/reception')}>
-                    Back to reception
-                  </Button>
-                )}
-              </div>
-            ) : null}
-          </div>
-        </Panel>
-      ) : showFaceStage ? (
+      {showFaceStage ? (
         <Panel>
           <SectionTitle>Face capture</SectionTitle>
           <div className="grid gap-6 lg:grid-cols-2">
@@ -653,12 +493,13 @@ export function NewVisitorWizardPage() {
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Button onClick={acceptFaceMatch}>Yes — load their details</Button>
-                    <Button variant="secondary" onClick={rejectFaceMatch}>
-                      No — new visitor
+                    <Button variant="secondary" onClick={retakePhoto}>
+                      Not them — retake photo
                     </Button>
                   </div>
                   <p className="mt-3 text-xs text-ink-muted">
-                    Always confirm against the person in front of you before loading details.
+                    Existing visitor details were found. Load them to continue this visit, or retake the
+                    photo. Registering as a different new visitor with this face is not allowed.
                   </p>
                 </div>
               ) : (
@@ -704,6 +545,8 @@ export function NewVisitorWizardPage() {
                   id="visitorName"
                   value={draft.visitorName}
                   onChange={(e) => patch({ visitorName: e.target.value })}
+                  disabled={returningVisitor}
+                  readOnly={returningVisitor}
                 />
               </div>
               <div>
@@ -712,6 +555,8 @@ export function NewVisitorWizardPage() {
                   id="companyName"
                   value={draft.companyName}
                   onChange={(e) => patch({ companyName: e.target.value })}
+                  disabled={returningVisitor}
+                  readOnly={returningVisitor}
                 />
               </div>
               <div>
@@ -729,6 +574,8 @@ export function NewVisitorWizardPage() {
                     maxLength={10}
                     value={draft.telephone}
                     onChange={(e) => patch({ telephone: sanitizeMobileDigits(e.target.value) })}
+                    disabled={returningVisitor}
+                    readOnly={returningVisitor}
                   />
                 </div>
               </div>
@@ -745,6 +592,8 @@ export function NewVisitorWizardPage() {
                   value={draft.email}
                   onChange={(e) => patch({ email: e.target.value.replace(/\s/g, '') })}
                   onBlur={() => setEmailTouched(true)}
+                  disabled={returningVisitor}
+                  readOnly={returningVisitor}
                 />
                 <FieldError message={emailTouched ? validateVisitorEmail(draft.email) : null} />
               </div>
@@ -902,15 +751,6 @@ export function NewVisitorWizardPage() {
           </Panel>
         </div>
       )}
-    </div>
-  )
-}
-
-function ReviewRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid grid-cols-[140px_1fr] gap-2 border-b border-gray-100 py-1.5 print:grid-cols-[120px_1fr] print:gap-1 print:border-gray-200 print:py-1">
-      <div className="font-medium text-gray-500">{label}</div>
-      <div className="text-gray-900">{value || '—'}</div>
     </div>
   )
 }

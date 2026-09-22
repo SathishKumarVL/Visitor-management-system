@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { cn } from '../../lib/utils'
 import type { PropsWithChildren, ReactNode } from 'react'
-import { LoadingMask, TiaanoLoaderMark } from '../LoadingMask'
+import { LoadingMask } from '../LoadingMask'
 
 export function PageHeader({
   title,
@@ -54,17 +54,8 @@ export function Badge({ children, className }: PropsWithChildren<{ className?: s
   )
 }
 
-export function Spinner({ label = 'Loading…', fullScreen = false }: { label?: string; fullScreen?: boolean }) {
-  if (fullScreen) {
-    return <LoadingMask label={label} />
-  }
-
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-ink-muted" role="status" aria-live="polite">
-      <TiaanoLoaderMark size="md" />
-      <span className="text-sm font-medium tracking-wide">{label}</span>
-    </div>
-  )
+export function Spinner({ label = 'Loading…' }: { label?: string; fullScreen?: boolean }) {
+  return <LoadingMask label={label} />
 }
 
 export function Skeleton({ className }: { className?: string }) {

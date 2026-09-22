@@ -5,6 +5,7 @@ import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../compone
 import { Button } from '../components/ui/Button'
 import { FieldLabel, TextInput, TextSelect } from '../components/ui/Field'
 import { downloadBlob, formatDate, statusBadgeClass, todayIsoDate } from '../lib/utils'
+import { LoadingMask } from '../components/LoadingMask'
 
 /** Matches the JSON shape returned by GET /api/reports/visitors. */
 interface ReportRow {
@@ -107,6 +108,8 @@ export function ReportsPage() {
 
   return (
     <div>
+      {loading ? <Spinner label="Running report…" /> : null}
+      {exporting ? <LoadingMask label={`Exporting ${exporting.toUpperCase()}…`} /> : null}
       <PageHeader title="Reports" subtitle="Visitor activity reports with export" />
 
       <Panel className="mb-4">
@@ -175,7 +178,6 @@ export function ReportsPage() {
       </Panel>
 
       {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
-      {loading ? <Spinner /> : null}
       {!loading && hasRun && rows.length === 0 ? (
         <EmptyState title="No visitors matched this report" description="Try a wider date range or clear the filters." />
       ) : null}

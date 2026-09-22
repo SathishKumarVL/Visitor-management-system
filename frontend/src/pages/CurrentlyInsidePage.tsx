@@ -123,7 +123,7 @@ export function CurrentlyInsidePage() {
           </div>
         ) : null}
       </div>
-      {loading ? <Spinner /> : null}
+      {loading ? <Spinner label="Loading currently inside…" /> : null}
       {!loading && filtered.length === 0 ? (
         <EmptyState
           title={t('inside.empty')}

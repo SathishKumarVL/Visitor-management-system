@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { apiErrorMessage, passApi, visitorsApi } from '../lib/api'
 import type { PassDto, VisitorListItemDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 
@@ -45,6 +46,7 @@ export function VisitorPassesPage() {
 
   return (
     <div>
+      {busy ? <LoadingMask label="Working…" /> : null}
       <PageHeader title="Visitor Passes" subtitle="Search a visit and print or reprint the pass" />
       <Panel className="mb-4">
         <form onSubmit={search} className="flex flex-col gap-3 sm:flex-row sm:items-end">

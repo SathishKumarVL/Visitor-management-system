@@ -13,7 +13,7 @@ import {
 } from 'recharts'
 import { dashboardApi, apiErrorMessage } from '../lib/api'
 import type { ChartPointDto, DashboardDto } from '../types/api'
-import { Alert, Badge, EmptyState, KpiCard, PageHeader, Panel, Skeleton, Spinner } from '../components/ui/Panel'
+import { Alert, Badge, EmptyState, KpiCard, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { formatDateTime, primaryRole, statusBadgeClass } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
@@ -114,17 +114,7 @@ export function DashboardPage() {
   }, [])
 
   if (loading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-16 w-full max-w-lg" />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-32" />
-          ))}
-        </div>
-        <Spinner label="Loading dashboard…" />
-      </div>
-    )
+    return <Spinner label="Loading dashboard…" />
   }
 
   if (error) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { apiErrorMessage, mastersApi, usersApi } from '../lib/api'
 import type { CreateUserRequest, MasterItemDto, UpdateUserRequest, UserDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/ui/Field'
 import { menusForRole, type MenuKey } from '../lib/roles'
@@ -192,13 +193,14 @@ export function UsersPage() {
 
   return (
     <div>
+      {saving ? <LoadingMask label="Saving user…" /> : null}
+      {loading ? <Spinner label="Loading users…" /> : null}
       <PageHeader title="Users" subtitle="Manage system accounts, roles, and menu access" />
       {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
       {message ? <div className="mb-4"><Alert tone="success">{message}</Alert></div> : null}
 
       <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
         <Panel className="overflow-x-auto p-0">
-          {loading ? <Spinner /> : null}
           {!loading && users.length === 0 ? <div className="p-4"><EmptyState title="No users" /></div> : null}
           {!loading && users.length > 0 ? (
             <table className="min-w-full text-left text-sm">

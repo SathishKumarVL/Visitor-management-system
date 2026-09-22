@@ -1,0 +1,23 @@
+{
+  "name": "Tiaano VMS",
+  "short_name": "Tiaano VMS",
+  "description": "Tiaano Visitor Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0B3A5B",
+  "theme_color": "#008F95",
+  "icons": [
+    {
+      "src": "/branding/tiaano-favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/branding/tiaano-logo.svg",
+      "sizes": "320x80",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

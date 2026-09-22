@@ -7,6 +7,7 @@ import type {
   VisitFeedbackDto,
 } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 import { formatDateTime, cn } from '../lib/utils'
@@ -117,6 +118,8 @@ export function FeedbackQuestionsPage() {
 
   return (
     <div>
+      {saving ? <LoadingMask label="Saving question…" /> : null}
+      {loading ? <Spinner label="Loading feedback…" /> : null}
       <PageHeader
         title="Visitor feedback"
         subtitle="View submitted star ratings, or manage the questions shown at check-out."
@@ -161,7 +164,6 @@ export function FeedbackQuestionsPage() {
 
       {tab === 'responses' ? (
         <Panel className="overflow-x-auto p-0">
-          {loading ? <Spinner /> : null}
           {!loading && responses.length === 0 ? (
             <div className="p-4">
               <EmptyState
@@ -212,7 +214,6 @@ export function FeedbackQuestionsPage() {
       ) : (
         <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
           <Panel className="overflow-x-auto p-0">
-            {loading ? <Spinner /> : null}
             {!loading && items.length === 0 ? (
               <div className="p-4">
                 <EmptyState title="No feedback questions" description="Add questions to collect star ratings at check-out." />
