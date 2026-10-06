@@ -4,13 +4,26 @@ import { cn } from '../lib/utils'
 const DEFAULT_LOGO = '/branding/tiaano-logo.png'
 const FALLBACK_LOGO = '/branding/tiaano-logo.svg'
 
-export function BrandLogo({ className, light = false }: { className?: string; light?: boolean }) {
+export function BrandLogo({
+  className,
+  light = false,
+  src,
+  alt,
+}: {
+  className?: string
+  light?: boolean
+  /** Overrides the store logo (e.g. a pass printed for another location). */
+  src?: string
+  alt?: string
+}) {
   const logoSrc = useSettingsStore((s) => s.logoSrc)
-  const company = useSettingsStore((s) => s.settings.companyName)
+  const storeCompany = useSettingsStore((s) => s.companyName)
+  const company = alt || storeCompany
 
   return (
     <img
-      src={logoSrc || DEFAULT_LOGO}
+      key={src || logoSrc}
+      src={src || logoSrc || DEFAULT_LOGO}
       alt={company}
       className={cn(
         'h-10 w-auto max-w-[220px] object-contain object-left',

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,8 @@ using Tiaano.Vms.Api.Services.Face;
 
 var builder = WebApplication.CreateBuilder(args);
 
+AppTime.Configure(builder.Configuration["App:TimeZone"]);
+
 // Fail closed before wiring auth/crypto.
 SecretConfiguration.ValidateSmtpSecurity(builder.Configuration, builder.Environment);
 var jwtKey = SecretConfiguration.GetRequiredJwtSigningKey(builder.Configuration, builder.Environment);
@@ -31,7 +34,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
             sql.CommandTimeout(30);
             sql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null);
             sql.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
-        }));
+        })
+        // Snapshot already includes location-scoped mail/pass; SQL applied via AddPassMailBrandLocation.sql.
+        .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 builder.Services
     .AddIdentity<ApplicationUser, IdentityRole>(options =>
@@ -49,23 +54,51 @@ builder.Services
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders();
 
+const string authSelectorScheme = "JwtOrApiKey";
 builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-}).AddJwtBearer(options =>
+    options.DefaultScheme = authSelectorScheme;
+    options.DefaultAuthenticateScheme = authSelectorScheme;
+    options.DefaultChallengeScheme = authSelectorScheme;
+})
+.AddPolicyScheme(authSelectorScheme, authSelectorScheme, options =>
+{
+    // API keys are only honoured under /integration, and JWTs only everywhere else.
+    options.ForwardDefaultSelector = ctx =>
+        ctx.Request.Path.StartsWithSegments(ApiKeyDefaults.PathPrefix)
+            ? ApiKeyDefaults.Scheme
+            : JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
 {
     options.TokenValidationParameters = SecretConfiguration.CreateJwtValidationParameters(builder.Configuration, jwtKey);
     options.MapInboundClaims = false;
-});
+})
+.AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+    ApiKeyDefaults.Scheme, _ => { });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(ApiKeyDefaults.ReportsPolicy, p => p
+        .AddAuthenticationSchemes(ApiKeyDefaults.Scheme)
+        .RequireClaim(ApiKeyDefaults.ScopeClaim, IntegrationScopes.Reports));
+    options.AddPolicy(ApiKeyDefaults.EmployeesPolicy, p => p
+        .AddAuthenticationSchemes(ApiKeyDefaults.Scheme)
+        .RequireClaim(ApiKeyDefaults.ScopeClaim, IntegrationScopes.Employees));
+});
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new Tiaano.Vms.Api.DTOs.ApiResponse<object>(false, null, "Too many attempts. Please wait a minute and try again."), ct);
+    };
     if (RateLimitPolicy.IsLoginRateLimitRelaxed(builder.Environment.EnvironmentName))
     {
         options.AddPolicy(RateLimitPolicy.LoginPolicyName, _ => RateLimitPartition.GetNoLimiter("dev"));
+        options.AddPolicy(RateLimitPolicy.RefreshPolicyName, _ => RateLimitPartition.GetNoLimiter("dev"));
     }
     else
     {
@@ -78,33 +111,69 @@ builder.Services.AddRateLimiter(options =>
                     Window = RateLimitPolicy.LoginWindow,
                     QueueLimit = RateLimitPolicy.LoginQueueLimit
                 }));
+        options.AddPolicy(RateLimitPolicy.RefreshPolicyName, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = RateLimitPolicy.RefreshPermitLimit,
+                    Window = RateLimitPolicy.LoginWindow,
+                    QueueLimit = 0
+                }));
     }
 });
+
+// Persisted so password-reset links stay valid across IIS app-pool recycles.
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys")))
+    .SetApplicationName("Tiaano.Vms");
+builder.Services.Configure<DataProtectionTokenProviderOptions>(o => o.TokenLifespan = TimeSpan.FromHours(1));
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, TenantContext>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
-builder.Services.AddScoped<INotificationDeliveryProvider, EmailNotificationProvider>();
+builder.Services.AddScoped<EmailNotificationProvider>();
+builder.Services.AddScoped<IEmailNotificationProvider>(sp => sp.GetRequiredService<EmailNotificationProvider>());
+builder.Services.AddScoped<INotificationDeliveryProvider>(sp => sp.GetRequiredService<EmailNotificationProvider>());
 builder.Services.AddScoped<INotificationDeliveryProvider, PushNotificationProvider>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IVisitMailService, VisitMailService>();
 builder.Services.AddScoped<IPassNumberService, PassNumberService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IUserFaceLoginService, UserFaceLoginService>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();
+builder.Services.AddScoped<IMasterImportService, MasterImportService>();
+builder.Services.AddScoped<IIntegrationKeyService, IntegrationKeyService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 builder.Services.AddScoped<IEmergencyService, EmergencyService>();
 builder.Services.AddHostedService<AppointmentReminderWorker>();
+builder.Services.AddHostedService<StaleVisitAutoCheckOutWorker>();
 
 // Singleton: the ONNX sessions hold ~180 MB of weights and are thread-safe for concurrent inference.
 builder.Services.Configure<FaceRecognitionOptions>(
     builder.Configuration.GetSection(FaceRecognitionOptions.SectionName));
 builder.Services.AddSingleton<IFaceEmbeddingService, InsightFaceService>();
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        // Same JSON shape as every other error so the UI can show the real reason.
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            var errors = context.ModelState.Values
+                .SelectMany(v => v.Errors)
+                .Select(e => string.IsNullOrWhiteSpace(e.ErrorMessage) ? "Invalid value." : e.ErrorMessage)
+                .Distinct()
+                .ToList();
+            return new Microsoft.AspNetCore.Mvc.BadRequestObjectResult(
+                new Tiaano.Vms.Api.DTOs.ApiResponse<object>(false, null, string.Join(" ", errors), errors));
+        };
+    });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -123,6 +192,23 @@ builder.Services.AddSwaggerGen(c =>
             new OpenApiSecurityScheme
             {
                 Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            },
+            Array.Empty<string>()
+        }
+    });
+    c.AddSecurityDefinition(ApiKeyDefaults.Scheme, new OpenApiSecurityScheme
+    {
+        Description = $"Integration API key for /integration endpoints, sent in the {ApiKeyDefaults.HeaderName} header.",
+        Name = ApiKeyDefaults.HeaderName,
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = ApiKeyDefaults.Scheme }
             },
             Array.Empty<string>()
         }

@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { create } from 'zustand'
 import {
   authApi,
@@ -7,7 +8,7 @@ import {
   isRememberMeSession,
   storeAuthTokens,
 } from '../lib/api'
-import type { ChangePasswordRequest, UserDto } from '../types/api'
+import type { ChangePasswordRequest, LoginResponse, UserDto } from '../types/api'
 import { homePathForRoles } from '../lib/utils'
 
 interface AuthState {
@@ -17,10 +18,28 @@ interface AuthState {
   loading: boolean
   initialized: boolean
   login: (username: string, password: string, rememberMe: boolean) => Promise<string>
+  faceLogin: (photoBase64: string, rememberMe: boolean) => Promise<string>
   logout: () => Promise<void>
   bootstrap: () => Promise<void>
   setUser: (user: UserDto | null) => void
   changePassword: (body: ChangePasswordRequest) => Promise<void>
+}
+
+/** Stores the tokens and returns where the user should land. */
+function startSession(
+  set: (partial: Partial<AuthState>) => void,
+  result: LoginResponse,
+  rememberMe: boolean,
+): string {
+  storeAuthTokens(result.token, result.refreshToken, rememberMe)
+  set({
+    token: result.token,
+    refreshToken: result.refreshToken ?? null,
+    user: result.user,
+    loading: false,
+  })
+  if (result.user.mustChangePassword) return '/change-password'
+  return homePathForRoles(result.user.roles, result.user.allowedMenuKeys)
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -35,16 +54,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (username, password, rememberMe) => {
     set({ loading: true })
     try {
-      const result = await authApi.login(username, password, rememberMe)
-      storeAuthTokens(result.token, result.refreshToken, rememberMe)
-      set({
-        token: result.token,
-        refreshToken: result.refreshToken ?? null,
-        user: result.user,
-        loading: false,
-      })
-      if (result.user.mustChangePassword) return '/change-password'
-      return homePathForRoles(result.user.roles, result.user.allowedMenuKeys)
+      return startSession(set, await authApi.login(username, password, rememberMe), rememberMe)
+    } catch (e) {
+      set({ loading: false })
+      throw e
+    }
+  },
+
+  faceLogin: async (photoBase64, rememberMe) => {
+    set({ loading: true })
+    try {
+      return startSession(set, await authApi.faceLogin(photoBase64, rememberMe), rememberMe)
     } catch (e) {
       set({ loading: false })
       throw e
@@ -83,12 +103,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await Promise.race([
         authApi.me(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Auth check timed out')), 8000),
+          setTimeout(() => reject(new Error('Auth check timed out')), 15000),
         ),
       ])
       set({ user, loading: false, initialized: true })
-    } catch {
-      clearToken()
+    } catch (e) {
+      // Only a real rejection ends the session; a slow or dropped mobile connection keeps the tokens
+      // so the next reload can sign straight back in.
+      const status = axios.isAxiosError(e) ? e.response?.status : undefined
+      if (status === 401 || status === 403) clearToken()
       set({ user: null, token: null, refreshToken: null, loading: false, initialized: true })
     }
   },

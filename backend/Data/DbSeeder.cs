@@ -88,6 +88,8 @@ public static class DbSeeder
         }
         await context.SaveChangesAsync();
 
+        await BackfillBookingLocationsAsync(context);
+
         // Clear any leftover pending-approval visits (approvals are disabled).
         var pendingVisits = await context.VisitorVisits.IgnoreQueryFilters()
             .Where(v => v.Status == VisitStatus.PendingApproval)
@@ -227,6 +229,35 @@ public static class DbSeeder
         }
 
         return tenant;
+    }
+
+    /// <summary>
+    /// Bookings made by a location-bound user used to be saved without a location, which hid them from that
+    /// user. Give such open bookings their creator's location (idempotent).
+    /// </summary>
+    private static async Task BackfillBookingLocationsAsync(ApplicationDbContext context)
+    {
+        var orphans = await context.VisitorVisits.IgnoreQueryFilters()
+            .Where(v => v.Status == VisitStatus.Expected && v.CreatedBy != null && !v.VisitLocations.Any())
+            .Select(v => new { v.Id, v.TenantId, v.CreatedBy })
+            .ToListAsync();
+        if (orphans.Count == 0) return;
+
+        var creators = orphans.Select(o => o.CreatedBy!).Distinct().ToList();
+        var userLocations = await context.Users.IgnoreQueryFilters()
+            .Where(u => u.UserName != null && creators.Contains(u.UserName) && u.LocationId != null)
+            .Select(u => new { u.UserName, u.TenantId, LocationId = u.LocationId!.Value })
+            .ToListAsync();
+
+        var added = 0;
+        foreach (var visit in orphans)
+        {
+            var creator = userLocations.FirstOrDefault(u => u.UserName == visit.CreatedBy && u.TenantId == visit.TenantId);
+            if (creator is null) continue;
+            context.VisitorVisitLocations.Add(new VisitorVisitLocation { VisitorVisitId = visit.Id, LocationId = creator.LocationId });
+            added++;
+        }
+        if (added > 0) await context.SaveChangesAsync();
     }
 
     private static async Task BackfillTenantIdsAsync(ApplicationDbContext context, Guid tenantId)

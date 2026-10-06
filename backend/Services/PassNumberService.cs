@@ -4,25 +4,37 @@ using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Models.Enums;
 
 namespace Tiaano.Vms.Api.Services;
 
 public interface IPassNumberService
 {
     /// <summary>
-    /// Atomically allocates the next pass code for the authenticated tenant.
-    /// Prefers an active user allocation overlapping an active series; otherwise the default series.
+    /// Allocates the lowest free pass number in the configured pool for the authenticated tenant.
+    /// Numbers held by PendingApproval / Approved / Inside visits (or a short-lived allocate hold)
+    /// are skipped; CheckedOut / Rejected / Cancelled visits release their number back into the pool.
+    /// When <paramref name="locationId"/> is set, prefers that location's series (falls back to tenant default).
     /// </summary>
-    Task<string> AllocateNextAsync(string? userId, CancellationToken ct = default);
+    Task<string> AllocateNextAsync(Guid? locationId = null, CancellationToken ct = default);
 
-    Task<PassNumberSeriesDto?> GetSeriesAsync(CancellationToken ct = default);
+    /// <summary>Releases an allocate-time hold so the number can return to the free pool.</summary>
+    Task ReleaseHoldAsync(string? passCode, CancellationToken ct = default);
+
+    Task<PassNumberSeriesDto?> GetSeriesAsync(Guid? locationId = null, CancellationToken ct = default);
     Task<PassNumberSeriesDto> UpsertSeriesAsync(UpsertPassNumberSeriesRequest request, CancellationToken ct = default);
-    Task<IReadOnlyList<PassNumberAllocationDto>> ListAllocationsAsync(CancellationToken ct = default);
-    Task<PassNumberAllocationDto> UpsertAllocationAsync(UpsertPassNumberAllocationRequest request, CancellationToken ct = default);
 }
 
 public class PassNumberService : IPassNumberService
 {
+    /// <summary>Visit statuses that still hold a physical pass badge.</summary>
+    private static readonly int[] HoldingStatuses =
+    [
+        (int)VisitStatus.PendingApproval,
+        (int)VisitStatus.Approved,
+        (int)VisitStatus.Inside
+    ];
+
     private readonly ApplicationDbContext _db;
     private readonly IConfiguration _config;
     private readonly ITenantContext _tenant;
@@ -47,15 +59,41 @@ public class PassNumberService : IPassNumberService
     /// Format choice: <c>{Prefix}{Year}-{number:D6}</c> (e.g. VMS-2026-000184).
     /// Year is the series Year when set; otherwise the current local calendar year.
     /// </summary>
-    public static string FormatPassCode(string prefix, int? seriesYear, int number)
+    public static string FormatPassCode(string prefix, int? seriesYear, int number) =>
+        $"{SeriesKey(prefix, seriesYear)}{number:D6}";
+
+    /// <summary>
+    /// The formatted code without its number (e.g. <c>VMS-2026-</c>). Each key is its own pool, so location
+    /// series with different prefixes never block each other, while series sharing a prefix share numbers.
+    /// </summary>
+    public static string SeriesKey(string prefix, int? seriesYear)
     {
         var p = (prefix ?? "VMS-").Trim();
         if (p.Length > 20) p = p[..20];
-        var year = seriesYear ?? DateTime.Now.Year;
-        return $"{p}{year}-{number:D6}";
+        var year = seriesYear ?? AppTime.Now.Year;
+        return $"{p}{year}-";
     }
 
-    public async Task<string> AllocateNextAsync(string? userId, CancellationToken ct = default)
+    private static string? SeriesKeyOf(string passCode)
+    {
+        var code = passCode.Trim();
+        var dash = code.LastIndexOf('-');
+        return dash > 0 ? code[..(dash + 1)] : null;
+    }
+
+    /// <summary>Extracts the numeric suffix from a formatted pass code (segment after the last '-').</summary>
+    public static bool TryParsePassNumber(string? passCode, out int number)
+    {
+        number = 0;
+        if (string.IsNullOrWhiteSpace(passCode)) return false;
+        var dash = passCode.LastIndexOf('-');
+        var digits = dash >= 0 && dash < passCode.Length - 1
+            ? passCode[(dash + 1)..]
+            : passCode.Trim();
+        return int.TryParse(digits, out number);
+    }
+
+    public async Task<string> AllocateNextAsync(Guid? locationId = null, CancellationToken ct = default)
     {
         var tenantId = RequireTenantId();
 
@@ -64,17 +102,14 @@ public class PassNumberService : IPassNumberService
 
         try
         {
-            if (!string.IsNullOrWhiteSpace(userId))
-            {
-                var allocated = await TryAllocateFromUserAsync(conn, tx, tenantId, userId.Trim(), ct);
-                if (allocated is not null)
-                {
-                    await tx.CommitAsync(ct);
-                    return allocated;
-                }
-            }
+            // Series sharing a prefix live on different rows, so row locks alone cannot serialise them.
+            await AdoSql.ExecuteNonQueryAsync(
+                conn, tx,
+                "EXEC sp_getapplock @Resource = @Resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000",
+                ct,
+                AdoSql.NVarChar("@Resource", $"vms-pass:{tenantId}", 255));
 
-            var fromSeries = await AllocateFromDefaultSeriesAsync(conn, tx, tenantId, ct);
+            var fromSeries = await AllocateFromDefaultSeriesAsync(conn, tx, tenantId, locationId, ct);
             await tx.CommitAsync(ct);
             return fromSeries;
         }
@@ -85,117 +120,191 @@ public class PassNumberService : IPassNumberService
         }
     }
 
-    private static async Task<string?> TryAllocateFromUserAsync(
-        SqlConnection conn,
-        SqlTransaction tx,
-        Guid tenantId,
-        string userId,
-        CancellationToken ct)
-    {
-        // Active allocation whose range still has capacity, overlapping an active series.
-        const string findSql = """
-            SELECT TOP (1)
-                a.Id, a.CurrentNumber, a.EndNumber, s.Prefix, s.Year
-            FROM PassNumberAllocations a
-            INNER JOIN PassNumberSeries s ON s.Id = a.SeriesId AND s.TenantId = a.TenantId
-            WHERE a.TenantId = @TenantId
-              AND a.UserId = @UserId
-              AND a.IsActive = 1
-              AND s.IsActive = 1
-              AND a.CurrentNumber < a.EndNumber
-              AND a.StartNumber <= a.EndNumber
-              AND a.StartNumber >= s.StartNumber
-              AND a.EndNumber <= s.EndNumber
-            ORDER BY a.CreatedAt
-            """;
-
-        Guid allocationId;
-        string prefix;
-        int? year;
-        await using (var reader = await AdoSql.ExecuteReaderAsync(
-                         conn, tx, findSql, ct,
-                         AdoSql.GuidParam("@TenantId", tenantId),
-                         AdoSql.NVarChar("@UserId", userId, 450)))
-        {
-            if (!await reader.ReadAsync(ct))
-                return null;
-            allocationId = reader.GetGuid(0);
-            prefix = reader.GetString(3);
-            year = reader.IsDBNull(4) ? null : reader.GetInt32(4);
-        }
-
-        const string bumpSql = """
-            UPDATE PassNumberAllocations
-            SET CurrentNumber = CurrentNumber + 1, UpdatedAt = SYSUTCDATETIME()
-            OUTPUT INSERTED.CurrentNumber
-            WHERE Id = @Id AND TenantId = @TenantId AND IsActive = 1 AND CurrentNumber < EndNumber
-            """;
-
-        var result = await AdoSql.ExecuteScalarAsync(
-            conn, tx, bumpSql, ct,
-            AdoSql.GuidParam("@Id", allocationId),
-            AdoSql.GuidParam("@TenantId", tenantId));
-
-        if (result is null || result is DBNull)
-            return null;
-
-        var number = Convert.ToInt32(result);
-        return FormatPassCode(prefix, year, number);
-    }
-
     private static async Task<string> AllocateFromDefaultSeriesAsync(
         SqlConnection conn,
         SqlTransaction tx,
         Guid tenantId,
+        Guid? locationId,
         CancellationToken ct)
     {
         const string findSql = """
-            SELECT TOP (1) Id, Prefix, Year
-            FROM PassNumberSeries
-            WHERE TenantId = @TenantId AND IsActive = 1 AND CurrentNumber < EndNumber
-            ORDER BY CreatedAt
+            SELECT TOP (1) Id, Prefix, Year, StartNumber, EndNumber
+            FROM PassNumberSeries WITH (UPDLOCK, ROWLOCK)
+            WHERE TenantId = @TenantId AND IsActive = 1 AND StartNumber <= EndNumber
+              AND (
+                    (@LocationId IS NOT NULL AND (LocationId = @LocationId OR LocationId IS NULL))
+                 OR (@LocationId IS NULL AND LocationId IS NULL)
+              )
+            ORDER BY CASE
+                WHEN @LocationId IS NOT NULL AND LocationId = @LocationId THEN 0
+                ELSE 1
+            END, CreatedAt
             """;
 
         Guid seriesId;
         string prefix;
         int? year;
+        int startNumber;
+        int endNumber;
         await using (var reader = await AdoSql.ExecuteReaderAsync(
                          conn, tx, findSql, ct,
-                         AdoSql.GuidParam("@TenantId", tenantId)))
+                         AdoSql.GuidParam("@TenantId", tenantId),
+                         AdoSql.GuidParam("@LocationId", locationId)))
         {
             if (!await reader.ReadAsync(ct))
                 throw new InvalidOperationException(
-                    "No active pass number series with remaining capacity. Configure Pass Settings.");
+                    "No active pass number series configured. Configure Pass Settings.");
             seriesId = reader.GetGuid(0);
             prefix = reader.GetString(1);
             year = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+            startNumber = reader.GetInt32(3);
+            endNumber = reader.GetInt32(4);
         }
 
-        const string bumpSql = """
-            UPDATE PassNumberSeries
-            SET CurrentNumber = CurrentNumber + 1, UpdatedAt = SYSUTCDATETIME()
-            OUTPUT INSERTED.CurrentNumber
-            WHERE Id = @Id AND TenantId = @TenantId AND IsActive = 1 AND CurrentNumber < EndNumber
-            """;
+        var key = SeriesKey(prefix, year);
+        await PurgeStaleHoldsAsync(conn, tx, tenantId, ct);
+        var used = await LoadHeldPassNumbersAsync(conn, tx, tenantId, key, ct);
+        var number = FindLowestFree(startNumber, endNumber, used);
+        if (number is null)
+            throw new InvalidOperationException(
+                "All pass numbers in the pool are currently in use. Check out a visitor to free a pass, or widen the start/end range.");
 
-        var result = await AdoSql.ExecuteScalarAsync(
-            conn, tx, bumpSql, ct,
+        await AdoSql.ExecuteNonQueryAsync(
+            conn, tx, """
+                UPDATE PassNumberSeries
+                SET CurrentNumber = @Number, UpdatedAt = SYSUTCDATETIME()
+                WHERE Id = @Id AND TenantId = @TenantId AND IsActive = 1
+                """,
+            ct,
+            AdoSql.IntParam("@Number", number.Value),
             AdoSql.GuidParam("@Id", seriesId),
             AdoSql.GuidParam("@TenantId", tenantId));
 
-        if (result is null || result is DBNull)
-            throw new InvalidOperationException("Pass number series is exhausted.");
-
-        var number = Convert.ToInt32(result);
-        return FormatPassCode(prefix, year, number);
+        await InsertHoldAsync(conn, tx, tenantId, key, number.Value, ct);
+        return FormatPassCode(prefix, year, number.Value);
     }
 
-    public async Task<PassNumberSeriesDto?> GetSeriesAsync(CancellationToken ct = default)
+    public async Task ReleaseHoldAsync(string? passCode, CancellationToken ct = default)
+    {
+        if (!TryParsePassNumber(passCode, out var number))
+            return;
+
+        var tenantId = RequireTenantId();
+        var key = SeriesKeyOf(passCode!);
+        await using var conn = await AdoSql.OpenAsync(ConnectionString, ct);
+        await AdoSql.ExecuteNonQueryAsync(
+            conn, null, """
+                DELETE FROM PassNumberHolds
+                WHERE TenantId = @TenantId AND Number = @Number
+                  AND (SeriesKey = @SeriesKey OR SeriesKey IS NULL)
+                """,
+            ct,
+            AdoSql.GuidParam("@TenantId", tenantId),
+            AdoSql.IntParam("@Number", number),
+            AdoSql.NVarChar("@SeriesKey", key, 40));
+    }
+
+    private static async Task PurgeStaleHoldsAsync(
+        SqlConnection conn,
+        SqlTransaction tx,
+        Guid tenantId,
+        CancellationToken ct)
+    {
+        // Drop orphaned reservations if registration never completed (15 minutes).
+        await AdoSql.ExecuteNonQueryAsync(
+            conn, tx, """
+                DELETE FROM PassNumberHolds
+                WHERE TenantId = @TenantId
+                  AND CreatedAt < DATEADD(minute, -15, SYSUTCDATETIME())
+                """,
+            ct,
+            AdoSql.GuidParam("@TenantId", tenantId));
+    }
+
+    private static async Task InsertHoldAsync(
+        SqlConnection conn,
+        SqlTransaction tx,
+        Guid tenantId,
+        string seriesKey,
+        int number,
+        CancellationToken ct)
+    {
+        await AdoSql.ExecuteNonQueryAsync(
+            conn, tx, """
+                INSERT INTO PassNumberHolds (Id, TenantId, SeriesKey, Number, CreatedAt)
+                VALUES (NEWID(), @TenantId, @SeriesKey, @Number, SYSUTCDATETIME())
+                """,
+            ct,
+            AdoSql.GuidParam("@TenantId", tenantId),
+            AdoSql.NVarChar("@SeriesKey", seriesKey, 40),
+            AdoSql.IntParam("@Number", number));
+    }
+
+    private static async Task<HashSet<int>> LoadHeldPassNumbersAsync(
+        SqlConnection conn,
+        SqlTransaction tx,
+        Guid tenantId,
+        string seriesKey,
+        CancellationToken ct)
+    {
+        // PendingApproval / Approved / Inside still hold the physical badge. Only codes from this series' pool count.
+        const string visitSql = """
+            SELECT PassNumber
+            FROM VisitorVisits
+            WHERE TenantId = @TenantId
+              AND Status IN (@S1, @S2, @S3)
+              AND PassNumber IS NOT NULL
+              AND LEFT(LTRIM(PassNumber), LEN(@SeriesKey)) = @SeriesKey
+            """;
+
+        var used = new HashSet<int>();
+        await using (var reader = await AdoSql.ExecuteReaderAsync(
+                         conn, tx, visitSql, ct,
+                         AdoSql.GuidParam("@TenantId", tenantId),
+                         AdoSql.NVarChar("@SeriesKey", seriesKey, 40),
+                         AdoSql.IntParam("@S1", HoldingStatuses[0]),
+                         AdoSql.IntParam("@S2", HoldingStatuses[1]),
+                         AdoSql.IntParam("@S3", HoldingStatuses[2])))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                if (!reader.IsDBNull(0) && TryParsePassNumber(reader.GetString(0), out var n))
+                    used.Add(n);
+            }
+        }
+
+        // Holds from before series keys existed have no key; treat them as blocking every pool until they expire.
+        const string holdSql = """
+            SELECT Number FROM PassNumberHolds
+            WHERE TenantId = @TenantId AND (SeriesKey = @SeriesKey OR SeriesKey IS NULL)
+            """;
+        await using (var reader = await AdoSql.ExecuteReaderAsync(
+                         conn, tx, holdSql, ct,
+                         AdoSql.GuidParam("@TenantId", tenantId),
+                         AdoSql.NVarChar("@SeriesKey", seriesKey, 40)))
+        {
+            while (await reader.ReadAsync(ct))
+                used.Add(reader.GetInt32(0));
+        }
+
+        return used;
+    }
+
+    private static int? FindLowestFree(int startNumber, int endNumber, HashSet<int> used)
+    {
+        for (var n = startNumber; n <= endNumber; n++)
+        {
+            if (used.Contains(n)) continue;
+            return n;
+        }
+
+        return null;
+    }
+
+    public async Task<PassNumberSeriesDto?> GetSeriesAsync(Guid? locationId = null, CancellationToken ct = default)
     {
         RequireTenantId();
-        var series = await _db.PassNumberSeries.AsNoTracking()
-            .OrderBy(s => s.CreatedAt)
-            .FirstOrDefaultAsync(ct);
+        var series = await ResolveSeriesEntityAsync(locationId, track: false, ct);
         return series is null ? null : ToSeriesDto(series);
     }
 
@@ -204,19 +313,26 @@ public class PassNumberService : IPassNumberService
         var tenantId = RequireTenantId();
         ValidateSeriesRequest(request);
 
-        var series = await _db.PassNumberSeries
-            .OrderBy(s => s.CreatedAt)
-            .FirstOrDefaultAsync(ct);
+        if (request.LocationId is Guid locId)
+        {
+            var locOk = await _db.Locations.AnyAsync(l => l.Id == locId, ct);
+            if (!locOk)
+                throw new InvalidOperationException("Location not found.");
+        }
+
+        var series = await ResolveSeriesEntityAsync(request.LocationId, track: true, ct);
 
         if (series is null)
         {
             series = new PassNumberSeries
             {
                 TenantId = tenantId,
+                LocationId = request.LocationId,
                 Prefix = request.Prefix.Trim(),
                 Year = request.Year,
                 StartNumber = request.StartNumber,
                 EndNumber = request.EndNumber,
+                // Current = last issued. Leave at Start-1 so the first allocate hands out Start.
                 CurrentNumber = request.CurrentNumber ?? (request.StartNumber - 1),
                 IsActive = request.IsActive
             };
@@ -238,72 +354,16 @@ public class PassNumberService : IPassNumberService
         return ToSeriesDto(series);
     }
 
-    public async Task<IReadOnlyList<PassNumberAllocationDto>> ListAllocationsAsync(CancellationToken ct = default)
+    private async Task<PassNumberSeries?> ResolveSeriesEntityAsync(
+        Guid? locationId,
+        bool track,
+        CancellationToken ct)
     {
-        RequireTenantId();
-        var rows = await _db.PassNumberAllocations.AsNoTracking()
-            .Include(a => a.User)
-            .OrderByDescending(a => a.IsActive)
-            .ThenBy(a => a.User != null ? a.User.FullName : a.UserId)
-            .ToListAsync(ct);
-        return rows.Select(ToAllocationDto).ToList();
-    }
+        IQueryable<PassNumberSeries> q = track ? _db.PassNumberSeries : _db.PassNumberSeries.AsNoTracking();
+        if (locationId is Guid loc)
+            return await q.FirstOrDefaultAsync(s => s.LocationId == loc, ct);
 
-    public async Task<PassNumberAllocationDto> UpsertAllocationAsync(
-        UpsertPassNumberAllocationRequest request,
-        CancellationToken ct = default)
-    {
-        var tenantId = RequireTenantId();
-        if (string.IsNullOrWhiteSpace(request.UserId))
-            throw new InvalidOperationException("User is required for a pass allocation.");
-        if (request.StartNumber > request.EndNumber)
-            throw new InvalidOperationException("Start number must be less than or equal to end number.");
-
-        var series = request.SeriesId.HasValue
-            ? await _db.PassNumberSeries.FirstOrDefaultAsync(s => s.Id == request.SeriesId.Value, ct)
-            : await _db.PassNumberSeries.OrderBy(s => s.CreatedAt).FirstOrDefaultAsync(ct);
-        if (series is null)
-            throw new InvalidOperationException("Configure a pass number series before creating allocations.");
-
-        if (request.StartNumber < series.StartNumber || request.EndNumber > series.EndNumber)
-            throw new InvalidOperationException("Allocation range must sit within the series range.");
-
-        var userExists = await _db.Users.AnyAsync(u => u.Id == request.UserId, ct);
-        if (!userExists)
-            throw new InvalidOperationException("User not found.");
-
-        PassNumberAllocation allocation;
-        if (request.Id.HasValue)
-        {
-            allocation = await _db.PassNumberAllocations.FirstOrDefaultAsync(a => a.Id == request.Id.Value, ct)
-                ?? throw new InvalidOperationException("Allocation not found.");
-            allocation.UserId = request.UserId.Trim();
-            allocation.SeriesId = series.Id;
-            allocation.StartNumber = request.StartNumber;
-            allocation.EndNumber = request.EndNumber;
-            if (request.CurrentNumber.HasValue)
-                allocation.CurrentNumber = request.CurrentNumber.Value;
-            allocation.IsActive = request.IsActive;
-            allocation.UpdatedAt = DateTime.UtcNow;
-        }
-        else
-        {
-            allocation = new PassNumberAllocation
-            {
-                TenantId = tenantId,
-                SeriesId = series.Id,
-                UserId = request.UserId.Trim(),
-                StartNumber = request.StartNumber,
-                EndNumber = request.EndNumber,
-                CurrentNumber = request.CurrentNumber ?? (request.StartNumber - 1),
-                IsActive = request.IsActive
-            };
-            _db.PassNumberAllocations.Add(allocation);
-        }
-
-        await _db.SaveChangesAsync(ct);
-        await _db.Entry(allocation).Reference(a => a.User).LoadAsync(ct);
-        return ToAllocationDto(allocation);
+        return await q.Where(s => s.LocationId == null).OrderBy(s => s.CreatedAt).FirstOrDefaultAsync(ct);
     }
 
     private static void ValidateSeriesRequest(UpsertPassNumberSeriesRequest request)
@@ -322,6 +382,7 @@ public class PassNumberService : IPassNumberService
     private static PassNumberSeriesDto ToSeriesDto(PassNumberSeries s) => new()
     {
         Id = s.Id,
+        LocationId = s.LocationId,
         Prefix = s.Prefix,
         Year = s.Year,
         StartNumber = s.StartNumber,
@@ -329,18 +390,5 @@ public class PassNumberService : IPassNumberService
         CurrentNumber = s.CurrentNumber,
         IsActive = s.IsActive,
         FormatExample = FormatPassCode(s.Prefix, s.Year, Math.Max(s.CurrentNumber + 1, s.StartNumber))
-    };
-
-    private static PassNumberAllocationDto ToAllocationDto(PassNumberAllocation a) => new()
-    {
-        Id = a.Id,
-        SeriesId = a.SeriesId,
-        UserId = a.UserId,
-        UserName = a.User?.UserName,
-        FullName = a.User?.FullName,
-        StartNumber = a.StartNumber,
-        EndNumber = a.EndNumber,
-        CurrentNumber = a.CurrentNumber,
-        IsActive = a.IsActive
     };
 }

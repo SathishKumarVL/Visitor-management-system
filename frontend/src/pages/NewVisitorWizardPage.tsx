@@ -1,26 +1,27 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, passApi, visitorsApi } from '../lib/api'
-import type { MasterItemDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
+import type { EmployeeDto, MasterItemDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../components/ui/Field'
-import { nowIsoTime, todayIsoDate, validateVisitorEmail } from '../lib/utils'
+import { nowIsoTime, sanitizePhoneDigits, todayIsoDate, validateVisitorEmail } from '../lib/utils'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { SecureImage } from '../components/SecureImage'
 import { LoadingMask } from '../components/LoadingMask'
-import type { FaceSearchMatchDto } from '../types/api'
+import { FaceCameraPanel } from '../components/FaceCameraPanel'
+import { captureFaceJpeg } from '../lib/cameraCapture'
+import type { BookingMatchDto, FaceSearchMatchDto } from '../types/api'
+import { useAuthStore } from '../store/authStore'
+import { EmployeeSearchField } from '../components/EmployeeSearchField'
 
 const LEGACY_DRAFT_KEY = 'tiaano_visitor_wizard_draft'
 const STATIC_ID_TYPES = ['Aadhaar', 'Pan Card', 'Passport'] as const
 
-function sanitizeMobileDigits(value: string): string {
-  return value.replace(/\D/g, '').slice(0, 10)
-}
-
 const emptyDraft = (): VisitorWizardDraft => ({
   step: 0,
   visitorName: '',
+  gender: '',
   telephone: '',
   email: '',
   companyName: '',
@@ -29,9 +30,11 @@ const emptyDraft = (): VisitorWizardDraft => ({
   numberOfPersons: 1,
   departmentId: '',
   hostName: '',
+  hostEmployeeId: '',
   purposeIds: [],
   othersChecked: false,
   locationIds: [],
+  locationId: '',
   plantNumber: '',
   otherLocationText: '',
   otherPurposeText: '',
@@ -63,9 +66,11 @@ export function NewVisitorWizardPage() {
   const expectedId = searchParams.get('expectedId')
   const isArrival = !!expectedId
   const online = useOnlineStatus()
+  const userLocationId = useAuthStore((s) => s.user?.locationId || '')
   const [draft, setDraft] = useState<VisitorWizardDraft>(() => emptyDraft())
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
   const [purposes, setPurposes] = useState<MasterItemDto[]>([])
+  const [employees, setEmployees] = useState<EmployeeDto[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
@@ -74,6 +79,9 @@ export function NewVisitorWizardPage() {
   const [faceMatch, setFaceMatch] = useState<FaceSearchMatchDto | null>(null)
   const [emailTouched, setEmailTouched] = useState(false)
   const [loadingExpected, setLoadingExpected] = useState(!!expectedId)
+  const [bookingMatches, setBookingMatches] = useState<BookingMatchDto[]>([])
+  const [dismissedBookingIds, setDismissedBookingIds] = useState<string[]>([])
+  const [linkedBooking, setLinkedBooking] = useState<BookingMatchDto | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const formTopRef = useRef<HTMLDivElement>(null)
@@ -86,11 +94,21 @@ export function NewVisitorWizardPage() {
     () => purposes.filter((p) => p.name.trim().toLowerCase() !== 'others'),
     [purposes],
   )
+  const departmentName = useMemo(
+    () => departments.find((d) => d.id === draft.departmentId)?.name || '',
+    [departments, draft.departmentId],
+  )
 
   /** Details form only after a confirmed capture (match resolved or none). */
   const showDetailsForm = !!draft.photoBase64 && !faceMatch && !faceBusy
   const showFaceStage = !showDetailsForm
   const returningVisitor = !!draft.recognizedVisitorId
+  const lookupPhone = sanitizePhoneDigits(draft.telephone)
+  const bookingLookupKey =
+    showDetailsForm && !isArrival && !draft.expectedVisitId
+      ? `${lookupPhone.length === 10 ? lookupPhone : ''}|${draft.recognizedVisitorId ?? ''}`
+      : ''
+  const visibleBookingMatches = bookingMatches.filter((m) => !dismissedBookingIds.includes(m.visitId))
 
   function syncOthersPurposeIds(ids: string[], othersChecked: boolean): string[] {
     if (!othersPurpose) return ids
@@ -114,49 +132,97 @@ export function NewVisitorWizardPage() {
   }, [])
 
   useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop())
+    }
+  }, [])
+
+  // Location comes from login only — never shown as a form field.
+  useEffect(() => {
+    if (expectedId) return
+    setDraft((d) => {
+      const nextLoc = userLocationId || ''
+      const nextIds = nextLoc ? [nextLoc] : []
+      if (d.locationId === nextLoc) return d
+      return {
+        ...d,
+        locationId: nextLoc,
+        locationIds: nextIds,
+        departmentId: '',
+        hostEmployeeId: '',
+        hostName: '',
+        purposeIds: [],
+        othersChecked: false,
+        otherPurposeText: '',
+      }
+    })
+  }, [userLocationId, expectedId])
+
+  useEffect(() => {
+    const loc = draft.locationId || undefined
     void (async () => {
       try {
-        const [d, p] = await Promise.all([
-          mastersApi.departments(),
-          mastersApi.purposes(),
+        const [d, p, e] = await Promise.all([
+          mastersApi.departments(true, loc),
+          mastersApi.purposes(true, loc),
+          mastersApi.hosts(undefined, true, loc),
         ])
         setDepartments(d)
         setPurposes(p)
+        setEmployees(e)
+      } catch (err) {
+        setError(apiErrorMessage(err))
+      }
+    })()
+  }, [draft.locationId])
 
-        if (expectedId) {
-          setLoadingExpected(true)
-          const visit = await visitorsApi.get(expectedId)
-          const dept = d.find((x) => x.name === visit.departmentName)
-          const purposeIds = p.filter((x) => visit.purposes.includes(x.name)).map((x) => x.id)
-          const others = p.find((x) => x.name.trim().toLowerCase() === 'others')
-          const othersChecked = !!(others && purposeIds.includes(others.id))
-          setDraft({
-            ...emptyDraft(),
-            visitorName: visit.visitorName,
-            companyName: visit.companyName,
-            telephone: sanitizeMobileDigits(visit.phone || ''),
-            email: (visit.email || '').trim(),
-            visitDate: todayIsoDate(),
-            visitTime: nowIsoTime(),
-            departmentId: dept?.id || '',
-            hostName: visit.hostName || '',
-            purposeIds,
-            othersChecked,
-            otherPurposeText: visit.purposeNotes || '',
-            isWalkIn: false,
-            expectedVisitId: visit.visitId,
-          })
-        }
+  useEffect(() => {
+    if (!expectedId) return
+    void (async () => {
+      try {
+        setLoadingExpected(true)
+        const visit = await visitorsApi.get(expectedId)
+        const locId = userLocationId || ''
+        const [d, p, hosts] = await Promise.all([
+          mastersApi.departments(true, locId || undefined),
+          mastersApi.purposes(true, locId || undefined),
+          mastersApi.hosts(undefined, true, locId || undefined),
+        ])
+        setDepartments(d)
+        setPurposes(p)
+        setEmployees(hosts)
+        const dept = d.find((x) => x.name === visit.departmentName)
+        const host = hosts.find((h) => h.fullName === visit.hostName)
+        const purposeIds = p.filter((x) => visit.purposes.includes(x.name)).map((x) => x.id)
+        const others = p.find((x) => x.name.trim().toLowerCase() === 'others')
+        const othersChecked = !!(others && purposeIds.includes(others.id))
+        setDraft({
+          ...emptyDraft(),
+          visitorName: visit.visitorName,
+          gender: visit.gender === 1 || visit.gender === 2 ? visit.gender : '',
+          companyName: visit.companyName,
+          telephone: sanitizePhoneDigits(visit.phone || ''),
+          email: (visit.email || '').trim(),
+          visitDate: todayIsoDate(),
+          visitTime: nowIsoTime(),
+          locationId: locId,
+          locationIds: locId ? [locId] : [],
+          departmentId: host?.departmentId || dept?.id || '',
+          hostName: visit.hostName || '',
+          hostEmployeeId: host?.id || '',
+          purposeIds,
+          othersChecked,
+          otherPurposeText: visit.purposeNotes || '',
+          isWalkIn: false,
+          expectedVisitId: visit.visitId,
+        })
       } catch (e) {
         setError(apiErrorMessage(e))
       } finally {
         setLoadingExpected(false)
       }
     })()
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop())
-    }
-  }, [expectedId])
+  }, [expectedId, userLocationId])
 
   useEffect(() => {
     if (!othersPurpose || !draft.othersChecked) return
@@ -169,8 +235,65 @@ export function NewVisitorWizardPage() {
     })
   }, [othersPurpose, draft.othersChecked])
 
+  useEffect(() => {
+    const [phone, visitorId] = bookingLookupKey.split('|')
+    if (!phone && !visitorId) {
+      setBookingMatches([])
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      visitorsApi
+        .matchBookings({ phone: phone || undefined, visitorId: visitorId || undefined })
+        .then((matches) => {
+          if (!cancelled) setBookingMatches(matches)
+        })
+        .catch(() => {
+          if (!cancelled) setBookingMatches([])
+        })
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [bookingLookupKey])
+
   function patch(partial: Partial<VisitorWizardDraft>) {
     setDraft((d) => ({ ...d, ...partial }))
+  }
+
+  function linkBooking(booking: BookingMatchDto) {
+    const purposeIds = booking.purposeIds.filter((id) => purposes.some((p) => p.id === id))
+    const othersChecked = !!(othersPurpose && purposeIds.includes(othersPurpose.id))
+    const host = employees.find((e) => e.id === booking.hostEmployeeId)
+    const bookedGender = booking.gender === 1 || booking.gender === 2 ? booking.gender : ''
+    setDraft((d) => ({
+      ...d,
+      // A confirmed returning visitor keeps the details on file; otherwise the booking is the source.
+      visitorName: d.recognizedVisitorId ? d.visitorName : booking.visitorName,
+      companyName: d.recognizedVisitorId ? d.companyName : booking.companyName,
+      gender: d.gender === 1 || d.gender === 2 ? d.gender : bookedGender,
+      telephone: d.telephone || sanitizePhoneDigits(booking.phone || ''),
+      email: d.recognizedVisitorId && d.email.trim() ? d.email : (booking.email || d.email).trim(),
+      hostEmployeeId: booking.hostEmployeeId,
+      hostName: host?.fullName || booking.hostName,
+      departmentId: host?.departmentId || booking.departmentId,
+      purposeIds,
+      othersChecked,
+      otherPurposeText: othersChecked ? booking.purposeNotes || '' : '',
+      numberOfPersons: booking.numberOfPersons || d.numberOfPersons,
+      isWalkIn: false,
+      expectedVisitId: booking.visitId,
+    }))
+    setLinkedBooking(booking)
+    setBookingMatches([])
+    setError(null)
+  }
+
+  function unlinkBooking() {
+    if (linkedBooking) setDismissedBookingIds((ids) => [...ids, linkedBooking.visitId])
+    setLinkedBooking(null)
+    patch({ expectedVisitId: null, isWalkIn: true })
   }
 
   function validateAll(): string | null {
@@ -178,7 +301,8 @@ export function NewVisitorWizardPage() {
     if (faceMatch) return 'Confirm whether this is the same visitor before continuing.'
     if (!draft.visitorName.trim()) return 'Visitor name is required.'
     if (!draft.companyName.trim()) return 'Company name is required.'
-    const mobile = sanitizeMobileDigits(draft.telephone)
+    if (draft.gender !== 1 && draft.gender !== 2) return 'Please select Mr. or Ms.'
+    const mobile = sanitizePhoneDigits(draft.telephone)
     if (mobile.length > 0 && mobile.length !== 10) return 'Mobile number must be exactly 10 digits.'
     if (mobile.length === 10 && !/^[6-9]/.test(mobile)) return 'Mobile number must start with 6, 7, 8, or 9.'
     const emailError = validateVisitorEmail(draft.email)
@@ -186,8 +310,8 @@ export function NewVisitorWizardPage() {
     if (!Number.isInteger(draft.numberOfPersons) || draft.numberOfPersons < 1 || draft.numberOfPersons > 99) {
       return 'Number of persons must be between 1 and 99.'
     }
-    if (!draft.departmentId) return 'Select a department.'
-    if (!draft.hostName.trim()) return 'Enter the person to meet.'
+    if (!draft.hostEmployeeId) return 'Select the employee to meet.'
+    if (!draft.departmentId) return 'Department could not be determined for the selected employee.'
     if (!hasPurposeSelection()) return 'Select at least one purpose.'
     if (draft.othersChecked && !draft.otherPurposeText.trim()) {
       return 'Enter the specific reason when Others is selected.'
@@ -211,13 +335,19 @@ export function NewVisitorWizardPage() {
     setFaceMatch(null)
     setFaceStatus(null)
     setEmailTouched(false)
+    setBookingMatches([])
+    setDismissedBookingIds([])
+    setLinkedBooking(null)
   }
 
   async function startCamera() {
     setCameraError(null)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      })
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -231,19 +361,16 @@ export function NewVisitorWizardPage() {
   async function capturePhoto() {
     const video = videoRef.current
     if (!video || faceBusy) return
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth || 640
-    canvas.height = video.videoHeight || 480
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.drawImage(video, 0, 0)
+    const photoBase64 = captureFaceJpeg(video)
+    if (!photoBase64) {
+      setError('Camera is not ready yet. Wait a moment and try Capture again.')
+      return
+    }
 
     setFaceBusy(true)
     setError(null)
     setFaceStatus(null)
     setFaceMatch(null)
-
-    const photoBase64 = canvas.toDataURL('image/jpeg', 0.85)
 
     if (!online) {
       setError('Connect to the network to validate that exactly one face is in the photo.')
@@ -303,7 +430,8 @@ export function NewVisitorWizardPage() {
     patch({
       visitorName: faceMatch.visitorName,
       companyName: faceMatch.companyName,
-      telephone: sanitizeMobileDigits(faceMatch.phone || ''),
+      gender: faceMatch.gender === 1 || faceMatch.gender === 2 ? faceMatch.gender : '',
+      telephone: sanitizePhoneDigits(faceMatch.phone || ''),
       email: (faceMatch.email || '').trim(),
       recognizedVisitorId: faceMatch.visitorId,
     })
@@ -344,9 +472,10 @@ export function NewVisitorWizardPage() {
     setError(null)
     const body: RegisterVisitorRequest = {
       visitorName: draft.visitorName.trim(),
+      gender: draft.gender as 1 | 2,
       companyName: draft.companyName.trim(),
       telephone: (() => {
-        const mobile = sanitizeMobileDigits(draft.telephone)
+        const mobile = sanitizePhoneDigits(draft.telephone)
         return mobile.length ? mobile : null
       })(),
       email: draft.email.trim(),
@@ -354,9 +483,10 @@ export function NewVisitorWizardPage() {
       visitTime: draft.visitTime ? `${draft.visitTime}:00` : null,
       numberOfPersons: draft.numberOfPersons,
       departmentId: draft.departmentId,
-      hostName: draft.hostName.trim(),
+      hostEmployeeId: draft.hostEmployeeId || null,
+      hostName: draft.hostName.trim() || null,
       purposeIds: syncOthersPurposeIds(draft.purposeIds, draft.othersChecked),
-      locationIds: [],
+      locationIds: draft.locationId ? [draft.locationId] : [],
       plantNumber: null,
       otherLocationText: null,
       purposeNotes: draft.othersChecked ? draft.otherPurposeText.trim() : null,
@@ -364,6 +494,7 @@ export function NewVisitorWizardPage() {
       isWalkIn: draft.isWalkIn,
       expectedVisitId: draft.expectedVisitId,
       recognizedVisitorId: draft.recognizedVisitorId,
+      skipBookingMatch: !draft.expectedVisitId && dismissedBookingIds.length > 0,
       photoBase64: draft.photoBase64 || null,
       idTypeName: draft.idTypeName.trim(),
       idNumber: draft.idNumber.trim(),
@@ -372,22 +503,30 @@ export function NewVisitorWizardPage() {
       const result = await visitorsApi.register(body)
       const awaitingApproval = String(result.statusLabel ?? '').toLowerCase().includes('pending')
 
+      let passCode = result.passCode || null
       if (!awaitingApproval) {
-        await Promise.allSettled([
+        const [generated, checkedIn] = await Promise.allSettled([
           passApi.generate(result.visitId),
           visitorsApi.checkIn(result.visitId),
         ])
+        passCode =
+          (checkedIn.status === 'fulfilled' && checkedIn.value?.passCode) ||
+          (generated.status === 'fulfilled' && generated.value?.passCode) ||
+          passCode
       }
 
       streamRef.current?.getTracks().forEach((t) => t.stop())
       streamRef.current = null
 
-      navigate('/reception', {
+      navigate('/visitors/welcome', {
         replace: true,
         state: {
           visitorName: draft.visitorName.trim(),
+          salutation: draft.gender === 1 ? 'Mr.' : draft.gender === 2 ? 'Ms.' : result.salutation || '',
           pendingApproval: awaitingApproval,
           visitNumber: result.visitNumber,
+          visitId: result.visitId,
+          passCode,
         },
       })
     } catch (e) {
@@ -446,14 +585,8 @@ export function NewVisitorWizardPage() {
           <div className="grid gap-6 lg:grid-cols-2">
             <div>
               <FieldLabel>Face capture</FieldLabel>
-              <div className="overflow-hidden rounded-2xl border border-border bg-gray-900">
-                {draft.photoBase64 ? (
-                  <img src={draft.photoBase64} alt="Captured visitor" className="aspect-video w-full object-cover" />
-                ) : (
-                  <video ref={videoRef} className="aspect-video w-full object-cover" muted playsInline />
-                )}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <FaceCameraPanel videoRef={videoRef} photoUrl={draft.photoBase64 || null} />
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
                 {draft.photoBase64 ? (
                   <Button variant="secondary" onClick={retakePhoto} disabled={faceBusy}>
                     Retake
@@ -504,7 +637,7 @@ export function NewVisitorWizardPage() {
                 </div>
               ) : (
                 <p className="text-sm text-ink-muted">
-                  Position one person in front of the camera. Capture is rejected when no face or multiple faces are detected.
+                  Stand close so only one face fills the oval. Capture is rejected when no face or multiple faces are detected.
                 </p>
               )}
             </div>
@@ -524,7 +657,7 @@ export function NewVisitorWizardPage() {
               <div className="min-w-0 flex-1">
                 {faceStatus ? <Alert tone="success">{faceStatus}</Alert> : null}
                 {draft.recognizedVisitorId && !faceStatus ? (
-                  <Alert tone="success">Returning visitor confirmed — details prefilled below.</Alert>
+                  <Alert tone="success">Returning visitor confirmed — details prefilled below. Fill any missing fields (e.g. Mr./Ms.) before submitting.</Alert>
                 ) : null}
                 {!faceStatus && !draft.recognizedVisitorId ? (
                   <p className="text-sm text-ink-muted">Photo captured. Complete the details below.</p>
@@ -536,18 +669,97 @@ export function NewVisitorWizardPage() {
             </div>
           </Panel>
 
+          {linkedBooking ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-primary/40 bg-mint/30 p-4">
+              <p className="text-sm text-ink">
+                <span className="font-semibold">Linked to booking {linkedBooking.visitNumber}</span> — meeting{' '}
+                {linkedBooking.hostName}
+                {linkedBooking.expectedTime ? ` at ${linkedBooking.expectedTime.slice(0, 5)}` : ''}. Details were
+                filled from the booking; review and register.
+              </p>
+              <Button variant="secondary" onClick={unlinkBooking}>
+                Unlink booking
+              </Button>
+            </div>
+          ) : null}
+
+          {!linkedBooking && visibleBookingMatches.length > 0 ? (
+            <div className="space-y-3 rounded-2xl border-2 border-primary-deep/30 bg-aqua-light/40 p-4">
+              <h3 className="text-sm font-semibold text-primary-deep">
+                {visibleBookingMatches.length === 1
+                  ? 'This visitor has an appointment booked for today'
+                  : 'This visitor has appointments booked for today'}
+              </h3>
+              {visibleBookingMatches.map((m) => (
+                <div
+                  key={m.visitId}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/80 p-3 ring-1 ring-border"
+                >
+                  <div className="min-w-0 text-sm">
+                    <div className="font-semibold text-ink">
+                      {m.visitorName}
+                      {m.companyName ? <span className="font-normal text-ink-muted"> · {m.companyName}</span> : null}
+                    </div>
+                    <div className="text-ink-muted">
+                      Meeting {m.hostName}
+                      {m.departmentName ? ` (${m.departmentName})` : ''}
+                      {m.expectedTime ? ` at ${m.expectedTime.slice(0, 5)}` : ''}
+                      {m.purposes.length ? ` · ${m.purposes.join(', ')}` : ''}
+                    </div>
+                    <div className="text-xs text-ink-muted">Booking {m.visitNumber}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={() => linkBooking(m)}>Use this booking</Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => setDismissedBookingIds((ids) => [...ids, m.visitId])}
+                    >
+                      Not this visitor
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <Panel>
             <SectionTitle>Visitor details</SectionTitle>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <FieldLabel htmlFor="visitorName">Visitor name *</FieldLabel>
-                <TextInput
-                  id="visitorName"
-                  value={draft.visitorName}
-                  onChange={(e) => patch({ visitorName: e.target.value })}
-                  disabled={returningVisitor}
-                  readOnly={returningVisitor}
-                />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      type="button"
+                      variant={draft.gender === 1 ? 'primary' : 'secondary'}
+                      onClick={() => patch({ gender: 1 })}
+                    >
+                      Mr.
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={draft.gender === 2 ? 'primary' : 'secondary'}
+                      onClick={() => patch({ gender: 2 })}
+                    >
+                      Ms.
+                    </Button>
+                  </div>
+                  <TextInput
+                    id="visitorName"
+                    className="min-w-0 flex-1"
+                    value={draft.visitorName}
+                    onChange={(e) => patch({ visitorName: e.target.value })}
+                    disabled={returningVisitor}
+                    readOnly={returningVisitor}
+                  />
+                </div>
+                {draft.gender !== 1 && draft.gender !== 2 ? (
+                  <p className="mt-1 text-xs font-medium text-danger">
+                    {draft.recognizedVisitorId
+                      ? 'Please select Mr. or Ms. (not on file for this visitor yet).'
+                      : 'Please select'}
+                  </p>
+                ) : null}
               </div>
               <div>
                 <FieldLabel htmlFor="companyName">Company *</FieldLabel>
@@ -573,7 +785,7 @@ export function NewVisitorWizardPage() {
                     placeholder="10-digit number"
                     maxLength={10}
                     value={draft.telephone}
-                    onChange={(e) => patch({ telephone: sanitizeMobileDigits(e.target.value) })}
+                    onChange={(e) => patch({ telephone: sanitizePhoneDigits(e.target.value) })}
                     disabled={returningVisitor}
                     readOnly={returningVisitor}
                   />
@@ -640,29 +852,46 @@ export function NewVisitorWizardPage() {
             <SectionTitle>Person to meet</SectionTitle>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <FieldLabel htmlFor="departmentId">Department *</FieldLabel>
-                <TextSelect
-                  id="departmentId"
-                  value={draft.departmentId}
-                  onChange={(e) => patch({ departmentId: e.target.value })}
-                >
-                  <option value="">Select department</option>
-                  {departments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </TextSelect>
-              </div>
-              <div>
-                <FieldLabel htmlFor="hostName">Person to meet *</FieldLabel>
-                <TextInput
-                  id="hostName"
-                  placeholder="Person to meet"
-                  value={draft.hostName}
-                  onChange={(e) => patch({ hostName: e.target.value })}
+                <EmployeeSearchField
+                  employees={employees}
+                  value={draft.hostEmployeeId}
+                  onSelect={(emp) => {
+                    if (!emp) {
+                      patch({ hostEmployeeId: '', hostName: '', departmentId: '' })
+                      return
+                    }
+                    patch({
+                      hostEmployeeId: emp.id,
+                      hostName: emp.fullName,
+                      departmentId: emp.departmentId,
+                    })
+                  }}
                 />
               </div>
+              <div>
+                <FieldLabel htmlFor="departmentId">Department</FieldLabel>
+                <TextInput
+                  id="departmentId"
+                  readOnly
+                  className="bg-gray-50 text-gray-700"
+                  value={departmentName || (draft.hostEmployeeId ? '—' : 'Select employee first')}
+                />
+              </div>
+              {draft.hostEmployeeId ? (
+                <div className="sm:col-span-2 text-sm text-ink-muted">
+                  {(() => {
+                    const emp = employees.find((x) => x.id === draft.hostEmployeeId)
+                    if (!emp) return null
+                    return (
+                      <p>
+                        {emp.email ? `Email: ${emp.email}` : 'No email on file'}
+                        {emp.phone ? ` · Phone: ${emp.phone}` : ''}
+                        {emp.designation ? ` · ${emp.designation}` : ''}
+                      </p>
+                    )
+                  })()}
+                </div>
+              ) : null}
             </div>
           </Panel>
 

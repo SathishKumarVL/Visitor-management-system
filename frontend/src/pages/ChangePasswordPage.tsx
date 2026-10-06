@@ -32,6 +32,10 @@ export function ChangePasswordPage() {
       setError('New password and confirmation do not match.')
       return
     }
+    if (newPassword === currentPassword) {
+      setError('New password cannot be the same as the current password.')
+      return
+    }
 
     setSubmitting(true)
     try {
@@ -76,7 +80,7 @@ export function ChangePasswordPage() {
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               required
-              minLength={8}
+              minLength={10}
             />
           </div>
           <div>
@@ -87,7 +91,7 @@ export function ChangePasswordPage() {
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               required
-              minLength={8}
+              minLength={10}
             />
           </div>
 

@@ -24,6 +24,9 @@ export function PasswordInput({ className, ...props }: Omit<InputHTMLAttributes<
   return (
     <div className="relative max-w-full">
       <input
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
         {...props}
         type={visible ? 'text' : 'password'}
         className={cn(fieldBase, 'py-2 pl-3.5 pr-12', className)}

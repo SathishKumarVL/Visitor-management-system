@@ -1,18 +1,34 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, visitorsApi } from '../lib/api'
 import type { MasterItemDto, VisitorListItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
-import { formatDate, statusBadgeClass } from '../lib/utils'
+import { Pagination } from '../components/ui/Pagination'
+import { SortHeader } from '../components/ui/SortHeader'
+import { nextSort, type SortState } from '../lib/useSort'
+import { formatDate, formatDateTime, statusBadgeClass } from '../lib/utils'
+
+const QUICK_FILTERS = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'thisweek', label: 'This week' },
+  { value: 'thismonth', label: 'This month' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'inside', label: 'Inside' },
+  { value: 'checkedouttoday', label: 'Checked out today' },
+  { value: 'manualcheckouttoday', label: 'Manual check-outs today' },
+  { value: 'manualcheckout', label: 'All manual check-outs' },
+]
 
 export function VisitorsPage() {
   const [params, setParams] = useSearchParams()
   const [items, setItems] = useState<VisitorListItemDto[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(Number(params.get('page') || 1))
-  const [pageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(20)
+  const requestSeq = useRef(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
@@ -25,12 +41,31 @@ export function VisitorsPage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [quickFilter, setQuickFilter] = useState(params.get('quickFilter') || '')
+  const [sort, setSort] = useState<SortState | null>(null)
+  const showCheckOut = quickFilter.includes('checkout')
+
+  // The dashboard links here with ?quickFilter=…; follow later link clicks too, not just the first mount.
+  const urlQuickFilter = params.get('quickFilter') || ''
+  const [lastUrlQuickFilter, setLastUrlQuickFilter] = useState(urlQuickFilter)
+  if (urlQuickFilter !== lastUrlQuickFilter) {
+    setLastUrlQuickFilter(urlQuickFilter)
+    setQuickFilter(urlQuickFilter)
+  }
 
   useEffect(() => {
     void mastersApi.departments().then(setDepartments).catch(() => undefined)
   }, [])
 
+  const filterKey = JSON.stringify([query, company, host, departmentId, status, dateFrom, dateTo, quickFilter, sort])
+  const lastFilterKey = useRef(filterKey)
+  useEffect(() => {
+    if (lastFilterKey.current === filterKey) return
+    lastFilterKey.current = filterKey
+    setPage(1)
+  }, [filterKey])
+
   const load = useCallback(async () => {
+    const seq = ++requestSeq.current
     setLoading(true)
     setError(null)
     try {
@@ -43,23 +78,27 @@ export function VisitorsPage() {
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
         quickFilter: quickFilter || undefined,
+        sortBy: sort?.key,
+        sortDir: sort?.dir,
         page,
         pageSize,
       })
+      if (seq !== requestSeq.current) return
       setItems(result.items)
       setTotal(result.totalCount)
     } catch (e) {
+      if (seq !== requestSeq.current) return
       setError(apiErrorMessage(e))
     } finally {
-      setLoading(false)
+      if (seq === requestSeq.current) setLoading(false)
     }
-  }, [query, company, host, departmentId, status, dateFrom, dateTo, quickFilter, page, pageSize])
+  }, [query, company, host, departmentId, status, dateFrom, dateTo, quickFilter, sort, page, pageSize])
+
+  const onSort = (key: string) => setSort((current) => nextSort(current, key))
 
   useEffect(() => {
     void load()
   }, [load])
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <div>
@@ -131,9 +170,9 @@ export function VisitorsPage() {
               }}
             >
               <option value="">None</option>
-              <option value="today">Today</option>
-              <option value="approved">Approved</option>
-              <option value="inside">Inside</option>
+              {QUICK_FILTERS.map((f) => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
             </TextSelect>
           </div>
         </div>
@@ -157,6 +196,12 @@ export function VisitorsPage() {
               setDateFrom('')
               setDateTo('')
               setQuickFilter('')
+              setSort(null)
+              setParams((p) => {
+                const next = new URLSearchParams(p)
+                next.delete('quickFilter')
+                return next
+              })
               setPage(1)
             }}
           >
@@ -174,11 +219,14 @@ export function VisitorsPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="border-b border-gray-200 bg-gray-50 text-gray-500">
               <tr>
-                <th className="px-4 py-3 font-medium">Visitor</th>
-                <th className="px-4 py-3 font-medium">Company</th>
-                <th className="px-4 py-3 font-medium">Person to meet</th>
-                <th className="px-4 py-3 font-medium">Date</th>
-                <th className="px-4 py-3 font-medium">Status</th>
+                <SortHeader sortKey="visitor" sort={sort} onSort={onSort}>Visitor</SortHeader>
+                <SortHeader sortKey="company" sort={sort} onSort={onSort}>Company</SortHeader>
+                <SortHeader sortKey="host" sort={sort} onSort={onSort}>Person to meet</SortHeader>
+                <SortHeader sortKey="date" sort={sort} onSort={onSort}>Date</SortHeader>
+                {showCheckOut ? (
+                  <SortHeader sortKey="checkout" sort={sort} onSort={onSort}>Checked out</SortHeader>
+                ) : null}
+                <SortHeader sortKey="status" sort={sort} onSort={onSort}>Status</SortHeader>
                 <th className="px-4 py-3 font-medium" />
               </tr>
             </thead>
@@ -195,8 +243,21 @@ export function VisitorsPage() {
                     <div className="text-xs text-gray-500">{v.departmentName}</div>
                   </td>
                   <td className="px-4 py-3">{formatDate(v.visitDate)}</td>
+                  {showCheckOut ? (
+                    <td className="px-4 py-3">{v.checkOutAt ? formatDateTime(v.checkOutAt) : '—'}</td>
+                  ) : null}
                   <td className="px-4 py-3">
                     <Badge className={statusBadgeClass(v.statusLabel)}>{v.statusLabel}</Badge>
+                    {v.isManualCheckOut ? (
+                      <Badge className="ml-1 bg-orange-100 text-orange-900 ring-1 ring-orange-200">Manual</Badge>
+                    ) : null}
+                    {v.statusLabel === 'CheckedOut' && !v.hasMeetingMinutes ? (
+                      v.momNotRequired ? (
+                        <Badge className="ml-1 bg-slate-100 text-slate-700 ring-1 ring-slate-200">MoM not required</Badge>
+                      ) : (
+                        <Badge className="ml-1 bg-amber-100 text-amber-900 ring-1 ring-amber-200">MoM pending</Badge>
+                      )
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <Link to={`/visitors/${v.visitId}`} className="font-medium text-steel hover:underline">
@@ -207,19 +268,16 @@ export function VisitorsPage() {
               ))}
             </tbody>
           </table>
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
-            <span className="text-sm text-gray-500">
-              Page {page} of {totalPages}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                Previous
-              </Button>
-              <Button variant="secondary" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size)
+              setPage(1)
+            }}
+          />
         </Panel>
       ) : null}
     </div>

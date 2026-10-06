@@ -73,6 +73,7 @@ public class FaceRevisitTests : IClassFixture<TestApiFactory>
         var response = await client.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = name,
+            gender = 1,
             companyName = "Face Revisit Co",
             telephone = "9000000002",
             email = $"{Guid.NewGuid():N}@example.test",

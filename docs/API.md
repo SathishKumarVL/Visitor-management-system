@@ -10,13 +10,26 @@ All responses (JSON endpoints):
 
 Authorize with: `Authorization: Bearer <token>`
 
+Other applications (HR/ERP employee feeds, report pulls) use the API-key endpoints under
+`/api/integration` instead — see [INTEGRATION_API.md](INTEGRATION_API.md).
+
 ## Auth
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/api/auth/login` | Anonymous | Login |
+| GET | `/api/auth/face-login/status` | Anonymous | `{ available }`: true when face recognition works and at least one login has a face |
+| POST | `/api/auth/face-login` | Anonymous (login rate limit) | Body `{ photoBase64, rememberMe }`. Signs in as the login whose registered face matches; same response as login plus `facePersonName` |
 | GET | `/api/auth/me` | JWT | Current user |
 | POST | `/api/auth/logout` | JWT | Client-side logout ack |
+
+Face sign-in is optional per login. An admin registers one or more faces for a login (for example
+each guard sharing the Security login), each under the person's name. Sign-in compares the capture
+with every registered face and needs a similarity of at least `FaceRecognition:LoginMatchThreshold`
+(default 0.5, never below `MatchThreshold`); it is refused when two different logins score within
+`FaceRecognition:LoginAmbiguityMargin` (default 0.05). Disabled logins, locked logins and logins that
+still must change their password cannot sign in by face. The same face cannot be registered for two
+logins. There is no liveness check, so a clear photo of a registered person could also match.
 
 ## Visitors
 
@@ -28,6 +41,8 @@ Authorize with: `Authorization: Bearer <token>`
 | GET | `/api/visitors/{id}` | Authenticated | Details |
 | GET | `/api/visitors/inside` | Authenticated | Currently inside |
 | GET | `/api/visitors/expected` | Authenticated | Expected list |
+| GET | `/api/visitors/expected/match?phone=&visitorId=` | Reception/Admin | Today's bookings for a walk-up visitor |
+| GET | `/api/visitors/lookup?phone=` | Reception/Host/Admin | Existing visitor by mobile, with open bookings |
 | POST | `/api/visitors/{id}/check-in` | Reception/Security/Admin | Check-in + pass |
 | POST | `/api/visitors/{id}/check-out` | Reception/Security/Admin | Check-out |
 
@@ -62,6 +77,7 @@ Visitor passes display a Visit Number (e.g. `VMS-2026-000184`). QR codes are not
 - `GET/POST/PUT /api/masters/departments|hosts|purposes|locations|id-types`
 - `POST /api/masters/{type}/{id}/deactivate`
 - `GET/POST/PUT /api/users`
+- `GET /api/users/{id}/faces` · `POST /api/users/{id}/faces` (`{ personName, photoBase64 }`) · `DELETE /api/users/{id}/faces/{faceId}`: face sign-in faces (Admin/SuperAdmin; only a SuperAdmin can change a SuperAdmin's faces)
 - `GET /api/settings` (auth) · `GET /api/settings/branding` (public branding only)
 - `GET /api/dashboard` (requires `visitor-management`)
 - `GET /api/reports/visitors?format=json|excel|pdf|csv` (requires `visitor-management`)

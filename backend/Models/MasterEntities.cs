@@ -35,6 +35,38 @@ public class ApplicationUser : IdentityUser
     public ICollection<Employee> EmployeeProfiles { get; set; } = new List<Employee>();
 }
 
+/// <summary>
+/// A face that may sign in as a user. Several people (e.g. guards on different shifts) can share one
+/// login, so each face carries the name of the person it belongs to.
+/// </summary>
+public class UserFaceLogin
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    [Required, MaxLength(450)]
+    public string UserId { get; set; } = string.Empty;
+    public ApplicationUser? User { get; set; }
+
+    [Required, MaxLength(100)]
+    public string PersonName { get; set; } = string.Empty;
+
+    /// <summary>Little-endian float32 vector, same format as visitor face templates.</summary>
+    [Required, MaxLength(4096)]
+    public byte[] Descriptor { get; set; } = Array.Empty<byte>();
+
+    public int Dimensions { get; set; }
+
+    [Required, MaxLength(50)]
+    public string Model { get; set; } = string.Empty;
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string? CreatedBy { get; set; }
+    public DateTime? LastUsedAt { get; set; }
+}
+
 public class Department
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -50,6 +82,10 @@ public class Department
 
     [MaxLength(50)]
     public string? Intercom { get; set; }
+
+    /// <summary>When set, department is only offered for this location. Null = all locations.</summary>
+    public Guid? LocationId { get; set; }
+    public Location? Location { get; set; }
 
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
@@ -73,6 +109,9 @@ public class Employee
     [Required, MaxLength(150)]
     public string FullName { get; set; } = string.Empty;
 
+    [MaxLength(50)]
+    public string? Code { get; set; }
+
     [MaxLength(100)]
     public string? Email { get; set; }
 
@@ -87,6 +126,9 @@ public class Employee
 
     public Guid DepartmentId { get; set; }
     public Department Department { get; set; } = null!;
+
+    public Guid? LocationId { get; set; }
+    public Location? Location { get; set; }
 
     public string? UserId { get; set; }
     public ApplicationUser? User { get; set; }
@@ -111,6 +153,10 @@ public class VisitPurpose
 
     [MaxLength(50)]
     public string? Code { get; set; }
+
+    /// <summary>When set, purpose is only offered for this location. Null = all locations.</summary>
+    public Guid? LocationId { get; set; }
+    public Location? Location { get; set; }
 
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }

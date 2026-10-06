@@ -2,7 +2,11 @@
 **/bin/
 **/obj/
 **/publish/
+**/publish-*/
+deploy/
 **/logs/
+*.tsbuildinfo
+image-deps.json
 *.user
 *.suo
 appsettings.*.local.json
@@ -19,6 +23,7 @@ frontend/dist/
 *.pfx
 secrets.json
 **/secrets.json
+**/App_Data/keys/
 appsettings.*.local.json
 
 ## Runtime / generated

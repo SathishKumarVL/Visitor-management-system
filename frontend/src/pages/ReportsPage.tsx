@@ -4,8 +4,11 @@ import type { MasterItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldLabel, TextInput, TextSelect } from '../components/ui/Field'
+import { Pagination } from '../components/ui/Pagination'
 import { downloadBlob, formatDate, statusBadgeClass, todayIsoDate } from '../lib/utils'
 import { LoadingMask } from '../components/LoadingMask'
+import { SortHeader } from '../components/ui/SortHeader'
+import { nextSort, type SortState } from '../lib/useSort'
 
 /** Matches the JSON shape returned by GET /api/reports/visitors. */
 interface ReportRow {
@@ -16,11 +19,17 @@ interface ReportRow {
   department: string
   visitDate: string
   status: string
+  isManualCheckOut?: boolean
   purposes: string
   locations: string
   feedbackAvg?: string
   feedbackRatings?: string
   feedbackComments?: string
+  phone?: string
+  checkInAt?: string
+  checkOutAt?: string
+  duration?: string
+  defaulterReason?: string
 }
 
 interface ReportResult {
@@ -28,7 +37,16 @@ interface ReportResult {
   generatedAt: string
   generatedBy: string
   total: number
+  manualCheckOutCount?: number
+  defaulterCount?: number
+  allowedVisitMinutes?: number
   rows: ReportRow[]
+}
+
+function formatMinutes(minutes: number) {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return h ? `${h}h${m ? ` ${m}m` : ''}` : `${m}m`
 }
 
 export function ReportsPage() {
@@ -42,10 +60,30 @@ export function ReportsPage() {
   const [reportType, setReportType] = useState('daily')
   const [rows, setRows] = useState<ReportRow[]>([])
   const [total, setTotal] = useState(0)
+  const [manualCheckOutCount, setManualCheckOutCount] = useState(0)
+  const [defaulterCount, setDefaulterCount] = useState(0)
+  const [allowedMinutes, setAllowedMinutes] = useState<number | null>(null)
+  const [resultType, setResultType] = useState('daily')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState<string | null>(null)
   const [hasRun, setHasRun] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [runParams, setRunParams] = useState<ReturnType<typeof params> | null>(null)
+  const [sort, setSort] = useState<SortState | null>(null)
+
+  function onSort(key: string) {
+    const next = nextSort(sort, key)
+    setSort(next)
+    if (runParams) {
+      const base = { ...runParams, sortBy: next.key, sortDir: next.dir }
+      setRunParams(base)
+      void fetchPage(base, 1, pageSize)
+    }
+  }
+
+  const sortProps = { sort, onSort }
 
   useEffect(() => {
     void mastersApi.departments().then(setDepartments)
@@ -72,24 +110,44 @@ export function ReportsPage() {
       departmentId: departmentId || undefined,
       locationId: locationId || undefined,
       company: company || undefined,
+      sortBy: sort?.key,
+      sortDir: sort?.dir,
     }
   }
 
-  async function runReport() {
+  async function fetchPage(base: ReturnType<typeof params>, nextPage: number, size: number) {
     setLoading(true)
     setError(null)
     try {
-      const data = (await reportsApi.visitorsJson(params())) as ReportResult
+      const data = (await reportsApi.visitorsJson({ ...base, page: nextPage, pageSize: size })) as ReportResult
       setRows(Array.isArray(data?.rows) ? data.rows : [])
       setTotal(data?.total ?? 0)
+      setManualCheckOutCount(data?.manualCheckOutCount ?? 0)
+      setDefaulterCount(data?.defaulterCount ?? 0)
+      setAllowedMinutes(data?.allowedVisitMinutes ?? null)
+      setResultType(base.reportType)
+      setPage(nextPage)
       setHasRun(true)
     } catch (e) {
       setError(apiErrorMessage(e))
       setRows([])
       setTotal(0)
+      setManualCheckOutCount(0)
+      setDefaulterCount(0)
     } finally {
       setLoading(false)
     }
+  }
+
+  function runReport() {
+    const base = params()
+    setRunParams(base)
+    void fetchPage(base, 1, pageSize)
+  }
+
+  function changePageSize(size: number) {
+    setPageSize(size)
+    if (runParams) void fetchPage(runParams, 1, size)
   }
 
   async function exportFormat(format: 'excel' | 'pdf' | 'csv') {
@@ -98,7 +156,7 @@ export function ReportsPage() {
     try {
       const blob = await reportsApi.exportFile(format, params())
       const ext = format === 'excel' ? 'xlsx' : format
-      downloadBlob(blob, `tiaano-visitors.${ext}`)
+      downloadBlob(blob, `tiaano-${reportType === 'defaulters' ? 'checkout-defaulters' : 'visitors'}.${ext}`)
     } catch (e) {
       setError(apiErrorMessage(e, 'Export failed'))
     } finally {
@@ -120,6 +178,8 @@ export function ReportsPage() {
               <option value="daily">Daily</option>
               <option value="range">Date range</option>
               <option value="department">By department</option>
+              <option value="manualcheckout">Manual check-outs</option>
+              <option value="defaulters">Check-out defaulters</option>
             </TextSelect>
           </div>
           <div>
@@ -164,7 +224,7 @@ export function ReportsPage() {
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button onClick={() => void runReport()}>Run report</Button>
+          <Button onClick={runReport}>Run report</Button>
           <Button variant="secondary" disabled={!!exporting} onClick={() => void exportFormat('excel')}>
             {exporting === 'excel' ? 'Exporting…' : 'Export Excel'}
           </Button>
@@ -179,28 +239,91 @@ export function ReportsPage() {
 
       {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
       {!loading && hasRun && rows.length === 0 ? (
-        <EmptyState title="No visitors matched this report" description="Try a wider date range or clear the filters." />
+        <EmptyState
+          title={resultType === 'defaulters' ? 'No check-out defaulters in this period' : 'No visitors matched this report'}
+          description="Try a wider date range or clear the filters."
+        />
       ) : null}
       {!loading && !hasRun ? <EmptyState title="Run a report to see results" /> : null}
 
-      {!loading && rows.length > 0 ? (
+      {!loading && rows.length > 0 && resultType === 'defaulters' ? (
         <Panel className="overflow-x-auto p-0">
           <div className="border-b border-gray-100 px-4 py-3 text-sm text-ink-muted">
-            {total} visitor{total === 1 ? '' : 's'}
+            <span className="font-medium text-red-600">
+              {total} check-out defaulter{total === 1 ? '' : 's'}
+            </span>
+            {allowedMinutes ? <> · Allowed visit duration {formatMinutes(allowedMinutes)} (Settings → Max visit duration)</> : null}
           </div>
           <table className="min-w-full text-left text-sm">
             <thead className="bg-gray-50 text-gray-500">
               <tr>
-                <th className="px-4 py-3">Visit #</th>
-                <th className="px-4 py-3">Visitor</th>
-                <th className="px-4 py-3">Company</th>
-                <th className="px-4 py-3">Person to meet</th>
-                <th className="px-4 py-3">Department</th>
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Status</th>
+                <SortHeader sortKey="visitnumber" {...sortProps}>Visit #</SortHeader>
+                <SortHeader sortKey="visitor" {...sortProps}>Visitor</SortHeader>
+                <SortHeader sortKey="phone" {...sortProps}>Phone</SortHeader>
+                <SortHeader sortKey="host" {...sortProps}>Person to meet</SortHeader>
+                <SortHeader sortKey="department" {...sortProps}>Department</SortHeader>
+                <SortHeader sortKey="location" {...sortProps}>Location</SortHeader>
+                <SortHeader sortKey="checkin" {...sortProps}>Check-in</SortHeader>
+                <SortHeader sortKey="checkout" {...sortProps}>Check-out</SortHeader>
+                <th className="px-4 py-3">Duration</th>
+                <SortHeader sortKey="issue" {...sortProps}>Check-out issue</SortHeader>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((v) => (
+                <tr key={v.visitNumber} className="border-t border-gray-100">
+                  <td className="px-4 py-3 font-mono text-xs">{v.visitNumber}</td>
+                  <td className="px-4 py-3 font-medium">
+                    {v.visitorName}
+                    {v.company ? <div className="text-xs text-ink-muted">{v.company}</div> : null}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">{v.phone || '—'}</td>
+                  <td className="px-4 py-3">{v.host}</td>
+                  <td className="px-4 py-3">{v.department}</td>
+                  <td className="px-4 py-3">{v.locations || '—'}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{v.checkInAt || '—'}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {v.checkOutAt || <Badge className="bg-red-100 text-red-700">Still inside</Badge>}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">{v.duration || '—'}</td>
+                  <td className="px-4 py-3 text-red-700">{v.defaulterReason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={(p) => runParams && void fetchPage(runParams, p, pageSize)}
+            onPageSizeChange={changePageSize}
+          />
+        </Panel>
+      ) : null}
+
+      {!loading && rows.length > 0 && resultType !== 'defaulters' ? (
+        <Panel className="overflow-x-auto p-0">
+          <div className="border-b border-gray-100 px-4 py-3 text-sm text-ink-muted">
+            {total} visitor{total === 1 ? '' : 's'}
+            {' · '}
+            <span className="font-medium text-ink">{manualCheckOutCount} manual check-out{manualCheckOutCount === 1 ? '' : 's'}</span>
+            {' · '}
+            <span className="font-medium text-red-600">{defaulterCount} check-out defaulter{defaulterCount === 1 ? '' : 's'}</span>
+          </div>
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-gray-50 text-gray-500">
+              <tr>
+                <SortHeader sortKey="visitnumber" {...sortProps}>Visit #</SortHeader>
+                <SortHeader sortKey="visitor" {...sortProps}>Visitor</SortHeader>
+                <SortHeader sortKey="company" {...sortProps}>Company</SortHeader>
+                <SortHeader sortKey="host" {...sortProps}>Person to meet</SortHeader>
+                <SortHeader sortKey="department" {...sortProps}>Department</SortHeader>
+                <SortHeader sortKey="date" {...sortProps}>Date</SortHeader>
+                <SortHeader sortKey="status" {...sortProps}>Status</SortHeader>
+                <SortHeader sortKey="manual" {...sortProps}>Manual check-out</SortHeader>
                 <th className="px-4 py-3">Purpose</th>
-                <th className="px-4 py-3">Location</th>
-                <th className="px-4 py-3">Feedback</th>
+                <SortHeader sortKey="location" {...sortProps}>Location</SortHeader>
+                <SortHeader sortKey="feedback" {...sortProps}>Feedback</SortHeader>
                 <th className="px-4 py-3">Ratings</th>
               </tr>
             </thead>
@@ -216,6 +339,7 @@ export function ReportsPage() {
                   <td className="px-4 py-3">
                     <Badge className={statusBadgeClass(v.status)}>{v.status}</Badge>
                   </td>
+                  <td className="px-4 py-3">{v.isManualCheckOut ? 'Yes' : 'No'}</td>
                   <td className="px-4 py-3">{v.purposes || '—'}</td>
                   <td className="px-4 py-3">{v.locations || '—'}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-amber-600 font-medium">
@@ -231,6 +355,13 @@ export function ReportsPage() {
               ))}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={(p) => runParams && void fetchPage(runParams, p, pageSize)}
+            onPageSizeChange={changePageSize}
+          />
         </Panel>
       ) : null}
     </div>

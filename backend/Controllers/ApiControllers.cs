@@ -19,23 +19,91 @@ namespace Tiaano.Vms.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
+    private readonly IUserFaceLoginService _faceLogins;
 
-    public AuthController(IAuthService auth) => _auth = auth;
+    public AuthController(IAuthService auth, IUserFaceLoginService faceLogins)
+    {
+        _auth = auth;
+        _faceLogins = faceLogins;
+    }
+
+    [HttpGet("face-login/status")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicy.RefreshPolicyName)]
+    public async Task<ActionResult<ApiResponse<FaceLoginStatusDto>>> FaceLoginStatus() =>
+        Ok(new ApiResponse<FaceLoginStatusDto>(true, new FaceLoginStatusDto { Available = await _faceLogins.IsAvailableAsync() }));
+
+    [HttpPost("face-login")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicy.LoginPolicyName)]
+    public async Task<ActionResult<ApiResponse<LoginResponse>>> FaceLogin([FromBody] FaceLoginRequest request)
+    {
+        try
+        {
+            var result = await _auth.FaceLoginAsync(request, HttpContext.Connection.RemoteIpAddress?.ToString());
+            if (result is null)
+                return Unauthorized(new ApiResponse<LoginResponse>(false, null,
+                    "Face not recognised. Try again facing the camera, or sign in with your username and password."));
+            return Ok(new ApiResponse<LoginResponse>(true, result));
+        }
+        catch (AccountLockedException ex)
+        {
+            return Unauthorized(new ApiResponse<LoginResponse>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<LoginResponse>(false, null, ex.Message));
+        }
+    }
 
     [HttpPost("login")]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
     public async Task<ActionResult<ApiResponse<LoginResponse>>> Login([FromBody] LoginRequest request)
     {
-        var result = await _auth.LoginAsync(request, HttpContext.Connection.RemoteIpAddress?.ToString());
-        if (result is null)
-            return Unauthorized(new ApiResponse<LoginResponse>(false, null, "Invalid username or password."));
-        return Ok(new ApiResponse<LoginResponse>(true, result));
+        try
+        {
+            var result = await _auth.LoginAsync(request, HttpContext.Connection.RemoteIpAddress?.ToString());
+            if (result is null)
+                return Unauthorized(new ApiResponse<LoginResponse>(false, null, "Invalid username or password."));
+            return Ok(new ApiResponse<LoginResponse>(true, result));
+        }
+        catch (AccountLockedException ex)
+        {
+            return Unauthorized(new ApiResponse<LoginResponse>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPost("forgot-password")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicy.LoginPolicyName)]
+    public async Task<ActionResult<ApiResponse<object>>> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    {
+        await _auth.RequestPasswordResetAsync(request.UsernameOrEmail, Request.Headers.Origin.ToString());
+        // Same answer whether or not the account exists, so this cannot be used to discover usernames.
+        return Ok(new ApiResponse<object>(true, new { sent = true },
+            "If an account with that username or email exists, a password reset link has been sent to its email address."));
+    }
+
+    [HttpPost("reset-password")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitPolicy.LoginPolicyName)]
+    public async Task<ActionResult<ApiResponse<object>>> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        try
+        {
+            await _auth.ResetPasswordAsync(request);
+            return Ok(new ApiResponse<object>(true, new { reset = true }, "Password changed. You can now sign in with the new password."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
     }
 
     [HttpPost("refresh")]
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(RateLimitPolicy.RefreshPolicyName)]
     public async Task<ActionResult<ApiResponse<LoginResponse>>> Refresh([FromBody] RefreshTokenRequest request)
     {
         var result = await _auth.RefreshAsync(request.RefreshToken, HttpContext.Connection.RemoteIpAddress?.ToString());
@@ -222,13 +290,33 @@ public class VisitorsController : ControllerBase
     public async Task<ActionResult<ApiResponse<IReadOnlyList<VisitorListItemDto>>>> Inside()
     {
         var settings = await _settings.GetAsync();
-        return Ok(new ApiResponse<IReadOnlyList<VisitorListItemDto>>(true, await _visitors.GetInsideAsync(settings.MaxVisitDurationWarningMinutes)));
+        return Ok(new ApiResponse<IReadOnlyList<VisitorListItemDto>>(true, await _visitors.GetInsideAsync(settings.MaxVisitDurationWarningMinutes, User)));
     }
 
     [HttpGet("expected")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<VisitorListItemDto>>>> ExpectedList([FromQuery] DateOnly? date)
     {
-        return Ok(new ApiResponse<IReadOnlyList<VisitorListItemDto>>(true, await _visitors.GetExpectedAsync(date)));
+        return Ok(new ApiResponse<IReadOnlyList<VisitorListItemDto>>(true, await _visitors.GetExpectedAsync(date, User)));
+    }
+
+    /// <summary>Existing visitor for a mobile number (to prefill a booking) and their open bookings.</summary>
+    [HttpGet("lookup")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Host}")]
+    public async Task<ActionResult<ApiResponse<VisitorPhoneLookupDto>>> LookupByPhone([FromQuery] string? phone)
+    {
+        var match = await _visitors.LookupByPhoneAsync(phone);
+        return Ok(new ApiResponse<VisitorPhoneLookupDto>(true, match,
+            match is null ? "No visitor found for this mobile number." : "Existing visitor found."));
+    }
+
+    /// <summary>Today's bookings for a walk-up visitor, by mobile number and/or a face-matched visitor id.</summary>
+    [HttpGet("expected/match")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<BookingMatchDto>>>> MatchBookings(
+        [FromQuery] string? phone, [FromQuery] Guid? visitorId)
+    {
+        return Ok(new ApiResponse<IReadOnlyList<BookingMatchDto>>(true,
+            await _visitors.FindTodaysBookingsAsync(phone, visitorId)));
     }
 
     [HttpPost("{id:guid}/check-in")]
@@ -266,6 +354,57 @@ public class VisitorsController : ControllerBase
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<VisitorListItemDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPut("{id:guid}/meeting-minutes")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Host}")]
+    public async Task<ActionResult<ApiResponse<VisitorDetailDto>>> SaveMeetingMinutes(
+        Guid id,
+        [FromBody] SaveMeetingMinutesRequest request)
+    {
+        try
+        {
+            var result = await _visitors.SaveMeetingMinutesAsync(id, request, User);
+            return Ok(new ApiResponse<VisitorDetailDto>(true, result, "Meeting minutes saved."));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
+        }
+        catch (ConcurrencyConflictException ex)
+        {
+            return Conflict(new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPut("{id:guid}/mom-not-required")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Security},{AppRoles.Host}")]
+    public async Task<ActionResult<ApiResponse<VisitorDetailDto>>> SetMomNotRequired(
+        Guid id,
+        [FromBody] SetMomNotRequiredRequest request)
+    {
+        try
+        {
+            var result = await _visitors.SetMomNotRequiredAsync(id, request, User);
+            var message = request.NotRequired ? "Minutes of meeting marked as not required." : "Minutes of meeting are required again.";
+            return Ok(new ApiResponse<VisitorDetailDto>(true, result, message));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
+        }
+        catch (ConcurrencyConflictException ex)
+        {
+            return Conflict(new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
         }
     }
 
@@ -429,16 +568,63 @@ public class MastersController : ControllerBase
 {
     private readonly IMasterDataService _masters;
     private readonly IFeedbackService _feedback;
+    private readonly IMasterImportService _import;
 
-    public MastersController(IMasterDataService masters, IFeedbackService feedback)
+    public MastersController(IMasterDataService masters, IFeedbackService feedback, IMasterImportService import)
     {
         _masters = masters;
         _feedback = feedback;
+        _import = import;
+    }
+
+    /// <summary>Employees are SuperAdmin-only (same as the create/edit endpoints); other masters allow Admin too.</summary>
+    private bool CanImport(string kind) =>
+        kind.Equals("employees", StringComparison.OrdinalIgnoreCase)
+            ? User.IsInRole(AppRoles.SuperAdmin)
+            : User.IsInRole(AppRoles.SuperAdmin) || User.IsInRole(AppRoles.Admin);
+
+    [HttpGet("import/{kind}/template")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<IActionResult> ImportTemplate(string kind)
+    {
+        if (!_import.IsSupported(kind))
+            return NotFound(new ApiResponse<object>(false, null, $"Import is not supported for '{kind}'."));
+        if (!CanImport(kind)) return Forbid();
+        var bytes = await _import.BuildTemplateAsync(kind);
+        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"{kind}-template.xlsx");
+    }
+
+    [HttpPost("import/{kind}")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<ActionResult<ApiResponse<MasterImportResultDto>>> Import(string kind, IFormFile? file)
+    {
+        if (!_import.IsSupported(kind))
+            return NotFound(new ApiResponse<MasterImportResultDto>(false, null, $"Import is not supported for '{kind}'."));
+        if (!CanImport(kind)) return Forbid();
+        if (file is null || file.Length == 0)
+            return BadRequest(new ApiResponse<MasterImportResultDto>(false, null, "Choose an Excel file to upload."));
+        if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new ApiResponse<MasterImportResultDto>(false, null, "Only .xlsx files are supported."));
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var result = await _import.ImportAsync(kind, stream, User.Identity?.Name);
+            var message = $"{result.Created} added, {result.Updated} updated, {result.Failed} failed.";
+            return Ok(new ApiResponse<MasterImportResultDto>(true, result, message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<MasterImportResultDto>(false, null, ex.Message));
+        }
     }
 
     [HttpGet("departments")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Departments([FromQuery] bool activeOnly = true) =>
-        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetDepartmentsAsync(activeOnly)));
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Departments(
+        [FromQuery] bool activeOnly = true,
+        [FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetDepartmentsAsync(activeOnly, locationId)));
 
     [HttpPost("departments")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
@@ -451,21 +637,24 @@ public class MastersController : ControllerBase
         Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertDepartmentAsync(id, request, User.Identity?.Name)));
 
     [HttpGet("hosts")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<EmployeeDto>>>> Hosts([FromQuery] Guid? departmentId, [FromQuery] bool activeOnly = true) =>
-        Ok(new ApiResponse<IReadOnlyList<EmployeeDto>>(true, await _masters.GetHostsAsync(departmentId, activeOnly)));
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<EmployeeDto>>>> Hosts(
+        [FromQuery] Guid? departmentId,
+        [FromQuery] Guid? locationId,
+        [FromQuery] bool activeOnly = true) =>
+        Ok(new ApiResponse<IReadOnlyList<EmployeeDto>>(true, await _masters.GetHostsAsync(departmentId, locationId, activeOnly)));
 
     [HttpPost("hosts")]
-    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
     public async Task<ActionResult<ApiResponse<EmployeeDto>>> CreateHost([FromBody] CreateEmployeeRequest request) =>
         Ok(new ApiResponse<EmployeeDto>(true, await _masters.UpsertEmployeeAsync(null, request, User.Identity?.Name)));
 
     [HttpPut("hosts/{id:guid}")]
-    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
     public async Task<ActionResult<ApiResponse<EmployeeDto>>> UpdateHost(Guid id, [FromBody] CreateEmployeeRequest request) =>
         Ok(new ApiResponse<EmployeeDto>(true, await _masters.UpsertEmployeeAsync(id, request, User.Identity?.Name)));
 
     [HttpPost("hosts/{id:guid}/deactivate")]
-    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
     public async Task<ActionResult<ApiResponse<object>>> DeactivateHost(Guid id)
     {
         await _masters.DeactivateEmployeeAsync(id, User.Identity?.Name);
@@ -473,8 +662,10 @@ public class MastersController : ControllerBase
     }
 
     [HttpGet("purposes")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Purposes([FromQuery] bool activeOnly = true) =>
-        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetPurposesAsync(activeOnly)));
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Purposes(
+        [FromQuery] bool activeOnly = true,
+        [FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetPurposesAsync(activeOnly, locationId)));
 
     [HttpPost("purposes")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
@@ -485,6 +676,17 @@ public class MastersController : ControllerBase
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
     public async Task<ActionResult<ApiResponse<MasterItemDto>>> UpdatePurpose(Guid id, [FromBody] MasterUpsertRequest request) =>
         Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertPurposeAsync(id, request, User.Identity?.Name)));
+
+    [HttpGet("mail-content")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<MailContentTemplateDto>>>> MailContents(
+        [FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<IReadOnlyList<MailContentTemplateDto>>(true, await _masters.GetMailContentsAsync(locationId)));
+
+    [HttpPut("mail-content")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<MailContentTemplateDto>>> UpsertMailContent([FromBody] MailContentUpsertRequest request) =>
+        Ok(new ApiResponse<MailContentTemplateDto>(true, await _masters.UpsertMailContentAsync(request, User.Identity?.Name)));
 
     [HttpGet("locations")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Locations([FromQuery] bool activeOnly = true) =>
@@ -510,13 +712,21 @@ public class MastersController : ControllerBase
         Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertIdTypeAsync(null, request, User.Identity?.Name)));
 
     [HttpGet("feedback-questions")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<FeedbackQuestionDto>>>> FeedbackQuestions([FromQuery] bool activeOnly = true) =>
-        Ok(new ApiResponse<IReadOnlyList<FeedbackQuestionDto>>(true, await _feedback.GetQuestionsAsync(activeOnly)));
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<FeedbackQuestionDto>>>> FeedbackQuestions(
+        [FromQuery] bool activeOnly = true,
+        [FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<IReadOnlyList<FeedbackQuestionDto>>(true, await _feedback.GetQuestionsAsync(activeOnly, locationId)));
 
     [HttpGet("feedback-responses")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<VisitFeedbackDto>>>> FeedbackResponses([FromQuery] int take = 50) =>
         Ok(new ApiResponse<IReadOnlyList<VisitFeedbackDto>>(true, await _feedback.ListResponsesAsync(take)));
+
+    [HttpGet("feedback-responses/paged")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<PagedResult<VisitFeedbackDto>>>> FeedbackResponsesPaged(
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 10) =>
+        Ok(new ApiResponse<PagedResult<VisitFeedbackDto>>(true, await _feedback.PageResponsesAsync(page, pageSize)));
 
     [HttpPost("feedback-questions")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
@@ -576,7 +786,62 @@ public class MastersController : ControllerBase
 public class UsersController : ControllerBase
 {
     private readonly IUserAdminService _users;
-    public UsersController(IUserAdminService users) => _users = users;
+    private readonly IUserFaceLoginService _faceLogins;
+
+    public UsersController(IUserAdminService users, IUserFaceLoginService faceLogins)
+    {
+        _users = users;
+        _faceLogins = faceLogins;
+    }
+
+    [HttpGet("{id}/faces")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserFaceLoginDto>>>> GetFaces(string id)
+    {
+        try
+        {
+            return Ok(new ApiResponse<IReadOnlyList<UserFaceLoginDto>>(true, await _faceLogins.ListAsync(id)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(new ApiResponse<IReadOnlyList<UserFaceLoginDto>>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPost("{id}/faces")]
+    public async Task<ActionResult<ApiResponse<UserFaceLoginDto>>> AddFace(string id, [FromBody] AddUserFaceLoginRequest request)
+    {
+        try
+        {
+            var face = await _faceLogins.AddAsync(id, request, User.IsInRole(AppRoles.SuperAdmin), User.Identity?.Name);
+            return Ok(new ApiResponse<UserFaceLoginDto>(true, face, $"Face registered for {face.PersonName}."));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<UserFaceLoginDto>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<UserFaceLoginDto>(false, null, ex.Message));
+        }
+    }
+
+    [HttpDelete("{id}/faces/{faceId:guid}")]
+    public async Task<ActionResult<ApiResponse<object>>> RemoveFace(string id, Guid faceId)
+    {
+        try
+        {
+            await _faceLogins.RemoveAsync(id, faceId, User.IsInRole(AppRoles.SuperAdmin));
+            return Ok(new ApiResponse<object>(true, new { removed = true }, "Face removed."));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<object>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
+    }
 
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<UserDto>>>> Get() =>
@@ -611,6 +876,46 @@ public class UsersController : ControllerBase
             return BadRequest(new ApiResponse<UserDto>(false, null, ex.Message));
         }
     }
+
+    [HttpPost("{id}/reset-password")]
+    public async Task<ActionResult<ApiResponse<object>>> ResetPassword(string id, [FromBody] AdminResetPasswordRequest request)
+    {
+        try
+        {
+            await _users.ResetPasswordAsync(id, request, User.IsInRole(AppRoles.SuperAdmin), User.Identity?.Name);
+            return Ok(new ApiResponse<object>(true, new { reset = true },
+                request.MustChangePassword
+                    ? "Password reset and account unlocked. The user must choose a new password at next sign-in."
+                    : "Password reset and account unlocked."));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<object>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPost("from-employee/{employeeId:guid}")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
+    public async Task<ActionResult<ApiResponse<EmployeeDto>>> CreateForEmployee(Guid employeeId, [FromBody] CreateEmployeeLoginRequest request)
+    {
+        try
+        {
+            var employee = await _users.CreateLoginForEmployeeAsync(employeeId, request, User.Identity?.Name);
+            return Ok(new ApiResponse<EmployeeDto>(true, employee, $"Login '{employee.UserName}' created."));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new ApiResponse<EmployeeDto>(false, null, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<EmployeeDto>(false, null, ex.Message));
+        }
+    }
 }
 
 [ApiController]
@@ -619,11 +924,28 @@ public class SettingsController : ControllerBase
 {
     private readonly ISettingsService _settings;
     private readonly INotificationService _notifications;
+    private readonly ITenantContext _tenant;
 
-    public SettingsController(ISettingsService settings, INotificationService notifications)
+    public SettingsController(ISettingsService settings, INotificationService notifications, ITenantContext tenant)
     {
         _settings = settings;
         _notifications = notifications;
+        _tenant = tenant;
+    }
+
+    /// <summary>Branding for the signed-in user's location, falling back to tenant defaults.</summary>
+    [HttpGet("branding/current")]
+    [Authorize]
+    public async Task<ActionResult<ApiResponse<PublicBrandingDto>>> GetCurrentBranding()
+    {
+        var s = await _settings.GetAsync(_tenant.LocationId);
+        return Ok(new ApiResponse<PublicBrandingDto>(true, new PublicBrandingDto
+        {
+            CompanyName = s.CompanyName,
+            LogoPath = s.LogoPath,
+            ThemePreset = s.ThemePreset,
+            FontPreset = s.FontPreset
+        }));
     }
 
     /// <summary>Public branding only — no operational/security settings.</summary>
@@ -643,22 +965,26 @@ public class SettingsController : ControllerBase
 
     [HttpGet]
     [Authorize]
-    public async Task<ActionResult<ApiResponse<SettingsDto>>> Get() =>
-        Ok(new ApiResponse<SettingsDto>(true, await _settings.GetAsync()));
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> Get([FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<SettingsDto>(true, await _settings.GetAsync(locationId)));
 
     [HttpPut]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
-    public async Task<ActionResult<ApiResponse<SettingsDto>>> Update([FromBody] SettingsDto dto) =>
-        Ok(new ApiResponse<SettingsDto>(true, await _settings.UpdateAsync(dto, User.Identity?.Name)));
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> Update(
+        [FromBody] SettingsDto dto,
+        [FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<SettingsDto>(true, await _settings.UpdateAsync(dto, User.Identity?.Name, locationId)));
 
     [HttpPost("logo")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
     [RequestSizeLimit(5_000_000)]
-    public async Task<ActionResult<ApiResponse<SettingsDto>>> UploadLogo(IFormFile file)
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> UploadLogo(
+        IFormFile file,
+        [FromQuery] Guid? locationId = null)
     {
         try
         {
-            var result = await _settings.UploadLogoAsync(file, User.Identity?.Name);
+            var result = await _settings.UploadLogoAsync(file, User.Identity?.Name, locationId);
             return Ok(new ApiResponse<SettingsDto>(true, result));
         }
         catch (InvalidOperationException ex)
@@ -671,7 +997,7 @@ public class SettingsController : ControllerBase
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
     public async Task<ActionResult<ApiResponse<object>>> TestEmail([FromBody] TestEmailRequest request)
     {
-        var (ok, message) = await _notifications.SendTestEmailAsync(request.To);
+        var (ok, message) = await _notifications.SendTestEmailAsync(request.To, request.LocationId);
         if (!ok) return BadRequest(new ApiResponse<object>(false, null, message));
         return Ok(new ApiResponse<object>(true, null, message));
     }
@@ -680,6 +1006,7 @@ public class SettingsController : ControllerBase
 public class TestEmailRequest
 {
     public string To { get; set; } = string.Empty;
+    public Guid? LocationId { get; set; }
 }
 
 [ApiController]
@@ -693,8 +1020,9 @@ public class PassNumbersController : ControllerBase
     public PassNumbersController(IPassNumberService passNumbers) => _passNumbers = passNumbers;
 
     [HttpGet("series")]
-    public async Task<ActionResult<ApiResponse<PassNumberSeriesDto?>>> GetSeries() =>
-        Ok(new ApiResponse<PassNumberSeriesDto?>(true, await _passNumbers.GetSeriesAsync()));
+    public async Task<ActionResult<ApiResponse<PassNumberSeriesDto?>>> GetSeries(
+        [FromQuery] Guid? locationId = null) =>
+        Ok(new ApiResponse<PassNumberSeriesDto?>(true, await _passNumbers.GetSeriesAsync(locationId)));
 
     [HttpPut("series")]
     public async Task<ActionResult<ApiResponse<PassNumberSeriesDto>>> UpsertSeries(
@@ -707,24 +1035,6 @@ public class PassNumbersController : ControllerBase
         catch (InvalidOperationException ex)
         {
             return BadRequest(new ApiResponse<PassNumberSeriesDto>(false, null, ex.Message));
-        }
-    }
-
-    [HttpGet("allocations")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<PassNumberAllocationDto>>>> ListAllocations() =>
-        Ok(new ApiResponse<IReadOnlyList<PassNumberAllocationDto>>(true, await _passNumbers.ListAllocationsAsync()));
-
-    [HttpPut("allocations")]
-    public async Task<ActionResult<ApiResponse<PassNumberAllocationDto>>> UpsertAllocation(
-        [FromBody] UpsertPassNumberAllocationRequest request)
-    {
-        try
-        {
-            return Ok(new ApiResponse<PassNumberAllocationDto>(true, await _passNumbers.UpsertAllocationAsync(request)));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new ApiResponse<PassNumberAllocationDto>(false, null, ex.Message));
         }
     }
 }
@@ -798,17 +1108,17 @@ public class ReportsController : ControllerBase
         if (string.Equals(request.Format, "excel", StringComparison.OrdinalIgnoreCase))
         {
             var bytes = await _reports.ExportExcelAsync(request, userName);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"tiaano-visitors-{DateTime.Now:yyyyMMddHHmm}.xlsx");
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"tiaano-visitors-{AppTime.Now:yyyyMMddHHmm}.xlsx");
         }
         if (string.Equals(request.Format, "pdf", StringComparison.OrdinalIgnoreCase))
         {
             var bytes = await _reports.ExportPdfAsync(request, userName);
-            return File(bytes, "application/pdf", $"tiaano-visitors-{DateTime.Now:yyyyMMddHHmm}.pdf");
+            return File(bytes, "application/pdf", $"tiaano-visitors-{AppTime.Now:yyyyMMddHHmm}.pdf");
         }
         if (string.Equals(request.Format, "csv", StringComparison.OrdinalIgnoreCase))
         {
             var bytes = await _reports.ExportCsvAsync(request, userName);
-            return File(bytes, "text/csv", $"tiaano-visitors-{DateTime.Now:yyyyMMddHHmm}.csv");
+            return File(bytes, "text/csv", $"tiaano-visitors-{AppTime.Now:yyyyMMddHHmm}.csv");
         }
         return Ok(new ApiResponse<object>(true, await _reports.GenerateAsync(request, userName)));
     }

@@ -7,6 +7,8 @@ import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { FieldError, FieldLabel, TextInput } from '../components/ui/Field'
 import { SecureImage } from '../components/SecureImage'
+import { Pagination } from '../components/ui/Pagination'
+import { usePagination } from '../lib/usePagination'
 import { formatDateTime, statusBadgeClass } from '../lib/utils'
 
 /**
@@ -58,6 +60,8 @@ export function ApprovalsPage() {
         v.visitNumber.toLowerCase().includes(q),
     )
   }, [items, query])
+
+  const { pageItems, pagination } = usePagination(filtered, 10, query)
 
   function startReject(id: string) {
     setRejectingId(id)
@@ -169,7 +173,7 @@ export function ApprovalsPage() {
       ) : null}
 
       <ul className="space-y-3">
-        {filtered.map((v) => {
+        {pageItems.map((v) => {
           const busy = busyId === v.visitId
           const isRejecting = rejectingId === v.visitId
           return (
@@ -259,6 +263,11 @@ export function ApprovalsPage() {
           )
         })}
       </ul>
+      {!loading && filtered.length > 0 ? (
+        <Panel className="mt-3 p-0">
+          <Pagination {...pagination} bordered={false} />
+        </Panel>
+      ) : null}
     </div>
   )
 }

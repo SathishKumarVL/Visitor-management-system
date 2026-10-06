@@ -108,10 +108,14 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
                 && v.VisitLocations.Any(vl => vl.LocationId == locationId));
         if (existing is not null)
         {
-            if (existing.Status != VisitStatus.Inside)
+            // The dashboard only counts recent visits, so a fixture reused across days must look current.
+            var today = Tiaano.Vms.Api.Services.AppTime.Today;
+            if (existing.Status != VisitStatus.Inside || existing.VisitDate != today)
             {
                 existing.Status = VisitStatus.Inside;
                 existing.CheckOutAt = null;
+                existing.VisitDate = today;
+                existing.CheckInAt = DateTime.UtcNow.AddMinutes(-20);
                 await db.SaveChangesAsync();
             }
             return existing.Id;
@@ -133,7 +137,7 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
             TenantId = tenantId,
             VisitorId = visitor.Id,
             VisitNumber = $"{prefix}-{Guid.NewGuid():N}"[..20],
-            VisitDate = DateOnly.FromDateTime(DateTime.Today),
+            VisitDate = Tiaano.Vms.Api.Services.AppTime.Today,
             VisitTime = TimeOnly.FromDateTime(DateTime.Now),
             DepartmentId = deptId,
             HostEmployeeId = hostId,
@@ -354,6 +358,7 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
         var response = await client.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = marker,
+            gender = 1,
             companyName = "Location Stamp Co",
             telephone = "9000000003",
             email = $"{Guid.NewGuid():N}@example.test",
@@ -377,6 +382,150 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
             .ToListAsync();
 
         Assert.Contains(fixture.NorthLocationId, stampedLocations);
+    }
+
+    [Fact]
+    public async Task Booking_By_Location_Bound_User_Appears_In_Their_Expected_List()
+    {
+        var fixture = await EnsureFixtureAsync();
+        var client = await LoginAsync(NorthUser);
+
+        Guid deptId, hostId, purposeId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var host = await db.Employees.IgnoreQueryFilters()
+                .Where(e => e.IsActive && e.TenantId == fixture.TenantId && e.LocationId == null)
+                .OrderBy(e => e.FullName)
+                .FirstAsync();
+            deptId = host.DepartmentId;
+            hostId = host.Id;
+            purposeId = await db.VisitPurposes.IgnoreQueryFilters()
+                .Where(p => p.IsActive && p.TenantId == fixture.TenantId)
+                .OrderBy(p => p.SortOrder)
+                .Select(p => p.Id)
+                .FirstAsync();
+        }
+
+        var date = Tiaano.Vms.Api.Services.AppTime.Today.AddDays(1);
+        var marker = $"Booked North {Guid.NewGuid():N}"[..26];
+        var response = await client.PostAsJsonAsync("/api/visitors/expected", new
+        {
+            visitorName = marker,
+            gender = 1,
+            companyName = "Booking Scope Co",
+            phone = $"97{Random.Shared.Next(10000000, 99999999)}",
+            expectedDate = date.ToString("yyyy-MM-dd"),
+            expectedTime = "10:30:00",
+            departmentId = deptId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        });
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+
+        var list = await BodyAsync(await client.GetAsync($"/api/visitors/expected?date={date:yyyy-MM-dd}"));
+        Assert.Contains(marker, list);
+    }
+
+    private const string NorthEmployeeName = "Zz Scoping North Employee";
+    private const string SouthEmployeeName = "Zz Scoping South Employee";
+
+    private async Task<(Guid DepartmentId, Guid SouthEmployeeId)> EnsureScopedEmployeesAsync(Fixture fixture)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var deptId = await db.Departments.IgnoreQueryFilters()
+            .Where(d => d.TenantId == fixture.TenantId && d.IsActive && d.LocationId == null)
+            .OrderBy(d => d.Name).Select(d => d.Id).FirstAsync();
+
+        async Task<Guid> EnsureAsync(string name, Guid locationId)
+        {
+            var existing = await db.Employees.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(e => e.TenantId == fixture.TenantId && e.FullName == name);
+            if (existing is not null)
+            {
+                existing.LocationId = locationId;
+                existing.DepartmentId = deptId;
+                existing.IsActive = true;
+                await db.SaveChangesAsync();
+                return existing.Id;
+            }
+            var employee = new Employee
+            {
+                TenantId = fixture.TenantId,
+                FullName = name,
+                DepartmentId = deptId,
+                LocationId = locationId,
+                IsActive = true,
+                CreatedBy = "test"
+            };
+            db.Employees.Add(employee);
+            await db.SaveChangesAsync();
+            return employee.Id;
+        }
+
+        await EnsureAsync(NorthEmployeeName, fixture.NorthLocationId);
+        var southId = await EnsureAsync(SouthEmployeeName, fixture.SouthLocationId);
+        return (deptId, southId);
+    }
+
+    [Fact]
+    public async Task Employees_Are_Scoped_To_The_Users_Location()
+    {
+        var fixture = await EnsureFixtureAsync();
+        await EnsureScopedEmployeesAsync(fixture);
+
+        var north = await LoginAsync(NorthUser);
+        var own = await BodyAsync(await north.GetAsync("/api/masters/hosts?activeOnly=false"));
+        Assert.Contains(NorthEmployeeName, own);
+        Assert.DoesNotContain(SouthEmployeeName, own);
+
+        var asked = await BodyAsync(await north.GetAsync(
+            $"/api/masters/hosts?activeOnly=false&locationId={fixture.SouthLocationId}"));
+        Assert.DoesNotContain(SouthEmployeeName, asked);
+
+        var roaming = await BodyAsync(await (await LoginAsync(RoamingUser)).GetAsync("/api/masters/hosts?activeOnly=false"));
+        Assert.Contains(NorthEmployeeName, roaming);
+        Assert.Contains(SouthEmployeeName, roaming);
+    }
+
+    [Fact]
+    public async Task Location_Bound_User_Cannot_Register_Visit_For_Other_Locations_Employee()
+    {
+        var fixture = await EnsureFixtureAsync();
+        var (deptId, southEmployeeId) = await EnsureScopedEmployeesAsync(fixture);
+        Guid purposeId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            purposeId = await db.VisitPurposes.IgnoreQueryFilters()
+                .Where(p => p.IsActive && p.TenantId == fixture.TenantId)
+                .OrderBy(p => p.SortOrder).Select(p => p.Id).FirstAsync();
+        }
+
+        var client = await LoginAsync(NorthUser);
+        var response = await client.PostAsJsonAsync("/api/visitors", new
+        {
+            visitorName = $"Cross Location {Guid.NewGuid():N}"[..28],
+            gender = 1,
+            companyName = "Cross Location Co",
+            telephone = "9000000004",
+            email = $"{Guid.NewGuid():N}@example.test",
+            departmentId = deptId,
+            hostEmployeeId = southEmployeeId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>(),
+            numberOfPersons = 1,
+            isWalkIn = true,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012",
+            passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
+        });
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.BadRequest, body);
+        Assert.True(body.Contains("another location"), body);
     }
 
     [Fact]

@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { apiErrorMessage, settingsApi, usersApi } from '../lib/api'
-import type {
-  PassNumberAllocationDto,
-  PassNumberSeriesDto,
-  SettingsDto,
-  UserDto,
-} from '../types/api'
+import { apiErrorMessage, mastersApi, settingsApi } from '../lib/api'
+import type { MasterItemDto, PassNumberSeriesDto, SettingsDto } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/ui/Field'
 import { useSettingsStore } from '../store/settingsStore'
 import { BrandLogo } from '../components/BrandLogo'
-import { cn } from '../lib/utils'
+import { assetUrl, cn, hasAnyRole } from '../lib/utils'
 import { FONT_PRESETS, THEME_PRESETS, applyBranding } from '../lib/branding'
 import { useI18n } from '../i18n'
+import { useAuthStore } from '../store/authStore'
+import { ApiKeysPanel } from '../components/ApiKeysPanel'
 
 const SECTIONS = [
   { id: 'general', labelKey: 'settings.general' },
@@ -23,15 +20,22 @@ const SECTIONS = [
   { id: 'pass', labelKey: 'settings.passSettings' },
   { id: 'email', labelKey: 'settings.email' },
   { id: 'security', labelKey: 'settings.security' },
+  { id: 'apiKeys', labelKey: 'settings.apiKeys', superAdminOnly: true },
 ] as const
 
 export function SettingsPage() {
   const { t } = useI18n()
+  const isSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
+  const visibleSections = SECTIONS.filter((s) => !('superAdminOnly' in s) || isSuperAdmin)
   const { settings, load, update, uploadLogo, loaded } = useSettingsStore()
   const [form, setForm] = useState<SettingsDto>(settings)
   const [smtpPassword, setSmtpPassword] = useState('')
   const [testEmailTo, setTestEmailTo] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
+  const [smtpLocationId, setSmtpLocationId] = useState('')
+  const [passLocationId, setPassLocationId] = useState('')
+  const [locations, setLocations] = useState<MasterItemDto[]>([])
+  const [loadingSmtp, setLoadingSmtp] = useState(false)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -48,14 +52,6 @@ export function SettingsPage() {
     currentNumber: 999,
     isActive: true,
   })
-  const [allocations, setAllocations] = useState<PassNumberAllocationDto[]>([])
-  const [users, setUsers] = useState<UserDto[]>([])
-  const [allocForm, setAllocForm] = useState({
-    userId: '',
-    startNumber: 1000,
-    endNumber: 1999,
-    isActive: true,
-  })
   const [passSaving, setPassSaving] = useState(false)
 
   useEffect(() => {
@@ -63,19 +59,58 @@ export function SettingsPage() {
   }, [load])
 
   useEffect(() => {
+    void mastersApi.locations(true).then(setLocations).catch(() => setLocations([]))
+  }, [])
+
+  useEffect(() => {
+    if (smtpLocationId) return
     setForm(settings)
     setSmtpPassword('')
-  }, [settings])
+  }, [settings, smtpLocationId])
+
+  useEffect(() => {
+    if (!smtpLocationId) return
+    let cancelled = false
+    void (async () => {
+      setLoadingSmtp(true)
+      setError(null)
+      try {
+        const locSettings = await settingsApi.get(smtpLocationId)
+        if (cancelled) return
+        setForm((prev) => ({
+          ...prev,
+          companyName: locSettings.companyName,
+          logoPath: locSettings.logoPath,
+          themePreset: locSettings.themePreset,
+          fontPreset: locSettings.fontPreset,
+          smtpEnabled: locSettings.smtpEnabled,
+          smtpHost: locSettings.smtpHost,
+          smtpPort: locSettings.smtpPort,
+          smtpEnableSsl: locSettings.smtpEnableSsl,
+          smtpUsername: locSettings.smtpUsername,
+          smtpFromAddress: locSettings.smtpFromAddress,
+          smtpFromName: locSettings.smtpFromName,
+          smtpIgnoreSslErrors: locSettings.smtpIgnoreSslErrors,
+          smtpPasswordConfigured: locSettings.smtpPasswordConfigured,
+        }))
+        applyBranding(locSettings.themePreset, locSettings.fontPreset)
+        setSmtpPassword('')
+      } catch (err) {
+        if (!cancelled) setError(apiErrorMessage(err, 'Unable to load location settings.'))
+      } finally {
+        if (!cancelled) setLoadingSmtp(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [smtpLocationId])
 
   useEffect(() => {
     if (section !== 'pass') return
     void (async () => {
       try {
-        const [s, a, u] = await Promise.all([
-          settingsApi.getPassSeries(),
-          settingsApi.listPassAllocations(),
-          usersApi.list(),
-        ])
+        const s = await settingsApi.getPassSeries(passLocationId || undefined)
         setSeries(s)
         if (s) {
           setSeriesForm({
@@ -86,14 +121,21 @@ export function SettingsPage() {
             currentNumber: s.currentNumber,
             isActive: s.isActive,
           })
+        } else {
+          setSeriesForm({
+            prefix: 'VMS-',
+            year: '',
+            startNumber: 1000,
+            endNumber: 999999,
+            currentNumber: 999,
+            isActive: true,
+          })
         }
-        setAllocations(a)
-        setUsers(u)
       } catch (err) {
         setError(apiErrorMessage(err, 'Unable to load pass settings.'))
       }
     })()
-  }, [section])
+  }, [section, passLocationId])
 
   function patchForm(partial: Partial<SettingsDto>) {
     const next = { ...form, ...partial }
@@ -109,13 +151,23 @@ export function SettingsPage() {
     setError(null)
     setMessage(null)
     try {
-      await update({
-        ...form,
-        approvalRequired: false,
-        walkInApprovalRequired: false,
-        smtpPassword: smtpPassword.trim() || null,
-      })
+      const saved = await update(
+        {
+          ...form,
+          approvalRequired: false,
+          walkInApprovalRequired: false,
+          smtpPassword: smtpPassword.trim() || null,
+        },
+        smtpLocationId || undefined,
+      )
       setSmtpPassword('')
+      if (smtpLocationId) {
+        setForm((prev) => ({
+          ...prev,
+          ...saved,
+          smtpPasswordConfigured: saved.smtpPasswordConfigured,
+        }))
+      }
       setMessage(t('settings.saved'))
     } catch (err) {
       setError(apiErrorMessage(err, t('settings.saveError')))
@@ -130,8 +182,14 @@ export function SettingsPage() {
     setError(null)
     setMessage(null)
     try {
-      const next = await uploadLogo(file)
-      setForm(next)
+      const next = await uploadLogo(file, smtpLocationId || undefined)
+      setForm((prev) => ({
+        ...prev,
+        logoPath: next.logoPath,
+        companyName: next.companyName,
+        themePreset: next.themePreset,
+        fontPreset: next.fontPreset,
+      }))
       setMessage('Logo updated.')
     } catch (err) {
       setError(apiErrorMessage(err, 'Unable to upload logo.'))
@@ -150,7 +208,17 @@ export function SettingsPage() {
     setError(null)
     setMessage(null)
     try {
-      await settingsApi.sendTestEmail(testEmailTo.trim())
+      await update(
+        {
+          ...form,
+          approvalRequired: false,
+          walkInApprovalRequired: false,
+          smtpPassword: smtpPassword.trim() || null,
+        },
+        smtpLocationId || undefined,
+      )
+      if (smtpPassword.trim()) setSmtpPassword('')
+      await settingsApi.sendTestEmail(testEmailTo.trim(), smtpLocationId || undefined)
       setMessage(t('settings.testEmailSent'))
     } catch (err) {
       setError(apiErrorMessage(err, t('settings.testEmailError')))
@@ -165,6 +233,7 @@ export function SettingsPage() {
     setMessage(null)
     try {
       const saved = await settingsApi.upsertPassSeries({
+        locationId: passLocationId || null,
         prefix: seriesForm.prefix,
         year: seriesForm.year.trim() ? Number(seriesForm.year) : null,
         startNumber: seriesForm.startNumber,
@@ -173,31 +242,6 @@ export function SettingsPage() {
         isActive: seriesForm.isActive,
       })
       setSeries(saved)
-      setMessage(t('settings.saved'))
-    } catch (err) {
-      setError(apiErrorMessage(err, t('settings.saveError')))
-    } finally {
-      setPassSaving(false)
-    }
-  }
-
-  async function saveAllocation() {
-    if (!allocForm.userId) {
-      setError('Select a user for the allocation.')
-      return
-    }
-    setPassSaving(true)
-    setError(null)
-    setMessage(null)
-    try {
-      await settingsApi.upsertPassAllocation({
-        seriesId: series?.id,
-        userId: allocForm.userId,
-        startNumber: allocForm.startNumber,
-        endNumber: allocForm.endNumber,
-        isActive: allocForm.isActive,
-      })
-      setAllocations(await settingsApi.listPassAllocations())
       setMessage(t('settings.saved'))
     } catch (err) {
       setError(apiErrorMessage(err, t('settings.saveError')))
@@ -233,7 +277,7 @@ export function SettingsPage() {
       <div className="grid gap-4 lg:grid-cols-[220px_1fr_240px]">
         <Panel className="h-fit p-2">
           <nav className="flex flex-col gap-1" aria-label="Settings categories">
-            {SECTIONS.map((s) => (
+            {visibleSections.map((s) => (
               <button
                 key={s.id}
                 type="button"
@@ -250,6 +294,9 @@ export function SettingsPage() {
         </Panel>
 
         <Panel>
+          {section === 'apiKeys' ? (
+            <ApiKeysPanel />
+          ) : (
           <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
             {section === 'general' ? (
               <>
@@ -283,6 +330,31 @@ export function SettingsPage() {
                   <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-ink-muted">
                     {t('settings.branding')}
                   </h2>
+                </div>
+                <div className="sm:col-span-2">
+                  <FieldLabel htmlFor="brandLocation">{t('settings.brandLocation')}</FieldLabel>
+                  <TextSelect
+                    id="brandLocation"
+                    value={smtpLocationId}
+                    onChange={(e) => setSmtpLocationId(e.target.value)}
+                    disabled={loadingSmtp}
+                  >
+                    <option value="">{t('settings.smtpLocationDefault')}</option>
+                    {locations.map((loc) => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.name}
+                      </option>
+                    ))}
+                  </TextSelect>
+                  <p className="mt-1 text-xs text-ink-muted">{t('settings.brandLocationHelp')}</p>
+                </div>
+                <div className="sm:col-span-2">
+                  <FieldLabel htmlFor="brandCompanyName">Company name</FieldLabel>
+                  <TextInput
+                    id="brandCompanyName"
+                    value={form.companyName}
+                    onChange={(e) => patchForm({ companyName: e.target.value })}
+                  />
                 </div>
                 <div>
                   <FieldLabel htmlFor="themePreset">Theme</FieldLabel>
@@ -368,6 +440,22 @@ export function SettingsPage() {
                     {t('settings.passSettings')}
                   </h2>
                 </div>
+                <div className="sm:col-span-2">
+                  <FieldLabel htmlFor="passLocation">{t('settings.passLocation')}</FieldLabel>
+                  <TextSelect
+                    id="passLocation"
+                    value={passLocationId}
+                    onChange={(e) => setPassLocationId(e.target.value)}
+                  >
+                    <option value="">{t('settings.smtpLocationDefault')}</option>
+                    {locations.map((loc) => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.name}
+                      </option>
+                    ))}
+                  </TextSelect>
+                  <p className="mt-1 text-xs text-ink-muted">{t('settings.passLocationHelp')}</p>
+                </div>
                 <div>
                   <FieldLabel htmlFor="visitorPassValidityHours">Pass validity (hours)</FieldLabel>
                   <TextInput
@@ -375,6 +463,7 @@ export function SettingsPage() {
                     type="number"
                     value={form.visitorPassValidityHours}
                     onChange={(e) => patchForm({ visitorPassValidityHours: Number(e.target.value) })}
+                    disabled={!!passLocationId}
                   />
                 </div>
                 <div className="sm:col-span-2 border-t border-border/70 pt-4">
@@ -445,74 +534,6 @@ export function SettingsPage() {
                   </Button>
                 </div>
 
-                <div className="sm:col-span-2 border-t border-border/70 pt-4">
-                  <h3 className="text-sm font-semibold text-ink">{t('settings.allocations')}</h3>
-                  <p className="mt-1 text-xs text-ink-muted">{t('settings.allocationsHelp')}</p>
-                </div>
-                <div>
-                  <FieldLabel htmlFor="allocUser">{t('settings.user')}</FieldLabel>
-                  <TextSelect
-                    id="allocUser"
-                    value={allocForm.userId}
-                    onChange={(e) => setAllocForm((f) => ({ ...f, userId: e.target.value }))}
-                  >
-                    <option value="">Select user…</option>
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.fullName} ({u.username})
-                      </option>
-                    ))}
-                  </TextSelect>
-                </div>
-                <div>
-                  <FieldLabel htmlFor="allocStart">{t('settings.startNumber')}</FieldLabel>
-                  <TextInput
-                    id="allocStart"
-                    type="number"
-                    value={allocForm.startNumber}
-                    onChange={(e) => setAllocForm((f) => ({ ...f, startNumber: Number(e.target.value) }))}
-                  />
-                </div>
-                <div>
-                  <FieldLabel htmlFor="allocEnd">{t('settings.endNumber')}</FieldLabel>
-                  <TextInput
-                    id="allocEnd"
-                    type="number"
-                    value={allocForm.endNumber}
-                    onChange={(e) => setAllocForm((f) => ({ ...f, endNumber: Number(e.target.value) }))}
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <Button type="button" variant="secondary" loading={passSaving} onClick={() => void saveAllocation()}>
-                    {t('settings.addAllocation')}
-                  </Button>
-                </div>
-                {allocations.length > 0 ? (
-                  <div className="sm:col-span-2 overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-ink-muted">
-                          <th className="py-2 pr-2">{t('settings.user')}</th>
-                          <th className="py-2 pr-2">{t('settings.startNumber')}</th>
-                          <th className="py-2 pr-2">{t('settings.endNumber')}</th>
-                          <th className="py-2 pr-2">{t('settings.currentNumber')}</th>
-                          <th className="py-2">{t('settings.active')}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {allocations.map((a) => (
-                          <tr key={a.id} className="border-b border-border/60">
-                            <td className="py-2 pr-2">{a.fullName || a.userName || a.userId}</td>
-                            <td className="py-2 pr-2">{a.startNumber}</td>
-                            <td className="py-2 pr-2">{a.endNumber}</td>
-                            <td className="py-2 pr-2">{a.currentNumber}</td>
-                            <td className="py-2">{a.isActive ? t('common.yes') : t('common.no')}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
               </>
             ) : null}
 
@@ -524,6 +545,25 @@ export function SettingsPage() {
                   </h2>
                   <p className="mt-1 text-xs text-ink-muted">{t('settings.emailHelp')}</p>
                 </div>
+                <div className="sm:col-span-2">
+                  <FieldLabel htmlFor="smtpLocation">{t('settings.smtpLocation')}</FieldLabel>
+                  <TextSelect
+                    id="smtpLocation"
+                    value={smtpLocationId}
+                    onChange={(e) => setSmtpLocationId(e.target.value)}
+                  >
+                    <option value="">{t('settings.smtpLocationDefault')}</option>
+                    {locations.map((l) => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </TextSelect>
+                  <p className="mt-1 text-xs text-ink-muted">{t('settings.smtpLocationHelp')}</p>
+                </div>
+                {loadingSmtp ? (
+                  <div className="sm:col-span-2">
+                    <Spinner label="Loading location SMTP…" />
+                  </div>
+                ) : null}
                 <label className="flex min-h-11 items-center gap-2 text-sm sm:col-span-2">
                   <input
                     type="checkbox"
@@ -661,11 +701,16 @@ export function SettingsPage() {
               </Button>
             </div>
           </form>
+          )}
         </Panel>
 
         <Panel className="h-fit text-center">
           <div className="text-sm text-ink-muted">Logo preview</div>
-          <BrandLogo className="mx-auto mt-3 h-16" />
+          <BrandLogo
+            className="mx-auto mt-3 h-16"
+            src={form.logoPath ? assetUrl(form.logoPath) : undefined}
+            alt={form.companyName}
+          />
           <p className="mt-3 break-all text-xs text-ink-muted">{form.logoPath}</p>
           <input
             ref={fileRef}

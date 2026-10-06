@@ -1,9 +1,14 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import type {
   ApiResponse,
+  BookingMatchDto,
   ChangePasswordRequest,
   CreateEmployeeRequest,
+  CreateEmployeeLoginRequest,
+  CreatedIntegrationApiKeyDto,
   CreateUserRequest,
+  IntegrationApiKeyDto,
+  IntegrationScope,
   DashboardDto,
   EmployeeDto,
   ExpectedVisitorRequest,
@@ -11,6 +16,10 @@ import type {
   FacePhotoValidationDto,
   FaceSearchMatchDto,
   LoginResponse,
+  MailContentTemplateDto,
+  MailContentUpsertRequest,
+  MasterImportKind,
+  MasterImportResultDto,
   MasterItemDto,
   MasterUpsertRequest,
   PagedResult,
@@ -20,13 +29,13 @@ import type {
   SettingsDto,
   UpdateUserRequest,
   UserDto,
+  UserFaceLoginDto,
+  VisitorPhoneLookupDto,
   VisitorDetailDto,
   VisitorListItemDto,
   VisitorSearchParams,
   PassNumberSeriesDto,
   UpsertPassNumberSeriesRequest,
-  PassNumberAllocationDto,
-  UpsertPassNumberAllocationRequest,
   FeedbackQuestionDto,
   FeedbackQuestionUpsertRequest,
   SubmitVisitFeedbackRequest,
@@ -36,35 +45,72 @@ import type {
 const TOKEN_KEY = 'tiaano_vms_token'
 const REFRESH_KEY = 'tiaano_vms_refresh'
 
+// Some mobile in-app browsers and private modes block or limit Web Storage; never let that break sign-in.
+const memoryStore = new Map<string, string>()
+
+function readKey(key: string): string | null {
+  for (const store of [() => localStorage, () => sessionStorage]) {
+    try {
+      const value = store().getItem(key)
+      if (value) return value
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  return memoryStore.get(key) ?? null
+}
+
+function removeKey(key: string) {
+  memoryStore.delete(key)
+  for (const store of [() => localStorage, () => sessionStorage]) {
+    try {
+      store().removeItem(key)
+    } catch {
+      /* storage unavailable */
+    }
+  }
+}
+
+function writeKey(key: string, value: string, rememberMe: boolean) {
+  removeKey(key)
+  const order = rememberMe ? [() => localStorage, () => sessionStorage] : [() => sessionStorage, () => localStorage]
+  for (const store of order) {
+    try {
+      store().setItem(key, value)
+      return
+    } catch {
+      /* try the next store */
+    }
+  }
+  memoryStore.set(key, value)
+}
+
 export function getStoredToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY)
+  return readKey(TOKEN_KEY)
 }
 
 export function storeToken(token: string, rememberMe: boolean) {
-  localStorage.removeItem(TOKEN_KEY)
-  sessionStorage.removeItem(TOKEN_KEY)
-  const store = rememberMe ? localStorage : sessionStorage
-  store.setItem(TOKEN_KEY, token)
+  writeKey(TOKEN_KEY, token, rememberMe)
 }
 
 export function getStoredRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_KEY) ?? sessionStorage.getItem(REFRESH_KEY)
+  return readKey(REFRESH_KEY)
 }
 
 export function storeRefreshToken(refreshToken: string, rememberMe: boolean) {
-  localStorage.removeItem(REFRESH_KEY)
-  sessionStorage.removeItem(REFRESH_KEY)
-  const store = rememberMe ? localStorage : sessionStorage
-  store.setItem(REFRESH_KEY, refreshToken)
+  writeKey(REFRESH_KEY, refreshToken, rememberMe)
 }
 
 export function clearRefreshToken() {
-  localStorage.removeItem(REFRESH_KEY)
-  sessionStorage.removeItem(REFRESH_KEY)
+  removeKey(REFRESH_KEY)
 }
 
 function prefersRememberMeStorage(): boolean {
-  return !!localStorage.getItem(TOKEN_KEY) || !!localStorage.getItem(REFRESH_KEY)
+  try {
+    return !!localStorage.getItem(TOKEN_KEY) || !!localStorage.getItem(REFRESH_KEY)
+  } catch {
+    return false
+  }
 }
 
 export function isRememberMeSession(): boolean {
@@ -78,8 +124,7 @@ export function storeAuthTokens(token: string, refreshToken: string | undefined,
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY)
-  sessionStorage.removeItem(TOKEN_KEY)
+  removeKey(TOKEN_KEY)
   clearRefreshToken()
 }
 
@@ -133,7 +178,10 @@ api.interceptors.response.use(
     const original = error.config as RetriableConfig | undefined
     const url = original?.url ?? ''
     const isAuthBootstrap =
-      url.includes('/auth/login') || url.includes('/auth/refresh') || url.includes('/auth/logout')
+      url.includes('/auth/login') ||
+      url.includes('/auth/face-login') ||
+      url.includes('/auth/refresh') ||
+      url.includes('/auth/logout')
 
     if (status !== 401 || !original || isAuthBootstrap || original._retry) {
       if (status === 401 && !isAuthBootstrap && getStoredToken() && !getStoredRefreshToken()) {
@@ -166,20 +214,43 @@ api.interceptors.response.use(
   },
 )
 
+type ErrorBody = {
+  message?: string
+  title?: string
+  errors?: string[] | Record<string, string[] | string>
+}
+
+function errorBodyText(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null
+  const data = body as ErrorBody
+  if (data.message) return data.message
+  if (Array.isArray(data.errors) && data.errors.length) return data.errors.join(', ')
+  if (data.errors && typeof data.errors === 'object') {
+    const parts = Object.values(data.errors).flatMap((v) => (Array.isArray(v) ? v : [v])).filter(Boolean)
+    if (parts.length) return parts.join(' ')
+  }
+  return data.title || null
+}
+
 export function apiErrorMessage(error: unknown, fallback = 'Request failed'): string {
   if (axios.isAxiosError(error)) {
     if (error.code === 'ECONNABORTED' || error.message?.toLowerCase().includes('timeout')) {
       return 'The server took too long to respond. Please try again.'
     }
-    const data = error.response?.data as ApiResponse<unknown> | undefined
-    if (error.response?.status === 409) {
-      return (
-        data?.message ||
-        'The visit was modified by another user. Refresh the visit and try again.'
-      )
+    const status = error.response?.status
+    if (!error.response) {
+      return 'Cannot reach the server. Check your internet connection and try again.'
     }
-    if (data?.message) return data.message
-    if (data?.errors?.length) return data.errors.join(', ')
+    const text = errorBodyText(error.response.data)
+    if (status === 409) {
+      return text || 'The visit was modified by another user. Refresh the visit and try again.'
+    }
+    if (text) return text
+    if (status === 429) return 'Too many attempts. Please wait a minute and try again.'
+    if (status === 400) {
+      return 'The server rejected the request (HTTP 400). If this keeps happening on this computer, clear the browser cache and cookies for this site or contact support.'
+    }
+    if (status && status >= 500) return 'The server had a problem processing this request. Please try again.'
     if (error.message) return error.message
   }
   if (error instanceof Error) return error.message
@@ -199,15 +270,41 @@ async function unwrap<T>(promise: Promise<{ data: ApiResponse<T> }>): Promise<T>
   return data.data
 }
 
+/** For endpoints where `data: null` is a valid answer (e.g. "nothing configured yet"). */
+async function unwrapNullable<T>(promise: Promise<{ data: ApiResponse<T | null> }>): Promise<T | null> {
+  const { data } = await promise
+  if (!data.success) {
+    throw new Error(data.message || data.errors?.join(', ') || 'Request failed')
+  }
+  return data.data ?? null
+}
+
+/** For actions that only report success; resolves with the server message. */
+async function unwrapVoid(promise: Promise<{ data: ApiResponse<unknown> }>): Promise<string | undefined> {
+  const { data } = await promise
+  if (!data.success) {
+    throw new Error(data.message || data.errors?.join(', ') || 'Request failed')
+  }
+  return data.message ?? undefined
+}
+
 export const authApi = {
   login: (username: string, password: string, rememberMe: boolean) =>
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/login', { username, password, rememberMe })),
+  faceLogin: (photoBase64: string, rememberMe: boolean) =>
+    unwrap(api.post<ApiResponse<LoginResponse>>('/auth/face-login', { photoBase64, rememberMe })),
+  faceLoginStatus: () =>
+    unwrap(api.get<ApiResponse<{ available: boolean }>>('/auth/face-login/status')),
   me: () => unwrap(api.get<ApiResponse<UserDto>>('/auth/me')),
   logout: () => api.post<ApiResponse<object>>('/auth/logout'),
   changePassword: (body: ChangePasswordRequest) =>
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/change-password', body)),
   refresh: (refreshToken: string) =>
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/refresh', { refreshToken })),
+  forgotPassword: (usernameOrEmail: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>('/auth/forgot-password', { usernameOrEmail })),
+  resetPassword: (userId: string, token: string, newPassword: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>('/auth/reset-password', { userId, token, newPassword })),
 }
 
 export const visitorsApi = {
@@ -219,25 +316,34 @@ export const visitorsApi = {
   inside: () => unwrap(api.get<ApiResponse<VisitorListItemDto[]>>('/visitors/inside')),
   expected: (date?: string) =>
     unwrap(api.get<ApiResponse<VisitorListItemDto[]>>('/visitors/expected', { params: { date } })),
+  lookupByPhone: (phone: string) =>
+    unwrapNullable(api.get<ApiResponse<VisitorPhoneLookupDto | null>>('/visitors/lookup', { params: { phone } })),
+  matchBookings: (params: { phone?: string; visitorId?: string }) =>
+    unwrap(api.get<ApiResponse<BookingMatchDto[]>>('/visitors/expected/match', { params })),
   createExpected: (body: ExpectedVisitorRequest) =>
     unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors/expected', body)),
-  checkIn: (id: string) =>
-    unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {})),
-  checkOut: (id: string) =>
-    unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, {})),
-  getFeedback: async (id: string) => {
-    const { data } = await api.get<ApiResponse<VisitFeedbackDto | null>>(`/visitors/${id}/feedback`)
-    if (!data.success) {
-      throw new Error(data.message || data.errors?.join(', ') || 'Request failed')
-    }
-    return data.data ?? null
-  },
+  checkIn: (id: string, photoBase64?: string | null) =>
+    unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {
+      occurredAt: new Date().toISOString(),
+      photoBase64: photoBase64 || null,
+    })),
+  checkOut: (id: string, options?: { skipFeedback?: boolean }) =>
+    unwrap(api.post<ApiResponse<VisitorListItemDto>>(`/visitors/${id}/check-out`, {
+      occurredAt: new Date().toISOString(),
+      skipFeedback: options?.skipFeedback === true,
+    })),
+  saveMeetingMinutes: (id: string, meetingMinutes: string) =>
+    unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/${id}/meeting-minutes`, { meetingMinutes })),
+  setMomNotRequired: (id: string, notRequired: boolean) =>
+    unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/${id}/mom-not-required`, { notRequired })),
+  getFeedback: (id: string) =>
+    unwrapNullable(api.get<ApiResponse<VisitFeedbackDto | null>>(`/visitors/${id}/feedback`)),
   submitFeedback: (id: string, body: SubmitVisitFeedbackRequest) =>
     unwrap(api.post<ApiResponse<VisitFeedbackDto>>(`/visitors/${id}/feedback`, body)),
   faceSearch: (photoBase64: string) =>
-    unwrap(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { photoBase64 })),
+    unwrapNullable(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { photoBase64 })),
   faceIdentifyInside: (photoBase64: string) =>
-    unwrap(api.post<ApiResponse<FaceCheckoutMatchDto | null>>('/visitors/face-identify-inside', { photoBase64 })),
+    unwrapNullable(api.post<ApiResponse<FaceCheckoutMatchDto | null>>('/visitors/face-identify-inside', { photoBase64 })),
   /** Exactly-one-face gate before accepting a visitor registration photo. Does not store the image. */
   validatePhoto: (photoBase64: string) =>
     unwrap(api.post<ApiResponse<FacePhotoValidationDto>>('/visitors/validate-photo', { photoBase64 })),
@@ -262,20 +368,22 @@ export const dashboardApi = {
 }
 
 export const mastersApi = {
-  departments: (activeOnly = true) =>
-    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/departments', { params: { activeOnly } })),
+  departments: (activeOnly = true, locationId?: string) =>
+    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/departments', { params: { activeOnly, locationId } })),
   createDepartment: (body: MasterUpsertRequest) =>
     unwrap(api.post<ApiResponse<MasterItemDto>>('/masters/departments', body)),
   updateDepartment: (id: string, body: MasterUpsertRequest) =>
     unwrap(api.put<ApiResponse<MasterItemDto>>(`/masters/departments/${id}`, body)),
-  hosts: (departmentId?: string, activeOnly = true) =>
-    unwrap(api.get<ApiResponse<EmployeeDto[]>>('/masters/hosts', { params: { departmentId, activeOnly } })),
+  hosts: (departmentId?: string, activeOnly = true, locationId?: string) =>
+    unwrap(api.get<ApiResponse<EmployeeDto[]>>('/masters/hosts', { params: { departmentId, activeOnly, locationId } })),
   createHost: (body: CreateEmployeeRequest) =>
     unwrap(api.post<ApiResponse<EmployeeDto>>('/masters/hosts', body)),
   updateHost: (id: string, body: CreateEmployeeRequest) =>
     unwrap(api.put<ApiResponse<EmployeeDto>>(`/masters/hosts/${id}`, body)),
-  purposes: (activeOnly = true) =>
-    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/purposes', { params: { activeOnly } })),
+  deactivateHost: (id: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>(`/masters/hosts/${id}/deactivate`)),
+  purposes: (activeOnly = true, locationId?: string) =>
+    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/purposes', { params: { activeOnly, locationId } })),
   createPurpose: (body: MasterUpsertRequest) =>
     unwrap(api.post<ApiResponse<MasterItemDto>>('/masters/purposes', body)),
   updatePurpose: (id: string, body: MasterUpsertRequest) =>
@@ -286,18 +394,24 @@ export const mastersApi = {
     unwrap(api.post<ApiResponse<MasterItemDto>>('/masters/locations', body)),
   updateLocation: (id: string, body: MasterUpsertRequest) =>
     unwrap(api.put<ApiResponse<MasterItemDto>>(`/masters/locations/${id}`, body)),
+  mailContents: (locationId?: string) =>
+    unwrap(api.get<ApiResponse<MailContentTemplateDto[]>>('/masters/mail-content', {
+      params: locationId ? { locationId } : undefined,
+    })),
+  upsertMailContent: (body: MailContentUpsertRequest) =>
+    unwrap(api.put<ApiResponse<MailContentTemplateDto>>('/masters/mail-content', body)),
   idTypes: (activeOnly = true) =>
     unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/id-types', { params: { activeOnly } })),
-  feedbackQuestions: (activeOnly = true) =>
+  feedbackQuestions: (activeOnly = true, locationId?: string) =>
     unwrap(
       api.get<ApiResponse<FeedbackQuestionDto[]>>('/masters/feedback-questions', {
-        params: { activeOnly },
+        params: { activeOnly, locationId: locationId || undefined },
       }),
     ),
-  feedbackResponses: (take = 50) =>
+  feedbackResponsesPaged: (page: number, pageSize: number) =>
     unwrap(
-      api.get<ApiResponse<VisitFeedbackDto[]>>('/masters/feedback-responses', {
-        params: { take },
+      api.get<ApiResponse<PagedResult<VisitFeedbackDto>>>('/masters/feedback-responses/paged', {
+        params: { page, pageSize },
       }),
     ),
   createFeedbackQuestion: (body: FeedbackQuestionUpsertRequest) =>
@@ -305,33 +419,62 @@ export const mastersApi = {
   updateFeedbackQuestion: (id: string, body: FeedbackQuestionUpsertRequest) =>
     unwrap(api.put<ApiResponse<FeedbackQuestionDto>>(`/masters/feedback-questions/${id}`, body)),
   deactivateFeedbackQuestion: (id: string) =>
-    unwrap(api.post<ApiResponse<object>>(`/masters/feedback-questions/${id}/deactivate`)),
+    unwrapVoid(api.post<ApiResponse<object>>(`/masters/feedback-questions/${id}/deactivate`)),
   deactivate: (type: string, id: string) =>
-    unwrap(api.post<ApiResponse<object>>(`/masters/${type}/${id}/deactivate`)),
+    unwrapVoid(api.post<ApiResponse<object>>(`/masters/${type}/${id}/deactivate`)),
+  downloadImportTemplate: async (kind: MasterImportKind) => {
+    const res = await api.get(`/masters/import/${kind}/template`, { responseType: 'blob' })
+    return res.data as Blob
+  },
+  importExcel: (kind: MasterImportKind, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return unwrap(
+      api.post<ApiResponse<MasterImportResultDto>>(`/masters/import/${kind}`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+    )
+  },
 }
 
 export const settingsApi = {
-  get: () => unwrap(api.get<ApiResponse<SettingsDto>>('/settings')),
+  get: (locationId?: string) =>
+    unwrap(api.get<ApiResponse<SettingsDto>>('/settings', {
+      params: locationId ? { locationId } : undefined,
+    })),
   getBranding: () => unwrap(api.get<ApiResponse<PublicBrandingDto>>('/settings/branding')),
-  update: (body: SettingsDto) => unwrap(api.put<ApiResponse<SettingsDto>>('/settings', body)),
-  uploadLogo: (file: File) => {
+  getCurrentBranding: () => unwrap(api.get<ApiResponse<PublicBrandingDto>>('/settings/branding/current')),
+  update: (body: SettingsDto, locationId?: string) =>
+    unwrap(api.put<ApiResponse<SettingsDto>>('/settings', body, {
+      params: locationId ? { locationId } : undefined,
+    })),
+  uploadLogo: (file: File, locationId?: string) => {
     const form = new FormData()
     form.append('file', file)
     return unwrap(
       api.post<ApiResponse<SettingsDto>>('/settings/logo', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        params: locationId ? { locationId } : undefined,
       }),
     )
   },
-  getPassSeries: () => unwrap(api.get<ApiResponse<PassNumberSeriesDto | null>>('/pass-numbers/series')),
+  getPassSeries: (locationId?: string) =>
+    unwrapNullable(api.get<ApiResponse<PassNumberSeriesDto | null>>('/pass-numbers/series', {
+      params: locationId ? { locationId } : undefined,
+    })),
   upsertPassSeries: (body: UpsertPassNumberSeriesRequest) =>
     unwrap(api.put<ApiResponse<PassNumberSeriesDto>>('/pass-numbers/series', body)),
-  listPassAllocations: () =>
-    unwrap(api.get<ApiResponse<PassNumberAllocationDto[]>>('/pass-numbers/allocations')),
-  upsertPassAllocation: (body: UpsertPassNumberAllocationRequest) =>
-    unwrap(api.put<ApiResponse<PassNumberAllocationDto>>('/pass-numbers/allocations', body)),
-  sendTestEmail: (to: string) =>
-    unwrap(api.post<ApiResponse<object>>('/settings/test-email', { to })),
+  sendTestEmail: (to: string, locationId?: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>('/settings/test-email', {
+      to,
+      locationId: locationId || null,
+    })),
+  listApiKeys: () => unwrap(api.get<ApiResponse<IntegrationApiKeyDto[]>>('/settings/api-keys')),
+  createApiKey: (name: string, scopes: IntegrationScope[]) =>
+    unwrap(api.post<ApiResponse<CreatedIntegrationApiKeyDto>>('/settings/api-keys', { name, scopes })),
+  revokeApiKey: async (id: string) => {
+    await api.post(`/settings/api-keys/${id}/revoke`)
+  },
 }
 
 export const usersApi = {
@@ -339,6 +482,15 @@ export const usersApi = {
   create: (body: CreateUserRequest) => unwrap(api.post<ApiResponse<UserDto>>('/users', body)),
   update: (id: string, body: UpdateUserRequest) =>
     unwrap(api.put<ApiResponse<UserDto>>(`/users/${id}`, body)),
+  createForEmployee: (employeeId: string, body: CreateEmployeeLoginRequest) =>
+    unwrap(api.post<ApiResponse<EmployeeDto>>(`/users/from-employee/${employeeId}`, body)),
+  resetPassword: (id: string, newPassword: string, mustChangePassword = true) =>
+    unwrapVoid(api.post<ApiResponse<object>>(`/users/${id}/reset-password`, { newPassword, mustChangePassword })),
+  listFaces: (id: string) => unwrap(api.get<ApiResponse<UserFaceLoginDto[]>>(`/users/${id}/faces`)),
+  addFace: (id: string, personName: string, photoBase64: string) =>
+    unwrap(api.post<ApiResponse<UserFaceLoginDto>>(`/users/${id}/faces`, { personName, photoBase64 })),
+  removeFace: (id: string, faceId: string) =>
+    unwrapVoid(api.delete<ApiResponse<object>>(`/users/${id}/faces/${faceId}`)),
 }
 
 export const reportsApi = {

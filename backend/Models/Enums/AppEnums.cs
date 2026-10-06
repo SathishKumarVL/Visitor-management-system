@@ -56,3 +56,17 @@ public enum VisitorType
     Expected = 1,
     PreRegistered = 2
 }
+
+public enum MailContentKind
+{
+    CheckIn = 1,
+    CheckOut = 2,
+    Appointment = 3,
+    AppointmentVisitor = 4
+}
+
+public enum VisitorGender
+{
+    Male = 1,
+    Female = 2
+}

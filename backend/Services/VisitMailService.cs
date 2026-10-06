@@ -1,0 +1,206 @@
+using System.Text;
+using Microsoft.EntityFrameworkCore;
+using Tiaano.Vms.Api.Data;
+using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Models.Enums;
+
+namespace Tiaano.Vms.Api.Services;
+
+public record VisitMailContext(
+    string VisitorName,
+    string Salutation,
+    string? VisitorEmail,
+    string Company,
+    string VisitingPerson,
+    string? VisitingPersonEmail,
+    string VisitorNumber,
+    string VisitNumber,
+    string Location,
+    Guid? LocationId,
+    string Department,
+    string Purpose,
+    string MeetingMinutes,
+    DateTime MomentLocal);
+
+/// <summary>Renders Mail Content templates and queues check-in / check-out / appointment emails.</summary>
+public interface IVisitMailService
+{
+    Task SendCheckInAsync(VisitMailContext ctx);
+    Task SendCheckOutAsync(VisitMailContext ctx);
+    Task SendAppointmentAsync(VisitMailContext ctx);
+}
+
+public class VisitMailService : IVisitMailService
+{
+    private readonly ApplicationDbContext _db;
+    private readonly INotificationService _notifications;
+    private readonly ILogger<VisitMailService> _logger;
+    private readonly bool _checkOutSendAsHost;
+
+    public VisitMailService(
+        ApplicationDbContext db,
+        INotificationService notifications,
+        ILogger<VisitMailService> logger,
+        IConfiguration configuration)
+    {
+        _db = db;
+        _notifications = notifications;
+        _logger = logger;
+        _checkOutSendAsHost = configuration.GetValue<bool>("Mail:CheckOutSendAsHost");
+    }
+
+    /// <summary>
+    /// Mails to the visitor (appointment confirmation, check-out) come from the person they meet: their name in
+    /// From and their address in Reply-To. With Mail:CheckOutSendAsHost the host's address is the actual sender,
+    /// which requires the SMTP mailbox to have "Send As" rights for that host.
+    /// </summary>
+    private MailSender? HostSender(VisitMailContext ctx)
+    {
+        var hostEmail = ctx.VisitingPersonEmail?.Trim();
+        if (string.IsNullOrWhiteSpace(hostEmail)) return null;
+        var hostName = string.IsNullOrWhiteSpace(ctx.VisitingPerson) ? null : ctx.VisitingPerson.Trim();
+        return new MailSender(_checkOutSendAsHost ? hostEmail : null, hostName, hostEmail);
+    }
+
+    public async Task SendCheckInAsync(VisitMailContext ctx)
+    {
+        // Check-in notifies the visiting person (employee) only.
+        if (string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail))
+        {
+            _logger.LogWarning("Check-in email skipped — host {Host} has no email.", ctx.VisitingPerson);
+            return;
+        }
+        var (subject, body) = await RenderAsync(MailContentKind.CheckIn, ctx);
+        await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
+            $"checkin:{ctx.VisitNumber}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
+    }
+
+    public async Task SendCheckOutAsync(VisitMailContext ctx)
+    {
+        var (subject, body) = await RenderAsync(MailContentKind.CheckOut, ctx);
+
+        if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
+        {
+            await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+                $"checkout-visitor:{ctx.VisitNumber}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
+        }
+        else
+        {
+            _logger.LogWarning("Check-out visitor email skipped — {Name} has no email.", ctx.VisitorName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail))
+        {
+            await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
+                $"checkout-host:{ctx.VisitNumber}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
+        }
+        else
+        {
+            _logger.LogWarning("Check-out host email skipped — {Host} has no email.", ctx.VisitingPerson);
+        }
+    }
+
+    public async Task SendAppointmentAsync(VisitMailContext ctx)
+    {
+        // The employee and the visitor get different wording, so each has its own Mail Content template.
+        if (!string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail))
+        {
+            var (subject, body) = await RenderAsync(MailContentKind.Appointment, ctx);
+            await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
+                $"appointment:{ctx.VisitNumber}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
+        }
+        else
+        {
+            _logger.LogWarning("Appointment email skipped — host {Host} has no email.", ctx.VisitingPerson);
+        }
+
+        if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
+        {
+            var (subject, body) = await RenderAsync(MailContentKind.AppointmentVisitor, ctx);
+            await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+                $"appointment-visitor:{ctx.VisitNumber}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
+        }
+        else
+        {
+            _logger.LogWarning("Appointment visitor email skipped — {Name} has no email.", ctx.VisitorName);
+        }
+    }
+
+    private async Task<(string Subject, string Body)> RenderAsync(MailContentKind kind, VisitMailContext ctx)
+    {
+        var candidates = await _db.MailContentTemplates.AsNoTracking()
+            .Where(t => t.Kind == kind && t.IsActive
+                && (t.LocationId == null
+                    || (ctx.LocationId != null && t.LocationId == ctx.LocationId)))
+            .ToListAsync();
+
+        var template = candidates.FirstOrDefault(t => ctx.LocationId != null && t.LocationId == ctx.LocationId)
+            ?? candidates.FirstOrDefault(t => t.LocationId == null);
+
+        string subject;
+        string body;
+        if (template is null)
+        {
+            var fallback = MasterDataService.DefaultMailContent(kind);
+            subject = fallback.Subject;
+            body = fallback.Body;
+        }
+        else
+        {
+            subject = template.Subject;
+            body = template.Body;
+        }
+
+        if (kind is MailContentKind.Appointment or MailContentKind.AppointmentVisitor)
+            body = EnsurePurposeLine(body);
+
+        return (Apply(subject, ctx), Apply(body, ctx));
+    }
+
+    /// <summary>
+    /// Appointment mails must state the purpose. Templates saved before the placeholder existed get the line
+    /// after "Department:", or before the sign-off when there is no department line.
+    /// </summary>
+    public static string EnsurePurposeLine(string body)
+    {
+        if (body.Contains("{{Purpose}}", StringComparison.Ordinal)) return body;
+
+        var newline = body.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = body.Split(newline).ToList();
+        var department = lines.FindIndex(l => l.TrimStart().StartsWith("Department:", StringComparison.OrdinalIgnoreCase));
+        if (department >= 0)
+        {
+            var indent = lines[department][..(lines[department].Length - lines[department].TrimStart().Length)];
+            lines.Insert(department + 1, $"{indent}Purpose: {{{{Purpose}}}}");
+            return string.Join(newline, lines);
+        }
+
+        var signOff = lines.FindIndex(l => l.TrimStart().StartsWith("Regards", StringComparison.OrdinalIgnoreCase));
+        if (signOff >= 0)
+        {
+            lines.Insert(signOff, "");
+            lines.Insert(signOff, "Purpose: {{Purpose}}");
+            return string.Join(newline, lines);
+        }
+
+        return body.TrimEnd() + newline + newline + "Purpose: {{Purpose}}" + newline;
+    }
+
+    private static string Apply(string template, VisitMailContext ctx)
+    {
+        var sb = new StringBuilder(template);
+        sb.Replace("{{VisitorName}}", ctx.VisitorName);
+        sb.Replace("{{Salutation}}", ctx.Salutation);
+        sb.Replace("{{Company}}", ctx.Company);
+        sb.Replace("{{VisitingPerson}}", ctx.VisitingPerson);
+        sb.Replace("{{VisitorNumber}}", ctx.VisitorNumber);
+        sb.Replace("{{VisitNumber}}", ctx.VisitNumber);
+        sb.Replace("{{Location}}", ctx.Location);
+        sb.Replace("{{Department}}", ctx.Department);
+        sb.Replace("{{Purpose}}", ctx.Purpose);
+        sb.Replace("{{MeetingMinutes}}", string.IsNullOrWhiteSpace(ctx.MeetingMinutes) ? "—" : ctx.MeetingMinutes);
+        sb.Replace("{{Date}}", ctx.MomentLocal.ToString("dd MMM yyyy"));
+        sb.Replace("{{Time}}", ctx.MomentLocal.ToString("hh:mm tt"));
+        return sb.ToString();
+    }
+}

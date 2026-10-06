@@ -22,8 +22,16 @@ public interface IVisitorService
     Task<VisitorListItemDto> RejectAsync(Guid visitId, string reason, ClaimsPrincipal user);
     Task<PassDto> CheckInAsync(Guid visitId, CheckInRequest request, ClaimsPrincipal user, string webRoot);
     Task<VisitorListItemDto> CheckOutAsync(Guid visitId, CheckOutRequest request, ClaimsPrincipal user);
-    Task<IReadOnlyList<VisitorListItemDto>> GetInsideAsync(int warningMinutes);
-    Task<IReadOnlyList<VisitorListItemDto>> GetExpectedAsync(DateOnly? date = null);
+    /// <summary>System job: check out Inside visits past the max stay; counts as manual check-out.</summary>
+    Task<int> AutoCheckOutStaleVisitsAsync(TimeSpan maxStay, CancellationToken cancellationToken = default);
+    Task<VisitorDetailDto> SaveMeetingMinutesAsync(Guid visitId, SaveMeetingMinutesRequest request, ClaimsPrincipal user);
+    /// <summary>Waives minutes of meeting so the check-out email is sent without them.</summary>
+    Task<VisitorDetailDto> SetMomNotRequiredAsync(Guid visitId, SetMomNotRequiredRequest request, ClaimsPrincipal user);
+    /// <summary>Pass <paramref name="user"/> to limit Host logins to their own visitors; null returns everyone (system use).</summary>
+    Task<IReadOnlyList<VisitorListItemDto>> GetInsideAsync(int warningMinutes, ClaimsPrincipal? user = null);
+    Task<IReadOnlyList<VisitorListItemDto>> GetExpectedAsync(DateOnly? date = null, ClaimsPrincipal? user = null);
+    Task<IReadOnlyList<BookingMatchDto>> FindTodaysBookingsAsync(string? phone, Guid? visitorId);
+    Task<VisitorPhoneLookupDto?> LookupByPhoneAsync(string? phone);
     Task<IReadOnlyList<VisitorListItemDto>> GetPendingApprovalsAsync(ClaimsPrincipal user);
     Task<PassDto?> GetPassAsync(Guid visitId, string webRoot);
     Task<PassDto> ReprintPassAsync(Guid visitId, ClaimsPrincipal user, string webRoot);
@@ -41,6 +49,8 @@ public class VisitorService : IVisitorService
     private readonly ISettingsService _settings;
     private readonly INotificationService _notifications;
     private readonly IConfiguration _config;
+    private const int ExpectedBookingGraceMinutes = 5;
+
     private readonly IHostEnvironment _env;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<VisitorService> _logger;
@@ -49,7 +59,8 @@ public class VisitorService : IVisitorService
     private readonly IFaceEmbeddingService _faces;
     private readonly IPassNumberService _passNumbers;
     private readonly IFeedbackService _feedback;
-    private static readonly Regex IndianPhone = new(@"^(\+91[\-\s]?)?[6-9]\d{9}$|^0\d{2,4}[\-\s]?\d{6,8}$", RegexOptions.Compiled);
+    private readonly IVisitMailService _visitMail;
+    private static readonly Regex TenDigitPhone = new(@"^\d{10}$", RegexOptions.Compiled);
 
     public VisitorService(
         ApplicationDbContext db,
@@ -63,7 +74,8 @@ public class VisitorService : IVisitorService
         ITenantContext tenant,
         IFaceEmbeddingService faces,
         IPassNumberService passNumbers,
-        IFeedbackService feedback)
+        IFeedbackService feedback,
+        IVisitMailService visitMail)
     {
         _db = db;
         _settings = settings;
@@ -77,6 +89,7 @@ public class VisitorService : IVisitorService
         _faces = faces;
         _passNumbers = passNumbers;
         _feedback = feedback;
+        _visitMail = visitMail;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -134,9 +147,26 @@ public class VisitorService : IVisitorService
         if (locations.Any(l => l.RequiresOtherText) && string.IsNullOrWhiteSpace(request.OtherLocationText))
             throw new InvalidOperationException("Please specify the other location.");
 
-        // Always allocate from the tenant series — free-text desk badges collide with unique PassCode.
-        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
-        var passNumber = await _passNumbers.AllocateNextAsync(userId);
+        // Always allocate from the location (or tenant) series — free-text desk badges collide with unique PassCode.
+        Guid? passLocationId = locations.Select(l => (Guid?)l.Id).FirstOrDefault()
+            ?? (_tenant.LocationId is Guid tl && tl != Guid.Empty ? tl : null);
+        var passNumber = await _passNumbers.AllocateNextAsync(passLocationId);
+
+        // A booked visitor registered through the walk-in form still closes their booking, as long as
+        // it is the same person (mobile or face match) meeting the same host today.
+        if (!request.ExpectedVisitId.HasValue && !request.SkipBookingMatch)
+        {
+            var bookingId = await TodaysBookingsFor(TryNormalizePhone(request.Telephone), request.RecognizedVisitorId)
+                .Where(v => v.HostEmployeeId == host.Id)
+                .OrderBy(v => v.ExpectedTime)
+                .Select(v => (Guid?)v.Id)
+                .FirstOrDefaultAsync();
+            if (bookingId.HasValue)
+            {
+                request.ExpectedVisitId = bookingId;
+                request.IsWalkIn = false;
+            }
+        }
 
         Visitor visitor;
         Visitor? newVisitor = null;
@@ -145,13 +175,18 @@ public class VisitorService : IVisitorService
             var expected = await _db.VisitorVisits.Include(v => v.Visitor)
                 .FirstOrDefaultAsync(v => v.Id == request.ExpectedVisitId.Value)
                 ?? throw new InvalidOperationException("Expected visitor record not found.");
-            visitor = expected.Visitor;
-            visitor.FullName = request.VisitorName.Trim();
-            visitor.CompanyName = request.CompanyName.Trim();
-            visitor.Phone = request.Telephone?.Trim();
-            visitor.Email = request.Email?.Trim();
-            visitor.UpdatedAt = DateTime.UtcNow;
-            visitor.UpdatedBy = user.Identity?.Name;
+            if (expected.Status is VisitStatus.Cancelled or VisitStatus.Rejected
+                or VisitStatus.Inside or VisitStatus.CheckedOut)
+                throw new InvalidOperationException("This booking has already been used or cancelled.");
+            // A confirmed face match keeps the visit in the returning visitor's history, even when the
+            // booking was made under a fresh visitor record.
+            var recognized = request.RecognizedVisitorId is Guid rid && rid != expected.VisitorId
+                ? await _db.Visitors.FirstOrDefaultAsync(v => v.Id == rid)
+                : null;
+            if (recognized is not null)
+                await EnsureVisitorNotAlreadyInsideAsync(recognized.Id);
+            visitor = recognized ?? expected.Visitor;
+            ApplyReturningVisitorProfile(visitor, request, user.Identity?.Name);
             // The pre-registration is superseded, not erased: its visit number and audit trail stay intact.
             expected.Status = VisitStatus.Cancelled;
             expected.Notes = string.IsNullOrWhiteSpace(expected.Notes)
@@ -167,12 +202,8 @@ public class VisitorService : IVisitorService
             visitor = await _db.Visitors.FirstOrDefaultAsync(v => v.Id == request.RecognizedVisitorId.Value)
                 ?? throw new InvalidOperationException("Recognised visitor record not found.");
             await EnsureVisitorNotAlreadyInsideAsync(visitor.Id);
-            visitor.FullName = request.VisitorName.Trim();
-            visitor.CompanyName = request.CompanyName.Trim();
-            visitor.Phone = request.Telephone?.Trim();
-            visitor.Email = request.Email?.Trim();
-            visitor.UpdatedAt = DateTime.UtcNow;
-            visitor.UpdatedBy = user.Identity?.Name;
+            // Fill gaps from earlier registrations (e.g. Gender) without wiping existing contact fields.
+            ApplyReturningVisitorProfile(visitor, request, user.Identity?.Name);
         }
         else
         {
@@ -189,6 +220,7 @@ public class VisitorService : IVisitorService
                 TenantId = ResolveTenantId(user),
                 VisitorNumber = await NextVisitorNumberAsync(settings.VisitorIdPrefix),
                 FullName = request.VisitorName.Trim(),
+                Gender = request.Gender,
                 CompanyName = request.CompanyName.Trim(),
                 Phone = request.Telephone?.Trim(),
                 Email = request.Email?.Trim(),
@@ -207,8 +239,8 @@ public class VisitorService : IVisitorService
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
             VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected,
             Status = needsApproval ? VisitStatus.PendingApproval : VisitStatus.Approved,
-            VisitDate = request.VisitDate ?? DateOnly.FromDateTime(DateTime.Now),
-            VisitTime = request.VisitTime ?? TimeOnly.FromDateTime(DateTime.Now),
+            VisitDate = request.VisitDate ?? AppTime.Today,
+            VisitTime = request.VisitTime ?? TimeOnly.FromDateTime(AppTime.Now),
             DepartmentId = request.DepartmentId,
             HostEmployeeId = host.Id,
             HostIntercom = null,
@@ -301,28 +333,87 @@ public class VisitorService : IVisitorService
     {
         if (string.IsNullOrWhiteSpace(request.VisitorName) || string.IsNullOrWhiteSpace(request.CompanyName))
             throw new InvalidOperationException("Visitor name and company are required.");
+        if (request.Gender is not (VisitorGender.Male or VisitorGender.Female))
+            throw new InvalidOperationException("Gender is required (Male or Female).");
+        if (string.IsNullOrWhiteSpace(request.Phone))
+            throw new InvalidOperationException("Visitor mobile number is required.");
+        // The grace absorbs clock drift between the booking device and the server.
+        if (request.ExpectedDate.ToDateTime(request.ExpectedTime) < AppTime.Now.AddMinutes(-ExpectedBookingGraceMinutes))
+            throw new InvalidOperationException("Appointment date and time cannot be in the past.");
+
+        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, TenantClaims.RequireTenantId(user, _tenant));
+        request.PurposeNotes = string.IsNullOrWhiteSpace(request.PurposeNotes) ? null : request.PurposeNotes.Trim();
+        if (request.PurposeNotes is not null)
+        {
+            var othersId = (await _db.VisitPurposes.AsNoTracking()
+                .FirstAsync(p => p.Name == VisitPurposeDefaults.OthersName)).Id;
+            if (!request.PurposeIds.Contains(othersId))
+                request.PurposeIds.Add(othersId);
+        }
+        if (request.PurposeIds.Count == 0)
+            throw new InvalidOperationException("Purpose of visit is required.");
+        var purposeIds = await _db.VisitPurposes
+            .Where(p => request.PurposeIds.Contains(p.Id) && p.IsActive)
+            .Select(p => p.Id)
+            .ToListAsync();
+        if (purposeIds.Count == 0)
+            throw new InvalidOperationException("At least one valid purpose is required.");
+
+        // A location-bound user only sees visits that include their location, so their bookings must carry it.
+        var locationIds = request.LocationIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
+        if (_tenant.LocationId is Guid boundLocation && boundLocation != Guid.Empty
+            && !locationIds.Contains(boundLocation))
+            locationIds.Add(boundLocation);
 
         var settings = await _settings.GetAsync();
         var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
+        var phone = NormalizeTenDigitPhone(request.Phone!);
 
-        var visitor = new Visitor
+        var duplicate = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Status == VisitStatus.Expected
+                        && v.Visitor.Phone == phone
+                        && v.HostEmployeeId == host.Id
+                        && (v.ExpectedDate ?? v.VisitDate) == request.ExpectedDate)
+            .Select(v => new { v.VisitNumber, Time = v.ExpectedTime ?? v.VisitTime })
+            .FirstOrDefaultAsync();
+        if (duplicate is not null)
+            throw new InvalidOperationException(
+                $"This visitor already has an appointment with {host.FullName} on {request.ExpectedDate:dd/MM/yyyy} " +
+                $"at {duplicate.Time:HH:mm} (booking {duplicate.VisitNumber}).");
+
+        // One person, one visitor record: a known mobile number books against the existing visitor, so their
+        // history, face match and booking all point at the same record.
+        var visitor = await VisitorsByPhone(phone).FirstOrDefaultAsync();
+        Visitor? newVisitor = null;
+        if (visitor is null)
         {
-            TenantId = ResolveTenantId(user),
-            VisitorNumber = await NextVisitorNumberAsync(settings.VisitorIdPrefix),
-            FullName = request.VisitorName.Trim(),
-            CompanyName = request.CompanyName.Trim(),
-            Phone = request.Phone?.Trim(),
-            Email = request.Email?.Trim(),
-            CreatedBy = user.Identity?.Name
-        };
-        _db.Visitors.Add(visitor);
+            visitor = new Visitor
+            {
+                TenantId = ResolveTenantId(user),
+                VisitorNumber = await NextVisitorNumberAsync(settings.VisitorIdPrefix),
+                Phone = phone,
+                CreatedBy = user.Identity?.Name
+            };
+            _db.Visitors.Add(visitor);
+            newVisitor = visitor;
+        }
+        else
+        {
+            visitor.UpdatedAt = DateTime.UtcNow;
+            visitor.UpdatedBy = user.Identity?.Name;
+        }
+        visitor.FullName = request.VisitorName.Trim();
+        visitor.Gender = request.Gender;
+        visitor.CompanyName = request.CompanyName.Trim();
+        if (!string.IsNullOrWhiteSpace(request.Email))
+            visitor.Email = request.Email.Trim();
 
         var visit = new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
             Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
-            PreRegistrationReference = $"EXP-{DateTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
+            PreRegistrationReference = $"EXP-{AppTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
             VisitorType = VisitorType.PreRegistered,
             Status = VisitStatus.Expected,
             VisitDate = request.ExpectedDate,
@@ -333,17 +424,18 @@ public class VisitorService : IVisitorService
             HostEmployeeId = host.Id,
             PlantNumber = request.PlantNumber,
             OtherLocationText = request.OtherLocationText,
+            PurposeNotes = request.PurposeNotes,
             Notes = request.Notes,
             CreatedBy = user.Identity?.Name
         };
 
-        foreach (var pid in request.PurposeIds.Distinct())
+        foreach (var pid in purposeIds)
             visit.VisitPurposes.Add(new VisitorVisitPurpose { VisitPurposeId = pid });
-        foreach (var lid in request.LocationIds.Distinct())
+        foreach (var lid in locationIds)
             visit.VisitLocations.Add(new VisitorVisitLocation { LocationId = lid });
 
         _db.VisitorVisits.Add(visit);
-        await SaveNewVisitAsync(visit, visitor, settings.VisitorIdPrefix);
+        await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix);
 
         // Reminders are best-effort: a notify failure must not roll back the appointment.
         try
@@ -360,13 +452,117 @@ public class VisitorService : IVisitorService
 
     private async Task TryQueueAppointmentAckAsync(VisitorVisit visit, Visitor visitor, Employee host)
     {
-        var when = $"{visit.ExpectedDate:yyyy-MM-dd} {visit.ExpectedTime:HH:mm}";
-        var subject = $"Appointment scheduled: {visitor.FullName}";
-        var body = $"Expected visitor {visitor.FullName} ({visitor.CompanyName}) on {when}.";
-        if (!string.IsNullOrWhiteSpace(host.Email))
-            await _notifications.NotifyAsync("Email", host.Email, subject, body);
+        var whenLocal = visit.ExpectedDate.HasValue
+            ? visit.ExpectedDate.Value.ToDateTime(visit.ExpectedTime ?? TimeOnly.MinValue)
+            : AppTime.Now;
+        var ctx = new VisitMailContext(
+            VisitorName: visitor.FullName,
+            Salutation: SalutationFor(visitor.Gender),
+            VisitorEmail: visitor.Email,
+            Company: visitor.CompanyName ?? "",
+            VisitingPerson: host.FullName,
+            VisitingPersonEmail: host.Email,
+            VisitorNumber: visit.EntryNumber ?? visitor.VisitorNumber,
+            VisitNumber: visit.VisitNumber,
+            Location: visit.VisitLocations.Select(l => l.Location?.Name).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? "",
+            LocationId: visit.VisitLocations.Select(l => (Guid?)l.LocationId).FirstOrDefault(id => id.HasValue && id.Value != Guid.Empty),
+            Department: visit.Department?.Name ?? "",
+            Purpose: string.Join(", ", visit.VisitPurposes.Select(p => p.VisitPurpose?.Name).Where(n => !string.IsNullOrWhiteSpace(n))!),
+            MeetingMinutes: "",
+            MomentLocal: whenLocal);
+
+        // Reload navigation if missing (appointment create may not have included them).
+        if (string.IsNullOrWhiteSpace(ctx.Department) || string.IsNullOrWhiteSpace(ctx.Purpose) || string.IsNullOrWhiteSpace(ctx.Location))
+        {
+            var full = await _db.VisitorVisits.AsNoTracking()
+                .Include(v => v.Department)
+                .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
+                .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
+                .FirstOrDefaultAsync(v => v.Id == visit.Id);
+            if (full is not null)
+            {
+                ctx = BuildVisitMailContext(full, whenLocal) with
+                {
+                    VisitingPerson = host.FullName,
+                    VisitingPersonEmail = host.Email,
+                    VisitorName = visitor.FullName,
+                    VisitorEmail = visitor.Email,
+                    Company = visitor.CompanyName ?? "",
+                    VisitorNumber = visit.EntryNumber ?? visitor.VisitorNumber,
+                };
+            }
+        }
+
+        await _visitMail.SendAppointmentAsync(ctx);
         if (!string.IsNullOrWhiteSpace(host.UserId))
-            await _notifications.NotifyAsync("Push", host.UserId, subject, body);
+        {
+            var (subject, _) = MasterDataService.DefaultMailContent(MailContentKind.Appointment);
+            await _notifications.NotifyAsync("Push", host.UserId, subject.Replace("{{VisitorName}}", visitor.FullName),
+                $"Appointment: {visitor.FullName}");
+        }
+    }
+
+    private VisitMailContext BuildVisitMailContext(VisitorVisit visit, DateTime momentLocal)
+    {
+        var locationName = visit.VisitLocations?
+            .Select(l => l.Location?.Name)
+            .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n))
+            ?? "";
+        var locationId = visit.VisitLocations?
+            .Select(l => (Guid?)l.LocationId)
+            .FirstOrDefault(id => id.HasValue && id.Value != Guid.Empty);
+        var purpose = visit.VisitPurposes is null
+            ? ""
+            : string.Join(", ", visit.VisitPurposes
+                .Select(p => p.VisitPurpose?.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))!);
+
+        return new VisitMailContext(
+            VisitorName: visit.Visitor?.FullName ?? "",
+            Salutation: SalutationFor(visit.Visitor?.Gender),
+            VisitorEmail: visit.Visitor?.Email,
+            Company: visit.Visitor?.CompanyName ?? "",
+            VisitingPerson: visit.HostEmployee?.FullName ?? "",
+            VisitingPersonEmail: visit.HostEmployee?.Email,
+            VisitorNumber: visit.EntryNumber ?? visit.Visitor?.VisitorNumber ?? "",
+            VisitNumber: visit.VisitNumber,
+            Location: locationName,
+            LocationId: locationId,
+            Department: visit.Department?.Name ?? "",
+            Purpose: purpose,
+            MeetingMinutes: !string.IsNullOrWhiteSpace(visit.MeetingMinutes)
+                ? visit.MeetingMinutes.Trim()
+                : visit.MomNotRequired ? "Not required" : "",
+            MomentLocal: momentLocal);
+    }
+
+    private void QueueVisitMail(Guid tenantId, VisitMailContext ctx, MailContentKind kind)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                scope.ServiceProvider.GetRequiredService<ITenantContext>().Set(tenantId);
+                var mail = scope.ServiceProvider.GetRequiredService<IVisitMailService>();
+                switch (kind)
+                {
+                    case MailContentKind.CheckIn:
+                        await mail.SendCheckInAsync(ctx);
+                        break;
+                    case MailContentKind.CheckOut:
+                        await mail.SendCheckOutAsync(ctx);
+                        break;
+                    case MailContentKind.Appointment:
+                        await mail.SendAppointmentAsync(ctx);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Background {Kind} email failed for visit {Visit}", kind, ctx.VisitNumber);
+            }
+        });
     }
 
     public async Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes)
@@ -378,13 +574,31 @@ public class VisitorService : IVisitorService
         var total = await query.CountAsync();
         var page = Math.Max(1, request.Page);
         var size = Math.Clamp(request.PageSize, 1, 100);
-        var pageQuery = query
-            .OrderByDescending(v => v.CreatedAt)
+        var pageQuery = ApplySort(query, request.SortBy, request.SortDir)
             .Skip((page - 1) * size)
             .Take(size);
 
         var items = await ProjectListAsync(pageQuery, warningMinutes);
         return new PagedResult<VisitorListItemDto>(items, total, page, size);
+    }
+
+    private static IQueryable<VisitorVisit> ApplySort(IQueryable<VisitorVisit> query, string? sortBy, string? sortDir)
+    {
+        var asc = string.Equals(sortDir, "asc", StringComparison.OrdinalIgnoreCase);
+        IOrderedQueryable<VisitorVisit> ordered = (sortBy ?? string.Empty).ToLowerInvariant() switch
+        {
+            "visitor" => asc ? query.OrderBy(v => v.Visitor.FullName) : query.OrderByDescending(v => v.Visitor.FullName),
+            "company" => asc ? query.OrderBy(v => v.Visitor.CompanyName) : query.OrderByDescending(v => v.Visitor.CompanyName),
+            "host" => asc ? query.OrderBy(v => v.HostEmployee.FullName) : query.OrderByDescending(v => v.HostEmployee.FullName),
+            "date" => asc
+                ? query.OrderBy(v => v.VisitDate).ThenBy(v => v.VisitTime)
+                : query.OrderByDescending(v => v.VisitDate).ThenByDescending(v => v.VisitTime),
+            "status" => asc ? query.OrderBy(v => v.Status) : query.OrderByDescending(v => v.Status),
+            "checkout" => asc ? query.OrderBy(v => v.CheckOutAt) : query.OrderByDescending(v => v.CheckOutAt),
+            _ => asc ? query.OrderBy(v => v.CreatedAt) : query.OrderByDescending(v => v.CreatedAt),
+        };
+        // Stable tiebreaker so rows never jump between pages.
+        return ordered.ThenByDescending(v => v.CreatedAt).ThenBy(v => v.Id);
     }
 
     public Task<VisitorDetailDto?> GetAsync(Guid visitId, ClaimsPrincipal user, string encryptionKey) =>
@@ -435,9 +649,14 @@ public class VisitorService : IVisitorService
             PreRegistrationReference = dto.PreRegistrationReference,
             PassCode = dto.PassCode,
             NumberOfPersons = dto.NumberOfPersons,
+            HasMeetingMinutes = dto.HasMeetingMinutes,
+            MomNotRequired = dto.MomNotRequired,
+            MomNotRequiredBy = dto.MomNotRequiredBy,
+            MomNotRequiredAt = dto.MomNotRequiredAt,
             Intercom = visit.HostIntercom,
             PurposeNotes = visit.PurposeNotes,
             Notes = visit.Notes,
+            MeetingMinutes = visit.MeetingMinutes,
             PlantNumber = visit.PlantNumber,
             OtherLocationText = visit.OtherLocationText,
             IdTypeName = doc?.IdType.Name,
@@ -505,13 +724,13 @@ public class VisitorService : IVisitorService
         approval.ActionAt = DateTime.UtcNow;
         if (approval.Id == Guid.Empty) _db.Approvals.Add(approval);
         await SaveVisitLifecycleAsync();
+        await _passNumbers.ReleaseHoldAsync(visit.PassNumber);
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
     }
 
     public async Task<PassDto> CheckInAsync(Guid visitId, CheckInRequest request, ClaimsPrincipal user, string webRoot)
     {
-        _ = request;
         var visit = await BaseVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId)
             ?? throw new InvalidOperationException("Visit not found.");
 
@@ -519,8 +738,21 @@ public class VisitorService : IVisitorService
         EnsureCheckInAllowed(visit, settings);
         await EnsureVisitorNotAlreadyInsideAsync(visit.VisitorId, excludeVisitId: visit.Id);
 
+        var hasPhoto = await _db.VisitorPhotos.AsNoTracking()
+            .AnyAsync(p => p.VisitorId == visit.VisitorId && p.IsPrimary);
+        if (!hasPhoto && string.IsNullOrWhiteSpace(request.PhotoBase64))
+            throw new InvalidOperationException("Visitor face photo is required before check-in.");
+
+        if (!string.IsNullOrWhiteSpace(request.PhotoBase64))
+        {
+            await SavePhotoAsync(visit.VisitorId, visit.Id, request.PhotoBase64, webRoot, user.Identity?.Name);
+            await EnrolFaceAsync(visit.VisitorId, request.PhotoBase64, user);
+        }
+
+        var occurredAt = ResolveClientOccurredAt(request.OccurredAt);
+
         visit.Status = VisitStatus.Inside;
-        visit.CheckInAt = DateTime.UtcNow;
+        visit.CheckInAt = occurredAt;
         visit.CheckedInByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         if (user.IsInRole(AppRoles.Security))
             visit.SecurityCheckInUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -535,23 +767,24 @@ public class VisitorService : IVisitorService
                 VisitorVisitId = visit.Id,
                 PassCode = ResolvePassCode(visit),
                 IssuedByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier),
-                ValidUntil = DateTime.UtcNow.AddHours(settings.VisitorPassValidityHours),
+                ValidUntil = occurredAt.AddHours(settings.VisitorPassValidityHours),
                 IsActive = true
             };
             _db.VisitorPasses.Add(pass);
             visit.Passes.Add(pass);
         }
         pass.PrintCount += 1;
-        pass.LastPrintedAt = DateTime.UtcNow;
+        pass.LastPrintedAt = occurredAt;
 
         await SaveVisitLifecycleAsync();
+
+        QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckIn);
 
         return await BuildPassDto(visit, pass, webRoot);
     }
 
     public async Task<VisitorListItemDto> CheckOutAsync(Guid visitId, CheckOutRequest request, ClaimsPrincipal user)
     {
-        _ = request;
         var visit = await _db.VisitorVisits
             .Include(v => v.Visitor)
             .Include(v => v.Department)
@@ -563,10 +796,24 @@ public class VisitorService : IVisitorService
             ?? throw new InvalidOperationException("Visit not found.");
 
         EnsureCheckOutAllowed(visit);
-        await _feedback.EnsureFeedbackCompleteAsync(visitId);
+
+        if (request.SkipFeedback)
+        {
+            if (!user.IsInRole(AppRoles.SuperAdmin))
+                throw new UnauthorizedAccessException("Only SuperAdmin can perform manual check-out.");
+        }
+        else
+        {
+            await _feedback.EnsureFeedbackCompleteAsync(visitId);
+        }
+
+        var occurredAt = ResolveClientOccurredAt(request.OccurredAt);
+        if (visit.CheckInAt.HasValue && occurredAt < visit.CheckInAt.Value)
+            occurredAt = visit.CheckInAt.Value;
 
         visit.Status = VisitStatus.CheckedOut;
-        visit.CheckOutAt = DateTime.UtcNow;
+        visit.CheckOutAt = occurredAt;
+        visit.IsManualCheckOut = request.SkipFeedback;
         visit.CheckedOutByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         visit.UpdatedAt = DateTime.UtcNow;
         visit.UpdatedBy = user.Identity?.Name;
@@ -575,52 +822,315 @@ public class VisitorService : IVisitorService
             pass.IsActive = false;
 
         await SaveVisitLifecycleAsync();
+        await _passNumbers.ReleaseHoldAsync(visit.PassNumber);
 
-        var visitorName = visit.Visitor.FullName;
-        var visitorEmail = visit.Visitor.Email;
-        var visitMomentLocal = visit.CheckInAt.HasValue
-            ? visit.CheckInAt.Value.ToLocalTime()
-            : DateTime.Now;
-
-        // Send thank-you mail in the background so checkout never waits on SMTP.
-        // The tenant is captured here and re-seeded into the background scope: that scope has no
-        // request to resolve it from, and an unseeded scope must never fall back to another tenant.
-        var notificationTenantId = visit.TenantId;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await using var scope = _scopeFactory.CreateAsyncScope();
-                scope.ServiceProvider.GetRequiredService<ITenantContext>().Set(notificationTenantId);
-                var mail = scope.ServiceProvider.GetRequiredService<INotificationService>();
-                await mail.SendVisitorThankYouEmailAsync(visitorName, visitorEmail, visitMomentLocal);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Background thank-you email failed for {Visitor}", visitorName);
-            }
-        });
+        // Without MoM the check-out email is deferred until the host saves minutes (SaveMeetingMinutesAsync)
+        // or someone marks them not required (SetMomNotRequiredAsync).
+        if (!IsCheckOutMailWaitingForMom(visit))
+            QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
 
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
     }
 
-    public async Task<IReadOnlyList<VisitorListItemDto>> GetInsideAsync(int warningMinutes)
+    public async Task<int> AutoCheckOutStaleVisitsAsync(TimeSpan maxStay, CancellationToken cancellationToken = default)
     {
-        return await ProjectListAsync(
-            _db.VisitorVisits.AsNoTracking().Where(v => v.Status == VisitStatus.Inside).OrderBy(v => v.CheckInAt),
-            warningMinutes);
+        if (maxStay <= TimeSpan.Zero)
+            maxStay = TimeSpan.FromHours(24);
+
+        var cutoff = DateTime.UtcNow - maxStay;
+        var staleIds = await _db.VisitorVisits.IgnoreQueryFilters()
+            .Where(v => v.Status == VisitStatus.Inside
+                        && v.CheckInAt != null
+                        && v.CheckInAt <= cutoff)
+            .OrderBy(v => v.CheckInAt)
+            .Select(v => v.Id)
+            .Take(200)
+            .ToListAsync(cancellationToken);
+
+        var completed = 0;
+        foreach (var visitId in staleIds)
+        {
+            try
+            {
+                var visit = await _db.VisitorVisits.IgnoreQueryFilters()
+                    .Include(v => v.Visitor)
+                    .Include(v => v.Department)
+                    .Include(v => v.HostEmployee)
+                    .Include(v => v.Passes)
+                    .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
+                    .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
+                    .FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken);
+
+                if (visit is null || visit.Status != VisitStatus.Inside || visit.CheckInAt is null)
+                    continue;
+                if (visit.CheckInAt > cutoff)
+                    continue;
+
+                _tenant.Set(visit.TenantId);
+
+                var occurredAt = DateTime.UtcNow;
+                visit.Status = VisitStatus.CheckedOut;
+                visit.CheckOutAt = occurredAt;
+                visit.IsManualCheckOut = true;
+                visit.CheckedOutByUserId = null;
+                visit.UpdatedAt = DateTime.UtcNow;
+                visit.UpdatedBy = "system:auto-checkout-24h";
+                const string autoNote = "Auto check-out after 24 hours without exit.";
+                visit.Notes = string.IsNullOrWhiteSpace(visit.Notes)
+                    ? autoNote
+                    : $"{visit.Notes.Trim()} | {autoNote}";
+                if (visit.Notes.Length > 1000)
+                    visit.Notes = visit.Notes[..1000];
+
+                foreach (var pass in visit.Passes.Where(p => p.IsActive))
+                    pass.IsActive = false;
+
+                await SaveVisitLifecycleAsync();
+                await _passNumbers.ReleaseHoldAsync(visit.PassNumber);
+
+                if (!IsCheckOutMailWaitingForMom(visit))
+                    QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
+                completed++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Auto check-out failed for visit {VisitId}", visitId);
+            }
+        }
+
+        return completed;
     }
 
-    public async Task<IReadOnlyList<VisitorListItemDto>> GetExpectedAsync(DateOnly? date = null)
+    public async Task<VisitorDetailDto> SaveMeetingMinutesAsync(
+        Guid visitId,
+        SaveMeetingMinutesRequest request,
+        ClaimsPrincipal user)
     {
-        var d = date ?? DateOnly.FromDateTime(DateTime.Now);
+        var visit = await BaseVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId)
+            ?? throw new InvalidOperationException("Visit not found.");
+
+        if (visit.Status != VisitStatus.Inside && visit.Status != VisitStatus.CheckedOut)
+            throw new InvalidOperationException("Meeting minutes can only be entered after the visitor has checked in.");
+
+        EnsureHostAuthorization(visit, user);
+
+        var text = (request.MeetingMinutes ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(text))
+            throw new InvalidOperationException("Meeting minutes are required.");
+        if (text.Length > 4000)
+            throw new InvalidOperationException("Meeting minutes must be at most 4000 characters.");
+
+        var checkOutMailPending = visit.Status == VisitStatus.CheckedOut && IsCheckOutMailWaitingForMom(visit);
+
+        visit.MeetingMinutes = text;
+        visit.UpdatedAt = DateTime.UtcNow;
+        visit.UpdatedBy = user.Identity?.Name;
+        await SaveVisitLifecycleAsync();
+
+        // Check-out happened without MoM, so its email was held back; send it now with the minutes.
+        if (checkOutMailPending)
+        {
+            var checkedOutAt = AppTime.ToLocal(AsUtc(visit.CheckOutAt) ?? DateTime.UtcNow);
+            QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, checkedOutAt), MailContentKind.CheckOut);
+        }
+
+        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+    }
+
+    public async Task<VisitorDetailDto> SetMomNotRequiredAsync(Guid visitId, SetMomNotRequiredRequest request, ClaimsPrincipal user)
+    {
+        var visit = await BaseVisitQuery().FirstOrDefaultAsync(v => v.Id == visitId)
+            ?? throw new InvalidOperationException("Visit not found.");
+
+        if (visit.Status != VisitStatus.Inside && visit.Status != VisitStatus.CheckedOut)
+            throw new InvalidOperationException("This can only be set after the visitor has checked in.");
+
+        await EnsureCanViewVisitAsync(user, visit);
+
+        if (request.NotRequired == visit.MomNotRequired)
+            return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+
+        if (request.NotRequired && !string.IsNullOrWhiteSpace(visit.MeetingMinutes))
+            throw new InvalidOperationException("Minutes of meeting have already been saved for this visit.");
+        if (!request.NotRequired && visit.Status == VisitStatus.CheckedOut)
+            throw new InvalidOperationException("The visitor has checked out and the check-out email has already been sent.");
+
+        var sendHeldMail = request.NotRequired && visit.Status == VisitStatus.CheckedOut && IsCheckOutMailWaitingForMom(visit);
+
+        visit.MomNotRequired = request.NotRequired;
+        visit.MomNotRequiredBy = request.NotRequired ? user.Identity?.Name : null;
+        visit.MomNotRequiredAt = request.NotRequired ? DateTime.UtcNow : null;
+        visit.UpdatedAt = DateTime.UtcNow;
+        visit.UpdatedBy = user.Identity?.Name;
+        await SaveVisitLifecycleAsync();
+
+        if (sendHeldMail)
+        {
+            var checkedOutAt = AppTime.ToLocal(AsUtc(visit.CheckOutAt) ?? DateTime.UtcNow);
+            QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, checkedOutAt), MailContentKind.CheckOut);
+        }
+
+        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+    }
+
+    private static bool IsCheckOutMailWaitingForMom(VisitorVisit visit) =>
+        string.IsNullOrWhiteSpace(visit.MeetingMinutes) && !visit.MomNotRequired;
+
+    public async Task<IReadOnlyList<VisitorListItemDto>> GetInsideAsync(int warningMinutes, ClaimsPrincipal? user = null)
+    {
+        var query = _db.VisitorVisits.AsNoTracking().Where(v => v.Status == VisitStatus.Inside);
+        var hostEmployeeIds = user is null ? null : await HostOnlyEmployeeIdsAsync(user);
+        if (hostEmployeeIds is not null)
+            query = query.Where(v => hostEmployeeIds.Contains(v.HostEmployeeId));
+        return await ProjectListAsync(query.OrderBy(v => v.CheckInAt), warningMinutes);
+    }
+
+    public async Task<IReadOnlyList<VisitorListItemDto>> GetExpectedAsync(DateOnly? date = null, ClaimsPrincipal? user = null)
+    {
+        var d = date ?? AppTime.Today;
         var settings = await _settings.GetAsync();
-        return await ProjectListAsync(
-            _db.VisitorVisits.AsNoTracking()
-                .Where(v => v.Status == VisitStatus.Expected && (v.ExpectedDate == d || v.VisitDate == d))
-                .OrderBy(v => v.ExpectedTime),
-            settings.MaxVisitDurationWarningMinutes);
+        var query = _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Status == VisitStatus.Expected && (v.ExpectedDate == d || v.VisitDate == d));
+        var hostEmployeeIds = user is null ? null : await HostOnlyEmployeeIdsAsync(user);
+        if (hostEmployeeIds is not null)
+            query = query.Where(v => hostEmployeeIds.Contains(v.HostEmployeeId));
+        return await ProjectListAsync(query.OrderBy(v => v.ExpectedTime), settings.MaxVisitDurationWarningMinutes);
+    }
+
+    public async Task<IReadOnlyList<BookingMatchDto>> FindTodaysBookingsAsync(string? phone, Guid? visitorId)
+    {
+        var normalizedPhone = TryNormalizePhone(phone);
+        if (normalizedPhone is null && visitorId is null) return [];
+
+        var rows = await TodaysBookingsFor(normalizedPhone, visitorId)
+            .AsNoTracking()
+            .OrderBy(v => v.ExpectedTime)
+            .Take(10)
+            .Select(v => new
+            {
+                v.Id,
+                v.VisitorId,
+                v.VisitNumber,
+                v.Visitor.FullName,
+                v.Visitor.CompanyName,
+                v.Visitor.Gender,
+                v.Visitor.Phone,
+                v.Visitor.Email,
+                v.HostEmployeeId,
+                HostName = v.HostEmployee.FullName,
+                v.DepartmentId,
+                DepartmentName = v.Department.Name,
+                v.ExpectedTime,
+                v.VisitTime,
+                Purposes = v.VisitPurposes.Select(p => new { p.VisitPurposeId, p.VisitPurpose.Name }).ToList(),
+                v.PurposeNotes,
+                v.NumberOfPersons
+            })
+            .ToListAsync();
+
+        return rows.Select(v => new BookingMatchDto
+        {
+            VisitId = v.Id,
+            VisitorId = v.VisitorId,
+            VisitNumber = v.VisitNumber,
+            VisitorName = v.FullName,
+            CompanyName = v.CompanyName,
+            Gender = v.Gender,
+            Phone = v.Phone,
+            Email = v.Email,
+            HostEmployeeId = v.HostEmployeeId,
+            HostName = v.HostName,
+            DepartmentId = v.DepartmentId,
+            DepartmentName = v.DepartmentName,
+            ExpectedTime = v.ExpectedTime ?? v.VisitTime,
+            PurposeIds = v.Purposes.Select(p => p.VisitPurposeId).ToList(),
+            Purposes = v.Purposes.Select(p => p.Name).ToList(),
+            PurposeNotes = v.PurposeNotes,
+            NumberOfPersons = v.NumberOfPersons
+        }).ToList();
+    }
+
+    public async Task<VisitorPhoneLookupDto?> LookupByPhoneAsync(string? phone)
+    {
+        var normalizedPhone = TryNormalizePhone(phone);
+        if (normalizedPhone is null) return null;
+
+        var visitorId = await VisitorsByPhone(normalizedPhone).Select(v => (Guid?)v.Id).FirstOrDefaultAsync();
+        if (visitorId is null) return null;
+
+        var visitor = await _db.Visitors.AsNoTracking()
+            .Where(v => v.Id == visitorId.Value)
+            .Select(v => new VisitorPhoneLookupDto
+            {
+                VisitorId = v.Id,
+                VisitorNumber = v.VisitorNumber,
+                VisitorName = v.FullName,
+                CompanyName = v.CompanyName,
+                Gender = v.Gender,
+                Phone = v.Phone,
+                Email = v.Email,
+                TotalVisits = v.Visits.Count(x => x.Status != VisitStatus.Expected && x.Status != VisitStatus.Cancelled),
+                LastVisitDate = v.Visits
+                    .Where(x => x.CheckInAt != null)
+                    .OrderByDescending(x => x.VisitDate)
+                    .Select(x => (DateOnly?)x.VisitDate)
+                    .FirstOrDefault()
+            })
+            .FirstAsync();
+
+        var today = AppTime.Today;
+        visitor.OpenBookings = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Status == VisitStatus.Expected
+                        && v.Visitor.Phone == normalizedPhone
+                        && (v.ExpectedDate ?? v.VisitDate) >= today)
+            .OrderBy(v => v.ExpectedDate ?? v.VisitDate).ThenBy(v => v.ExpectedTime)
+            .Take(10)
+            .Select(v => new OpenBookingDto
+            {
+                VisitId = v.Id,
+                VisitNumber = v.VisitNumber,
+                Date = v.ExpectedDate ?? v.VisitDate,
+                Time = v.ExpectedTime ?? v.VisitTime,
+                HostEmployeeId = v.HostEmployeeId,
+                HostName = v.HostEmployee.FullName
+            })
+            .ToListAsync();
+        return visitor;
+    }
+
+    /// <summary>
+    /// Visitor records with this mobile number, best first: one with a photo (so face matching lands on
+    /// the same record), then the one with the most visits.
+    /// </summary>
+    private IQueryable<Visitor> VisitorsByPhone(string normalizedPhone) =>
+        _db.Visitors
+            .Where(v => v.Phone == normalizedPhone)
+            .OrderByDescending(v => v.Photos.Any())
+            .ThenByDescending(v => v.Visits.Count)
+            .ThenBy(v => v.CreatedAt);
+
+    /// <summary>Today's still-open bookings for a visitor, matched by mobile number or visitor record.</summary>
+    private IQueryable<VisitorVisit> TodaysBookingsFor(string? normalizedPhone, Guid? visitorId)
+    {
+        var today = AppTime.Today;
+        return _db.VisitorVisits
+            .Where(v => v.Status == VisitStatus.Expected && (v.ExpectedDate == today || v.VisitDate == today))
+            .Where(v => (normalizedPhone != null && v.Visitor.Phone == normalizedPhone)
+                        || (visitorId != null && v.VisitorId == visitorId));
+    }
+
+    private static string? TryNormalizePhone(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            return NormalizeTenDigitPhone(raw);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public async Task<IReadOnlyList<VisitorListItemDto>> GetPendingApprovalsAsync(ClaimsPrincipal user)
@@ -702,17 +1212,30 @@ public class VisitorService : IVisitorService
 
   public async Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes)
     {
-        var today = DateOnly.FromDateTime(DateTime.Now);
+        var today = AppTime.Today;
         var fromDate = today.AddDays(-13);
-        var utcToday = DateTime.UtcNow.Date;
+        var todayStartUtc = AppTime.StartOfDayUtc(today);
+        var tomorrowStartUtc = AppTime.StartOfDayUtc(today.AddDays(1));
 
-        var summary = await _db.VisitorVisits.AsNoTracking()
+        var hostEmployeeIds = await HostOnlyEmployeeIdsAsync(user);
+        var visits = _db.VisitorVisits.AsNoTracking();
+        var visitPurposes = _db.VisitorVisitPurposes.AsNoTracking();
+        var visitLocations = _db.VisitorVisitLocations.AsNoTracking();
+        if (hostEmployeeIds is not null)
+        {
+            visits = visits.Where(v => hostEmployeeIds.Contains(v.HostEmployeeId));
+            visitPurposes = visitPurposes.Where(p => hostEmployeeIds.Contains(p.VisitorVisit.HostEmployeeId));
+            visitLocations = visitLocations.Where(l => hostEmployeeIds.Contains(l.VisitorVisit.HostEmployeeId));
+        }
+
+        var summary = await visits
             .Where(v => v.VisitDate >= fromDate)
             .Select(v => new
             {
                 v.VisitDate,
                 v.Status,
                 v.CheckOutAt,
+                v.IsManualCheckOut,
                 v.ExpectedDate,
                 DepartmentName = v.Department.Name
             })
@@ -720,7 +1243,14 @@ public class VisitorService : IVisitorService
 
         var todayVisits = summary.Where(v => v.VisitDate == today).ToList();
 
-        var purposePoints = await _db.VisitorVisitPurposes.AsNoTracking()
+        // By check-out time, not visit date, so these match the Visitors list "checked out today" filters.
+        var checkedOutToday = await visits
+            .Where(v => v.Status == VisitStatus.CheckedOut
+                && v.CheckOutAt >= todayStartUtc && v.CheckOutAt < tomorrowStartUtc)
+            .Select(v => v.IsManualCheckOut)
+            .ToListAsync();
+
+        var purposePoints = await visitPurposes
             .Where(p => p.VisitorVisit.VisitDate == today)
             .GroupBy(p => p.VisitPurpose.Name)
             .Select(g => new ChartPointDto { Label = g.Key, Value = g.Count() })
@@ -728,20 +1258,33 @@ public class VisitorService : IVisitorService
             .Take(10)
             .ToListAsync();
 
-        var locationPoints = await _db.VisitorVisitLocations.AsNoTracking()
+        var locationPoints = await visitLocations
             .Where(l => l.VisitorVisit.VisitDate == today)
             .GroupBy(l => l.Location.Name)
             .Select(g => new ChartPointDto { Label = g.Key, Value = g.Count() })
             .OrderByDescending(x => x.Value)
             .ToListAsync();
 
-        var recentIds = await _db.VisitorVisits.AsNoTracking()
+        var recentIds = await visits
             .OrderByDescending(v => v.CreatedAt).Take(8).Select(v => v.Id).ToListAsync();
-        var insideIds = await _db.VisitorVisits.AsNoTracking()
+        var insideIds = await visits
             .Where(v => v.Status == VisitStatus.Inside)
             .OrderBy(v => v.CheckInAt).Take(8).Select(v => v.Id).ToListAsync();
 
-        var detailIds = recentIds.Concat(insideIds).Distinct().ToList();
+        var withoutMom = visits.Where(v =>
+            v.Status == VisitStatus.CheckedOut && (v.MeetingMinutes == null || v.MeetingMinutes == ""));
+        var momPending = withoutMom.Where(v => !v.MomNotRequired);
+        var momPendingCount = await momPending.CountAsync();
+        var momPendingIds = await momPending
+            .OrderByDescending(v => v.CheckOutAt).Take(10).Select(v => v.Id).ToListAsync();
+
+        var isSuperAdmin = user.IsInRole(AppRoles.SuperAdmin);
+        var withoutMomCount = isSuperAdmin ? await withoutMom.CountAsync() : 0;
+        var withoutMomIds = isSuperAdmin
+            ? await withoutMom.OrderByDescending(v => v.CheckOutAt).Take(15).Select(v => v.Id).ToListAsync()
+            : [];
+
+        var detailIds = recentIds.Concat(insideIds).Concat(momPendingIds).Concat(withoutMomIds).Distinct().ToList();
         var detailItems = detailIds.Count == 0
             ? []
             : await ProjectListAsync(_db.VisitorVisits.AsNoTracking().Where(v => detailIds.Contains(v.Id)), warningMinutes);
@@ -759,10 +1302,8 @@ public class VisitorService : IVisitorService
             ExpectedToday = summary.Count(v =>
                 v.Status == VisitStatus.Expected && (v.ExpectedDate == today || v.VisitDate == today)),
             PendingApprovals = 0,
-            CheckedOutToday = summary.Count(v =>
-                v.Status == VisitStatus.CheckedOut &&
-                v.CheckOutAt.HasValue &&
-                v.CheckOutAt.Value.Date == utcToday),
+            CheckedOutToday = checkedOutToday.Count,
+            ManualCheckOutsToday = checkedOutToday.Count(manual => manual),
             ByDepartment = todayVisits.GroupBy(v => v.DepartmentName)
                 .Select(g => new ChartPointDto { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(x => x.Value)
@@ -777,7 +1318,12 @@ public class VisitorService : IVisitorService
                 }).ToList(),
             RecentVisitors = recentIds.Select(MapId).ToList(),
             PendingApprovalItems = [],
-            CurrentlyInsideItems = insideIds.Select(MapId).ToList()
+            CurrentlyInsideItems = insideIds.Select(MapId).ToList(),
+            IsHostView = hostEmployeeIds is not null,
+            MomPendingCount = momPendingCount,
+            MomPendingItems = momPendingIds.Select(MapId).ToList(),
+            CheckedOutWithoutMomCount = withoutMomCount,
+            CheckedOutWithoutMomItems = withoutMomIds.Select(MapId).ToList()
         };
     }
 
@@ -788,10 +1334,11 @@ public class VisitorService : IVisitorService
         {
             v.Id,
             v.VisitorId,
-            VisitorNumber = v.Visitor.VisitorNumber,
+            VisitorNumber = v.EntryNumber ?? v.Visitor.VisitorNumber,
             v.VisitNumber,
             VisitorName = v.Visitor.FullName,
             CompanyName = v.Visitor.CompanyName,
+            Gender = v.Visitor.Gender,
             Phone = v.Visitor.Phone,
             Email = v.Visitor.Email,
             HostName = v.HostEmployee.FullName,
@@ -810,6 +1357,11 @@ public class VisitorService : IVisitorService
             v.CheckOutAt,
             v.PreRegistrationReference,
             v.NumberOfPersons,
+            v.MeetingMinutes,
+            v.MomNotRequired,
+            v.MomNotRequiredBy,
+            v.MomNotRequiredAt,
+            v.IsManualCheckOut,
             PassCode = v.Passes.OrderByDescending(p => p.IssuedAt).Select(p => p.PassCode).FirstOrDefault()
         }).ToListAsync();
 
@@ -832,6 +1384,8 @@ public class VisitorService : IVisitorService
                 VisitNumber = v.VisitNumber,
                 VisitorName = v.VisitorName,
                 CompanyName = v.CompanyName,
+                Gender = v.Gender,
+                Salutation = SalutationFor(v.Gender),
                 Phone = v.Phone,
                 Email = v.Email,
                 HostName = v.HostName,
@@ -843,13 +1397,18 @@ public class VisitorService : IVisitorService
                 Purposes = v.Purposes,
                 Locations = v.Locations,
                 PhotoUrl = string.IsNullOrWhiteSpace(v.PhotoPath) ? null : _media.ToPublicApiPath(Path.GetFileName(v.PhotoPath)),
-                CheckInAt = v.CheckInAt,
-                CheckOutAt = v.CheckOutAt,
+                CheckInAt = AsUtc(v.CheckInAt),
+                CheckOutAt = AsUtc(v.CheckOutAt),
                 DurationMinutes = duration,
                 IsLongStay = longStay,
                 PreRegistrationReference = v.PreRegistrationReference,
                 PassCode = v.PassCode,
-                NumberOfPersons = v.NumberOfPersons < 1 ? 1 : v.NumberOfPersons
+                NumberOfPersons = v.NumberOfPersons < 1 ? 1 : v.NumberOfPersons,
+                HasMeetingMinutes = !string.IsNullOrWhiteSpace(v.MeetingMinutes),
+                MomNotRequired = v.MomNotRequired,
+                MomNotRequiredBy = v.MomNotRequiredBy,
+                MomNotRequiredAt = AsUtc(v.MomNotRequiredAt),
+                IsManualCheckOut = v.IsManualCheckOut
             };
         }).ToList();
     }
@@ -886,7 +1445,7 @@ public class VisitorService : IVisitorService
 
     private static void ApplyFilters(ref IQueryable<VisitorVisit> query, VisitorSearchRequest request)
     {
-        var today = DateOnly.FromDateTime(DateTime.Now);
+        var today = AppTime.Today;
         if (!string.IsNullOrWhiteSpace(request.QuickFilter))
         {
             switch (request.QuickFilter.ToLowerInvariant())
@@ -896,11 +1455,26 @@ public class VisitorService : IVisitorService
                 case "yesterday":
                     query = query.Where(v => v.VisitDate == today.AddDays(-1)); break;
                 case "thisweek":
-                    var start = today.AddDays(-(int)DateTime.Now.DayOfWeek);
+                    var start = today.AddDays(-(int)today.DayOfWeek);
                     query = query.Where(v => v.VisitDate >= start && v.VisitDate <= today); break;
                 case "thismonth":
                     var monthStart = new DateOnly(today.Year, today.Month, 1);
                     query = query.Where(v => v.VisitDate >= monthStart && v.VisitDate <= today); break;
+                case "approved":
+                    query = query.Where(v => v.Status == VisitStatus.Approved); break;
+                case "inside":
+                    query = query.Where(v => v.Status == VisitStatus.Inside); break;
+                case "checkedouttoday":
+                case "manualcheckouttoday":
+                    var dayStartUtc = AppTime.StartOfDayUtc(today);
+                    var nextDayStartUtc = AppTime.StartOfDayUtc(today.AddDays(1));
+                    query = query.Where(v => v.Status == VisitStatus.CheckedOut
+                        && v.CheckOutAt >= dayStartUtc && v.CheckOutAt < nextDayStartUtc);
+                    if (request.QuickFilter.Equals("manualcheckouttoday", StringComparison.OrdinalIgnoreCase))
+                        query = query.Where(v => v.IsManualCheckOut);
+                    break;
+                case "manualcheckout":
+                    query = query.Where(v => v.IsManualCheckOut); break;
             }
         }
 
@@ -915,7 +1489,9 @@ public class VisitorService : IVisitorService
         if (!string.IsNullOrWhiteSpace(request.Phone))
             query = query.Where(v => v.Visitor.Phone != null && v.Visitor.Phone.Contains(request.Phone));
         if (!string.IsNullOrWhiteSpace(request.VisitorNumber))
-            query = query.Where(v => v.VisitNumber.Contains(request.VisitorNumber) || v.Visitor.VisitorNumber.Contains(request.VisitorNumber));
+            query = query.Where(v => v.VisitNumber.Contains(request.VisitorNumber)
+                || v.Visitor.VisitorNumber.Contains(request.VisitorNumber)
+                || (v.EntryNumber != null && v.EntryNumber.Contains(request.VisitorNumber)));
         if (!string.IsNullOrWhiteSpace(request.Host))
             query = query.Where(v => v.HostEmployee.FullName.Contains(request.Host));
         if (!string.IsNullOrWhiteSpace(request.Query))
@@ -927,6 +1503,7 @@ public class VisitorService : IVisitorService
                 (v.Visitor.Phone != null && v.Visitor.Phone.Contains(q)) ||
                 v.VisitNumber.Contains(q) ||
                 v.Visitor.VisitorNumber.Contains(q) ||
+                (v.EntryNumber != null && v.EntryNumber.Contains(q)) ||
                 v.HostEmployee.FullName.Contains(q) ||
                 (v.PreRegistrationReference != null && v.PreRegistrationReference.Contains(q)));
         }
@@ -950,10 +1527,12 @@ public class VisitorService : IVisitorService
         {
             VisitId = visit.Id,
             VisitorId = visit.VisitorId,
-            VisitorNumber = visit.Visitor.VisitorNumber,
+            VisitorNumber = visit.EntryNumber ?? visit.Visitor.VisitorNumber,
             VisitNumber = visit.VisitNumber,
             VisitorName = visit.Visitor.FullName,
             CompanyName = visit.Visitor.CompanyName,
+            Gender = visit.Visitor.Gender,
+            Salutation = SalutationFor(visit.Visitor.Gender),
             Phone = visit.Visitor.Phone,
             Email = visit.Visitor.Email,
             HostName = visit.HostEmployee.FullName,
@@ -965,13 +1544,18 @@ public class VisitorService : IVisitorService
             Purposes = visit.VisitPurposes.Select(p => p.VisitPurpose.Name).ToList(),
             Locations = visit.VisitLocations.Select(l => l.Location.Name).ToList(),
             PhotoUrl = photo is null ? null : _media.ToPublicApiPath(Path.GetFileName(photo.FilePath)),
-            CheckInAt = visit.CheckInAt,
-            CheckOutAt = visit.CheckOutAt,
+            CheckInAt = AsUtc(visit.CheckInAt),
+            CheckOutAt = AsUtc(visit.CheckOutAt),
             DurationMinutes = duration,
             IsLongStay = longStay,
             PreRegistrationReference = visit.PreRegistrationReference,
             PassCode = visit.Passes.OrderByDescending(p => p.IssuedAt).FirstOrDefault()?.PassCode,
-            NumberOfPersons = visit.NumberOfPersons < 1 ? 1 : visit.NumberOfPersons
+            NumberOfPersons = visit.NumberOfPersons < 1 ? 1 : visit.NumberOfPersons,
+            HasMeetingMinutes = !string.IsNullOrWhiteSpace(visit.MeetingMinutes),
+            MomNotRequired = visit.MomNotRequired,
+            MomNotRequiredBy = visit.MomNotRequiredBy,
+            MomNotRequiredAt = AsUtc(visit.MomNotRequiredAt),
+            IsManualCheckOut = visit.IsManualCheckOut
         };
     }
 
@@ -979,6 +1563,8 @@ public class VisitorService : IVisitorService
     {
         var settings = await _settings.GetAsync();
         var item = MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
+        var brandLocationId = visit.VisitLocations.Select(l => (Guid?)l.LocationId).FirstOrDefault();
+        var brand = brandLocationId is null ? settings : await _settings.GetAsync(brandLocationId);
         return new PassDto
         {
             PassId = pass.Id,
@@ -993,7 +1579,9 @@ public class VisitorService : IVisitorService
             VisitNumber = item.VisitNumber,
             CheckInAt = item.CheckInAt,
             PhotoUrl = item.PhotoUrl,
-            Status = item.StatusLabel
+            Status = item.StatusLabel,
+            BrandCompanyName = brand.CompanyName,
+            BrandLogoPath = brand.LogoPath
         };
     }
 
@@ -1047,6 +1635,7 @@ public class VisitorService : IVisitorService
                 v.VisitorNumber,
                 v.FullName,
                 v.CompanyName,
+                v.Gender,
                 v.Phone,
                 v.Email,
                 TotalVisits = v.Visits.Count,
@@ -1067,6 +1656,7 @@ public class VisitorService : IVisitorService
             VisitorNumber = visitor.VisitorNumber,
             VisitorName = visitor.FullName,
             CompanyName = visitor.CompanyName,
+            Gender = visitor.Gender,
             Phone = visitor.Phone,
             Email = visitor.Email,
             PhotoUrl = visitor.PhotoPath is null ? null : _media.ToPublicApiPath(Path.GetFileName(visitor.PhotoPath)),
@@ -1125,23 +1715,37 @@ public class VisitorService : IVisitorService
             return null;
         }
 
-        var match = await _db.VisitorVisits.AsNoTracking()
+        var matchRow = await _db.VisitorVisits.AsNoTracking()
             .Where(v => v.Id == bestVisitId.Value)
-            .Select(v => new FaceCheckoutMatchDto
+            .Select(v => new
             {
                 VisitId = v.Id,
                 VisitorId = v.VisitorId,
                 VisitorName = v.Visitor.FullName,
+                Gender = v.Visitor.Gender,
                 CompanyName = v.Visitor.CompanyName,
                 VisitNumber = v.VisitNumber,
                 CheckInAt = v.CheckInAt,
+                LocationId = v.VisitLocations.Select(l => (Guid?)l.LocationId).FirstOrDefault(),
                 PhotoUrl = v.Visitor.Photos.Where(p => p.IsPrimary).Select(p => p.FilePath).FirstOrDefault()
             })
             .FirstOrDefaultAsync();
 
-        if (match is null) return null;
+        if (matchRow is null) return null;
 
-        match.Similarity = Math.Round(bestSimilarity, 4);
+        var match = new FaceCheckoutMatchDto
+        {
+            VisitId = matchRow.VisitId,
+            VisitorId = matchRow.VisitorId,
+            VisitorName = matchRow.VisitorName,
+            Salutation = SalutationFor(matchRow.Gender),
+            CompanyName = matchRow.CompanyName,
+            VisitNumber = matchRow.VisitNumber,
+            LocationId = matchRow.LocationId,
+            CheckInAt = matchRow.CheckInAt,
+            PhotoUrl = matchRow.PhotoUrl,
+            Similarity = Math.Round(bestSimilarity, 4)
+        };
         if (match.PhotoUrl is not null)
             match.PhotoUrl = _media.ToPublicApiPath(Path.GetFileName(match.PhotoUrl));
 
@@ -1317,6 +1921,20 @@ public class VisitorService : IVisitorService
         return query.Where(v => empIds.Contains(v.HostEmployeeId));
     }
 
+    /// <summary>
+    /// Employee ids linked to a Host-only login, or null when the user may see every visitor
+    /// (SuperAdmin, Admin, Reception, Security).
+    /// </summary>
+    private async Task<List<Guid>?> HostOnlyEmployeeIdsAsync(ClaimsPrincipal user)
+    {
+        if (user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin)
+            || user.IsInRole(AppRoles.Reception) || user.IsInRole(AppRoles.Security)
+            || !user.IsInRole(AppRoles.Host))
+            return null;
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        return await _db.Employees.AsNoTracking().Where(e => e.UserId == userId).Select(e => e.Id).ToListAsync();
+    }
+
     private Guid ResolveTenantId(ClaimsPrincipal user) => TenantClaims.RequireTenantId(user, _tenant);
 
     private async Task EnsureCanViewVisitAsync(ClaimsPrincipal user, VisitorVisit visit)
@@ -1350,6 +1968,37 @@ public class VisitorService : IVisitorService
         {
             throw new ConcurrencyConflictException();
         }
+    }
+
+    /// <summary>
+    /// Prefer browser/device time when the client sends OccurredAt; otherwise fall back to server UTC.
+    /// Unspecified Kind is treated as UTC (JSON ISO-Z). Local Kind is converted to UTC.
+    /// </summary>
+    internal static DateTime ResolveClientOccurredAt(DateTime? occurredAt)
+    {
+        if (occurredAt is null)
+            return DateTime.UtcNow;
+
+        var value = occurredAt.Value;
+        return value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+        };
+    }
+
+    /// <summary>SQL DateTime often comes back Unspecified; mark as UTC so JSON emits Z and clients convert correctly.</summary>
+    internal static DateTime? AsUtc(DateTime? value)
+    {
+        if (value is null) return null;
+        var v = value.Value;
+        return v.Kind switch
+        {
+            DateTimeKind.Utc => v,
+            DateTimeKind.Local => v.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(v, DateTimeKind.Utc),
+        };
     }
 
     /// <summary>
@@ -1440,16 +2089,40 @@ public class VisitorService : IVisitorService
         }
     }
 
-    private async Task<string> NextVisitorNumberAsync(string prefix)
+    private static string DailyNumberPrefix(string prefix, DateOnly date) => $"{prefix}-V-{date:yyyyMMdd}-";
+
+    /// <summary>
+    /// Visitor numbers and visit entry numbers share one daily sequence, so a returning visitor's
+    /// entry on a given day never repeats a number a new visitor got that day.
+    /// </summary>
+    private async Task<int> MaxDailyNumberAsync(string patternPrefix)
     {
-        var date = DateTime.Now.ToString("yyyyMMdd");
-        var patternPrefix = $"{prefix}-V-{date}-";
-        var latest = await _db.Visitors.AsNoTracking()
+        var latestVisitor = await _db.Visitors.AsNoTracking()
             .Where(v => v.VisitorNumber.StartsWith(patternPrefix))
             .OrderByDescending(v => v.VisitorNumber)
             .Select(v => v.VisitorNumber)
             .FirstOrDefaultAsync();
-        var next = latest is null ? 1 : MaxNumericSuffix([latest], patternPrefix) + 1;
+        var tenantId = _tenant.TenantId;
+        var latestEntry = await _db.VisitorVisits.IgnoreQueryFilters().AsNoTracking()
+            .Where(v => v.TenantId == tenantId && v.EntryNumber != null && v.EntryNumber.StartsWith(patternPrefix))
+            .OrderByDescending(v => v.EntryNumber)
+            .Select(v => v.EntryNumber!)
+            .FirstOrDefaultAsync();
+        var values = new[] { latestVisitor, latestEntry }.Where(v => v is not null).Select(v => v!);
+        return MaxNumericSuffix(values, patternPrefix);
+    }
+
+    private async Task<string> NextVisitorNumberAsync(string prefix)
+    {
+        var patternPrefix = DailyNumberPrefix(prefix, AppTime.Today);
+        var next = await MaxDailyNumberAsync(patternPrefix) + 1;
+        return $"{patternPrefix}{next:D4}";
+    }
+
+    private async Task<string> NextEntryNumberAsync(string prefix, DateOnly visitDate)
+    {
+        var patternPrefix = DailyNumberPrefix(prefix, visitDate);
+        var next = await MaxDailyNumberAsync(patternPrefix) + 1;
         return $"{patternPrefix}{next:D4}";
     }
 
@@ -1483,7 +2156,7 @@ public class VisitorService : IVisitorService
 
     private static string VisitNumberPrefix(string prefix)
     {
-        var year = DateTime.Now.ToString("yyyy");
+        var year = AppTime.Now.ToString("yyyy");
         var code = string.IsNullOrWhiteSpace(prefix) ? "VMS" : prefix.Trim().ToUpperInvariant();
         return $"{code}-{year}-";
     }
@@ -1523,6 +2196,10 @@ public class VisitorService : IVisitorService
                     visit.VisitNumber = await NextVisitNumberAsync(prefix);
                     if (newVisitor is not null)
                         newVisitor.VisitorNumber = await NextVisitorNumberAsync(prefix);
+                    visit.EntryNumber = newVisitor is not null
+                        && newVisitor.VisitorNumber.StartsWith(DailyNumberPrefix(prefix, visit.VisitDate), StringComparison.Ordinal)
+                            ? newVisitor.VisitorNumber
+                            : await NextEntryNumberAsync(prefix, visit.VisitDate);
 
                     await _db.SaveChangesAsync();
                     await tx.CommitAsync();
@@ -1585,6 +2262,8 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("Visitor name is required.");
         if (string.IsNullOrWhiteSpace(request.CompanyName))
             throw new InvalidOperationException("Company name is required.");
+        if (request.Gender is not (VisitorGender.Male or VisitorGender.Female))
+            throw new InvalidOperationException("Gender is required (Male or Female).");
         if (request.DepartmentId == Guid.Empty)
             throw new InvalidOperationException("Department is required.");
         if (!request.HostEmployeeId.HasValue && string.IsNullOrWhiteSpace(request.HostName))
@@ -1592,12 +2271,7 @@ public class VisitorService : IVisitorService
         if (request.PurposeIds.Count == 0 && string.IsNullOrWhiteSpace(request.PurposeNotes))
             throw new InvalidOperationException("Purpose of visit is required.");
         if (!string.IsNullOrWhiteSpace(request.Telephone))
-        {
-            var phone = Regex.Replace(request.Telephone.Trim(), @"[\s\-()]", "");
-            if (!IndianPhone.IsMatch(phone) && !IndianPhone.IsMatch(request.Telephone.Trim()))
-                throw new InvalidOperationException("Telephone number format is invalid. Use a 10-digit Indian mobile (e.g. 9876543210).");
-            request.Telephone = phone;
-        }
+            request.Telephone = NormalizeTenDigitPhone(request.Telephone);
 
         if (string.IsNullOrWhiteSpace(request.Email))
             throw new InvalidOperationException("Email is required.");
@@ -1676,6 +2350,8 @@ public class VisitorService : IVisitorService
             var byId = await _db.Employees.Include(e => e.Department)
                 .FirstOrDefaultAsync(e => e.Id == hostEmployeeId.Value && e.IsActive)
                 ?? throw new InvalidOperationException("Selected host was not found.");
+            if (_tenant.LocationId is Guid scope && byId.LocationId.HasValue && byId.LocationId.Value != scope)
+                throw new InvalidOperationException("Selected host belongs to another location.");
             if (byId.DepartmentId != departmentId)
                 throw new InvalidOperationException("Host does not belong to the selected department.");
             return byId;
@@ -1685,10 +2361,12 @@ public class VisitorService : IVisitorService
         if (string.IsNullOrWhiteSpace(name))
             throw new InvalidOperationException("Person to meet is required.");
 
+        var locationScope = _tenant.LocationId;
         var existing = await _db.Employees.Include(e => e.Department)
             .FirstOrDefaultAsync(e =>
                 e.DepartmentId == departmentId &&
                 e.IsActive &&
+                (locationScope == null || e.LocationId == null || e.LocationId == locationScope) &&
                 e.FullName.ToLower() == name.ToLower());
 
         if (existing is not null)
@@ -1699,6 +2377,7 @@ public class VisitorService : IVisitorService
             TenantId = TenantClaims.RequireTenantId(null, _tenant),
             FullName = name,
             DepartmentId = departmentId,
+            LocationId = locationScope,
             IsActive = true,
             CreatedBy = createdBy
         };
@@ -1716,6 +2395,46 @@ public class VisitorService : IVisitorService
         var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
         var linked = _db.Employees.Any(e => e.UserId == userId && e.Id == visit.HostEmployeeId);
         if (!linked)
-            throw new UnauthorizedAccessException("You can only approve visitors assigned to you.");
+            throw new UnauthorizedAccessException("You can only act on visitors assigned to you.");
     }
+
+    /// <summary>
+    /// Strips non-digits and optional 91 / leading 0 country prefixes; requires exactly 10 digits.
+    /// </summary>
+    internal static string NormalizeTenDigitPhone(string raw)
+    {
+        var digits = Regex.Replace(raw.Trim(), @"\D", "");
+        if (digits.Length == 12 && digits.StartsWith("91", StringComparison.Ordinal))
+            digits = digits[2..];
+        if (digits.Length == 11 && digits.StartsWith('0'))
+            digits = digits[1..];
+        if (!TenDigitPhone.IsMatch(digits))
+            throw new InvalidOperationException("Phone number must be exactly 10 digits.");
+        return digits;
+    }
+
+    /// <summary>
+    /// Updates a returning visitor from desk registration. New columns (e.g. Gender) can be filled
+    /// on the next visit; blank phone/email do not wipe values already on file.
+    /// </summary>
+    private static void ApplyReturningVisitorProfile(Visitor visitor, RegisterVisitorRequest request, string? updatedBy)
+    {
+        visitor.FullName = request.VisitorName.Trim();
+        visitor.CompanyName = request.CompanyName.Trim();
+        visitor.Gender = request.Gender;
+        if (!string.IsNullOrWhiteSpace(request.Telephone))
+            visitor.Phone = NormalizeTenDigitPhone(request.Telephone);
+        if (!string.IsNullOrWhiteSpace(request.Email))
+            visitor.Email = request.Email.Trim();
+        visitor.UpdatedAt = DateTime.UtcNow;
+        visitor.UpdatedBy = updatedBy;
+    }
+
+    /// <summary>Male → Mr., Female → Ms. Empty when gender is unknown (legacy rows).</summary>
+    internal static string SalutationFor(VisitorGender? gender) => gender switch
+    {
+        VisitorGender.Male => "Mr.",
+        VisitorGender.Female => "Ms.",
+        _ => ""
+    };
 }

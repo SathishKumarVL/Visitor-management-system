@@ -16,6 +16,9 @@ public class Visitor
     [Required, MaxLength(150)]
     public string FullName { get; set; } = string.Empty;
 
+    /// <summary>Used to derive email/message salutation (Mr. / Ms.). Nullable for visitors registered before this field existed — fill on next visit.</summary>
+    public VisitorGender? Gender { get; set; }
+
     [MaxLength(20)]
     public string? Phone { get; set; }
 
@@ -47,6 +50,13 @@ public class VisitorVisit
 
     [Required, MaxLength(50)]
     public string VisitNumber { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Visitor number for the day of this visit, e.g. VMS-V-20261003-0006, so a returning visitor's entry
+    /// carries today's date instead of the date of their first visit. Null on visits created before it existed.
+    /// </summary>
+    [MaxLength(50)]
+    public string? EntryNumber { get; set; }
 
     [MaxLength(50)]
     public string? PreRegistrationReference { get; set; }
@@ -87,6 +97,18 @@ public class VisitorVisit
     [MaxLength(1000)]
     public string? Notes { get; set; }
 
+    /// <summary>Minutes of meeting entered by the host after the visit.</summary>
+    [MaxLength(4000)]
+    public string? MeetingMinutes { get; set; }
+
+    /// <summary>Minutes of meeting waived: the check-out email goes out without waiting for them.</summary>
+    public bool MomNotRequired { get; set; }
+
+    [MaxLength(256)]
+    public string? MomNotRequiredBy { get; set; }
+
+    public DateTime? MomNotRequiredAt { get; set; }
+
     /// <summary>How many people are included in this visit (including the primary visitor).</summary>
     public int NumberOfPersons { get; set; } = 1;
 
@@ -101,6 +123,9 @@ public class VisitorVisit
     public DateTime? CheckOutAt { get; set; }
     public string? CheckedOutByUserId { get; set; }
     public ApplicationUser? CheckedOutByUser { get; set; }
+
+    /// <summary>True when SuperAdmin manual check-out or system auto check-out after max stay.</summary>
+    public bool IsManualCheckOut { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
@@ -359,8 +384,28 @@ public class NotificationOutbox
     public string? Error { get; set; }
 
     /// <summary>
+    /// Visit location used to resolve location-specific SMTP (falls back to tenant default when null).
+    /// </summary>
+    public Guid? LocationId { get; set; }
+
+    /// <summary>
     /// Optional idempotency key (e.g. appointment reminders). Unique per tenant when set.
     /// </summary>
     [MaxLength(200)]
     public string? IdempotencyKey { get; set; }
+
+    /// <summary>
+    /// Sends as this address instead of the configured mailbox. Only set when the mail server allows
+    /// the mailbox to send on behalf of others (e.g. Exchange "Send As"); otherwise delivery is rejected.
+    /// </summary>
+    [MaxLength(256)]
+    public string? FromAddress { get; set; }
+
+    /// <summary>Display name shown with the sender address, e.g. "Suresh Baskar via Tiaano".</summary>
+    [MaxLength(200)]
+    public string? FromName { get; set; }
+
+    /// <summary>Where replies go, e.g. the host who met the visitor.</summary>
+    [MaxLength(256)]
+    public string? ReplyTo { get; set; }
 }

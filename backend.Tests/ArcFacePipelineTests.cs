@@ -263,9 +263,8 @@ public class ArcFacePipelineTests
 
     private static byte[] Recompress(byte[] source, int quality)
     {
-        using var image = SixLabors.ImageSharp.Image.Load(source);
-        using var output = new MemoryStream();
-        image.Save(output, new SixLabors.ImageSharp.Formats.Jpeg.JpegEncoder { Quality = quality });
-        return output.ToArray();
+        using var bitmap = SkiaSharp.SKBitmap.Decode(source)
+            ?? throw new InvalidOperationException("Recompress source could not be decoded.");
+        return TestPhotos.EncodeJpeg(bitmap, quality);
     }
 }

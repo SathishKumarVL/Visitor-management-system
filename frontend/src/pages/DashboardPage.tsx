@@ -15,7 +15,7 @@ import { dashboardApi, apiErrorMessage } from '../lib/api'
 import type { ChartPointDto, DashboardDto } from '../types/api'
 import { Alert, Badge, EmptyState, KpiCard, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
-import { formatDateTime, primaryRole, statusBadgeClass } from '../lib/utils'
+import { formatDateTime, hasAnyRole, primaryRole, statusBadgeClass } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { useNavigate } from 'react-router-dom'
 
@@ -135,12 +135,26 @@ export function DashboardPage() {
     )
   }
 
+  const momPendingCount = data.momPendingCount ?? 0
+  const isSuperAdmin = hasAnyRole(user?.roles ?? [], ['SuperAdmin'])
+  const showMomPanel =
+    !isSuperAdmin &&
+    hasAnyRole(user?.roles ?? [], ['Admin', 'Host']) &&
+    (data.isHostView || momPendingCount > 0)
+  const withoutMomCount = data.checkedOutWithoutMomCount ?? 0
+  const withoutMomItems = data.checkedOutWithoutMomItems ?? []
+  const waivedCount = Math.max(0, withoutMomCount - momPendingCount)
+
   return (
     <div>
       <PageHeader
         eyebrow="Overview"
         title={`${greetingForNow()}${user?.fullName ? `, ${user.fullName.split(' ')[0]}` : ''}`}
-        subtitle="Here's today's visitor activity across the facility."
+        subtitle={
+          data.isHostView
+            ? "Here's today's activity for the visitors coming to meet you."
+            : "Here's today's visitor activity across the facility."
+        }
         actions={
           role === 'Reception' ? (
             <Button onClick={() => navigate('/reception')}>Reception Mode</Button>
@@ -148,8 +162,8 @@ export function DashboardPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Visitors Today" value={data.visitorsToday ?? 0} to="/visitors?quickFilter=today" icon="👤" />
+      <div className={role === 'SuperAdmin' ? 'grid gap-3 sm:grid-cols-2 xl:grid-cols-5' : 'grid gap-3 sm:grid-cols-2 xl:grid-cols-4'}>
+        <KpiCard label="Visitors Today" value={data.visitorsToday ?? 0} to="/visitors?quickFilter=today" icon="◎" />
         <KpiCard label="Currently Inside" value={data.currentlyInside ?? 0} to="/visitors/inside" icon="●" hint="Live" />
         <KpiCard label="Expected Today" value={data.expectedToday ?? 0} to="/visitors/expected" icon="◷" />
         <KpiCard
@@ -159,7 +173,146 @@ export function DashboardPage() {
           icon="◇"
           hint={(data.pendingApprovals ?? 0) === 0 ? 'Clear' : 'Action'}
         />
+        {role === 'SuperAdmin' ? (
+          <KpiCard
+            label="Manual check-outs today"
+            value={data.manualCheckOutsToday ?? 0}
+            to="/visitors?quickFilter=manualcheckouttoday"
+            icon="➜"
+            hint="SuperAdmin"
+          />
+        ) : null}
       </div>
+
+      {showMomPanel ? (
+        <Panel className="mt-6">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-ink-muted">
+                Minutes of meeting pending
+              </h2>
+              <p className="text-xs text-ink-muted">
+                {data.isHostView ? 'Your visitors who have left' : 'Visitors who have left'} without minutes of meeting.
+                The check-out email is sent once the minutes are saved.
+              </p>
+            </div>
+            <Badge
+              className={
+                momPendingCount > 0
+                  ? 'bg-amber-100 text-amber-800 ring-1 ring-amber-200'
+                  : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+              }
+            >
+              {momPendingCount > 0 ? `${momPendingCount} pending` : 'All done'}
+            </Badge>
+          </div>
+          {momPendingCount === 0 ? (
+            <EmptyState title="No minutes pending" description="Minutes have been added for every visit." />
+          ) : (
+            <div className="space-y-2">
+              {(data.momPendingItems ?? []).map((v) => (
+                <div
+                  key={v.visitId}
+                  className="flex min-h-12 flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2 hover:bg-mint"
+                >
+                  <div>
+                    <div className="font-medium text-ink">{v.visitorName}</div>
+                    <div className="text-xs text-ink-muted">
+                      {[v.companyName, data.isHostView ? null : v.hostName, v.checkOutAt ? `Left ${formatDateTime(v.checkOutAt)}` : null]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={() => navigate(`/visitors/${v.visitId}`)}>Add minutes</Button>
+                </div>
+              ))}
+              {momPendingCount > (data.momPendingItems ?? []).length ? (
+                <p className="px-3 text-xs text-ink-muted">
+                  Showing the latest {(data.momPendingItems ?? []).length} of {momPendingCount}. Filter checked-out visits in{' '}
+                  <Link to="/visitors" className="font-semibold text-primary hover:underline">Visitors</Link> to see the rest.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </Panel>
+      ) : null}
+
+      {isSuperAdmin ? (
+        <Panel className="mt-6">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-ink-muted">
+                Checked out without minutes of meeting
+              </h2>
+              <p className="text-xs text-ink-muted">
+                Visitors who left with no minutes: still pending, or marked as not required.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge className="bg-amber-100 text-amber-800 ring-1 ring-amber-200">{momPendingCount} pending</Badge>
+              <Badge className="bg-slate-100 text-slate-700 ring-1 ring-slate-200">{waivedCount} not required</Badge>
+            </div>
+          </div>
+          {withoutMomItems.length === 0 ? (
+            <EmptyState title="Nothing to review" description="Every checked-out visit has minutes of meeting." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-ink-muted">
+                  <tr>
+                    <th className="px-3 py-2">Visitor</th>
+                    <th className="px-3 py-2">Person to meet</th>
+                    <th className="px-3 py-2">Checked out</th>
+                    <th className="px-3 py-2">MoM</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {withoutMomItems.map((v) => (
+                    <tr key={v.visitId} className="border-t border-gray-100">
+                      <td className="px-3 py-2">
+                        <Link to={`/visitors/${v.visitId}`} className="font-medium text-ink hover:text-primary">
+                          {v.visitorName}
+                        </Link>
+                        <div className="text-xs text-ink-muted">{[v.companyName, v.visitNumber].filter(Boolean).join(' · ')}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {v.hostName}
+                        <div className="text-xs text-ink-muted">{v.departmentName}</div>
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(v.checkOutAt)}</td>
+                      <td className="px-3 py-2">
+                        {v.momNotRequired ? (
+                          <>
+                            <Badge className="bg-slate-100 text-slate-700 ring-1 ring-slate-200">Not required</Badge>
+                            <div className="mt-0.5 text-xs text-ink-muted">
+                              {[v.momNotRequiredBy ? `by ${v.momNotRequiredBy}` : null, v.momNotRequiredAt ? formatDateTime(v.momNotRequiredAt) : null]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </div>
+                          </>
+                        ) : (
+                          <Badge className="bg-amber-100 text-amber-800 ring-1 ring-amber-200">Pending</Badge>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {!v.momNotRequired ? (
+                          <Button size="sm" onClick={() => navigate(`/visitors/${v.visitId}`)}>Add minutes</Button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {withoutMomCount > withoutMomItems.length ? (
+                <p className="px-3 pt-2 text-xs text-ink-muted">
+                  Showing the latest {withoutMomItems.length} of {withoutMomCount}.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </Panel>
+      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-5">
         <div className="xl:col-span-3">

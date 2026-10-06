@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 using Tiaano.Vms.Api.Services.Face;
 
 namespace Tiaano.Vms.Api.Tests;
@@ -20,7 +18,7 @@ internal sealed class StubFaceEmbeddingService : IFaceEmbeddingService
 
     public bool IsDetectionAvailable => true;
 
-    public string ModelId => "test-stub-512";
+    public string ModelId => "test-stub-512-skia";
 
     public int Dimensions => 512;
 
@@ -33,8 +31,9 @@ internal sealed class StubFaceEmbeddingService : IFaceEmbeddingService
         if (imageBytes.Length < 12)
             return 0;
 
-        using var image = Image.Load(imageBytes);
-        return FaceCountForWidth(image.Width);
+        using var bitmap = SKBitmap.Decode(imageBytes);
+        if (bitmap is null) return 0;
+        return FaceCountForWidth(bitmap.Width);
     }
 
     public void EnsureExactlyOneFace(byte[] imageBytes)
@@ -61,7 +60,17 @@ internal sealed class StubFaceEmbeddingService : IFaceEmbeddingService
 
     private float[] VectorFor(byte[] imageBytes)
     {
-        var seed = BitConverter.ToInt32(SHA256.HashData(imageBytes), 0);
+        // Hash decoded pixels (not compressed bytes) so JPEG encoder swaps do not change identity.
+        using var bitmap = SKBitmap.Decode(imageBytes)
+            ?? throw new InvalidOperationException("Stub photo could not be decoded.");
+        var pixels = bitmap.Pixels;
+        var payload = new byte[8 + pixels.Length * 4];
+        BitConverter.TryWriteBytes(payload.AsSpan(0, 4), bitmap.Width);
+        BitConverter.TryWriteBytes(payload.AsSpan(4, 4), bitmap.Height);
+        for (var i = 0; i < pixels.Length; i++)
+            BitConverter.TryWriteBytes(payload.AsSpan(8 + i * 4, 4), (int)(uint)pixels[i]);
+
+        var seed = BitConverter.ToInt32(SHA256.HashData(payload), 0);
         var rng = new Random(seed);
         var vector = new float[Dimensions];
         for (var i = 0; i < vector.Length; i++) vector[i] = (float)(rng.NextDouble() * 2 - 1);
@@ -78,11 +87,11 @@ internal static class TestPhotos
     /// </summary>
     public static string Base64(string identity) => Base64WithSize(identity, 64, 64);
 
-    public static string NoFaceBase64() => SolidJpeg(32, 32, new Rgb24(40, 40, 40));
+    public static string NoFaceBase64() => SolidJpeg(32, 32, new SKColor(40, 40, 40));
 
-    public static string TwoFacesBase64() => SolidJpeg(100, 64, new Rgb24(180, 90, 40));
+    public static string TwoFacesBase64() => SolidJpeg(100, 64, new SKColor(180, 90, 40));
 
-    public static string ThreeFacesBase64() => SolidJpeg(160, 64, new Rgb24(40, 120, 180));
+    public static string ThreeFacesBase64() => SolidJpeg(160, 64, new SKColor(40, 120, 180));
 
     public static byte[] Bytes(string identity)
     {
@@ -93,21 +102,40 @@ internal static class TestPhotos
     private static string Base64WithSize(string identity, int width, int height)
     {
         var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identity));
-        using var image = new Image<Rgb24>(width, height, new Rgb24(hash[0], hash[1], hash[2]));
+        using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque);
+        bitmap.Erase(new SKColor(hash[0], hash[1], hash[2]));
 
         for (var x = 0; x < Math.Min(32, width); x++)
-            image[x, 0] = new Rgb24(hash[(x % 29) + 3], hash[(x % 23) + 5], hash[(x % 19) + 7]);
+            bitmap.SetPixel(x, 0, new SKColor(hash[(x % 29) + 3], hash[(x % 23) + 5], hash[(x % 19) + 7]));
 
-        using var buffer = new MemoryStream();
-        image.Save(buffer, new JpegEncoder { Quality = 95 });
-        return Convert.ToBase64String(buffer.ToArray());
+        return Convert.ToBase64String(EncodeJpeg(bitmap, quality: 95));
     }
 
-    private static string SolidJpeg(int width, int height, Rgb24 color)
+    private static string SolidJpeg(int width, int height, SKColor color)
     {
-        using var image = new Image<Rgb24>(width, height, color);
-        using var buffer = new MemoryStream();
-        image.Save(buffer, new JpegEncoder { Quality = 95 });
-        return Convert.ToBase64String(buffer.ToArray());
+        using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque);
+        bitmap.Erase(color);
+        return Convert.ToBase64String(EncodeJpeg(bitmap, quality: 95));
+    }
+
+    internal static byte[] EncodeJpeg(SKBitmap bitmap, int quality)
+    {
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+        return data.ToArray();
+    }
+
+    internal static byte[] EncodePng(SKBitmap bitmap)
+    {
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    internal static byte[] EncodeWebp(SKBitmap bitmap, int quality = 90)
+    {
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Webp, quality);
+        return data.ToArray();
     }
 }

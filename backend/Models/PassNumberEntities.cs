@@ -14,6 +14,10 @@ public class PassNumberSeries
     public Guid TenantId { get; set; }
     public Tenant? Tenant { get; set; }
 
+    /// <summary>Null = tenant default series; set = location-specific series.</summary>
+    public Guid? LocationId { get; set; }
+    public Location? Location { get; set; }
+
     [Required, MaxLength(20)]
     public string Prefix { get; set; } = "VMS-";
 
@@ -23,7 +27,10 @@ public class PassNumberSeries
     public int StartNumber { get; set; } = 1;
     public int EndNumber { get; set; } = 999999;
 
-    /// <summary>Last allocated number. Next issue is CurrentNumber + 1 when CurrentNumber &lt; EndNumber.</summary>
+    /// <summary>
+    /// Last allocated number (for display). Allocation picks the lowest free number in
+    /// [StartNumber, EndNumber] among visits that still hold a badge; check-out releases it.
+    /// </summary>
     public int CurrentNumber { get; set; }
 
     public bool IsActive { get; set; } = true;
@@ -60,6 +67,27 @@ public class PassNumberAllocation
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
+}
+
+/// <summary>
+/// Short-lived reservation created at allocate time so concurrent check-ins cannot claim the same
+/// free pool number before the visit row is saved. Released on check-out / cancel / reject, or
+/// after a short TTL if registration never completes.
+/// </summary>
+public class PassNumberHold
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    /// <summary>Formatted code without the number (e.g. "VMS-2026-"); numbers are only unique within one key.</summary>
+    [MaxLength(40)]
+    public string? SeriesKey { get; set; }
+
+    public int Number { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>Optional device token for push delivery (stub foundation).</summary>

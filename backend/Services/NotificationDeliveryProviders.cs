@@ -8,7 +8,14 @@ public interface INotificationDeliveryProvider
     Task DeliverAsync(NotificationOutbox row, CancellationToken ct = default);
 }
 
-public sealed class EmailNotificationProvider : INotificationDeliveryProvider
+/// <summary>Email provider that can optionally skip Development mail-pickup fallback (used by SMTP test).</summary>
+public interface IEmailNotificationProvider : INotificationDeliveryProvider
+{
+    /// <summary>Send via real SMTP only — never write a local .eml pickup file.</summary>
+    Task DeliverStrictAsync(NotificationOutbox row, CancellationToken ct = default);
+}
+
+public sealed class EmailNotificationProvider : IEmailNotificationProvider
 {
     private readonly ISettingsService _settings;
     private readonly IWebHostEnvironment _env;
@@ -26,20 +33,32 @@ public sealed class EmailNotificationProvider : INotificationDeliveryProvider
 
     public string Channel => "Email";
 
-    public async Task DeliverAsync(NotificationOutbox row, CancellationToken ct = default)
+    public Task DeliverAsync(NotificationOutbox row, CancellationToken ct = default) =>
+        DeliverCoreAsync(row, allowDevPickupFallback: true, ct);
+
+    public Task DeliverStrictAsync(NotificationOutbox row, CancellationToken ct = default) =>
+        DeliverCoreAsync(row, allowDevPickupFallback: false, ct);
+
+    private async Task DeliverCoreAsync(NotificationOutbox row, bool allowDevPickupFallback, CancellationToken ct)
     {
-        var smtp = await _settings.ResolveSmtpAsync(ct);
+        var smtp = await _settings.ResolveSmtpAsync(row.LocationId, ct);
         if (!smtp.Enabled)
             throw new InvalidOperationException("SMTP disabled");
 
         try
         {
             if (string.IsNullOrWhiteSpace(smtp.Host))
+            {
+                if (!allowDevPickupFallback)
+                    throw new InvalidOperationException("SMTP host is not configured.");
                 await WritePickupAsync(row, smtp, ct);
+            }
             else
+            {
                 await SendViaSmtpAsync(row, smtp, ct);
+            }
         }
-        catch (Exception ex) when (_env.IsDevelopment() && smtp.FallbackToPickupOnFailure)
+        catch (Exception ex) when (allowDevPickupFallback && _env.IsDevelopment() && smtp.FallbackToPickupOnFailure)
         {
             // Local Dev: do not block visitor ops when the company SMTP cert/password is broken.
             _logger.LogWarning(
@@ -71,8 +90,47 @@ public sealed class EmailNotificationProvider : INotificationDeliveryProvider
             string.IsNullOrEmpty(smtp.Username) ? "(none)" : smtp.Username,
             !string.IsNullOrEmpty(smtp.Password));
 
+        try
+        {
+            await SendMessageAsync(BuildMessage(row, smtp, sendAsOverride: true), smtp, ignoreSsl, ct);
+        }
+        catch (MailKit.Net.Smtp.SmtpCommandException ex) when (
+            !string.IsNullOrWhiteSpace(row.FromAddress)
+            && ex.ErrorCode is MailKit.Net.Smtp.SmtpErrorCode.SenderNotAccepted or MailKit.Net.Smtp.SmtpErrorCode.MessageNotAccepted)
+        {
+            // The mailbox is not allowed to send as the host (no "Send As" right): still deliver, from the
+            // company mailbox with the host's name and Reply-To, rather than losing the mail.
+            _logger.LogWarning(ex,
+                "SMTP refused sending as {From}; resending to {Recipient} from the configured mailbox.",
+                row.FromAddress, row.Recipient);
+            await SendMessageAsync(BuildMessage(row, smtp, sendAsOverride: false), smtp, ignoreSsl, ct);
+        }
+    }
+
+    /// <summary>
+    /// Display name for the From header. When the company mailbox sends on someone's behalf the name says so
+    /// ("Suresh Baskar via Tiaano"), so it is never mistaken for a message from that person's own address.
+    /// </summary>
+    private static string SenderDisplayName(NotificationOutbox row, SmtpRuntimeOptions smtp, bool usingOverrideAddress)
+    {
+        if (string.IsNullOrWhiteSpace(row.FromName)) return smtp.FromName ?? string.Empty;
+        if (usingOverrideAddress || string.IsNullOrWhiteSpace(smtp.FromName)) return row.FromName;
+        return $"{row.FromName} via {smtp.FromName}";
+    }
+
+    private static MimeKit.MimeMessage BuildMessage(NotificationOutbox row, SmtpRuntimeOptions smtp, bool sendAsOverride)
+    {
+        var useOverride = sendAsOverride && !string.IsNullOrWhiteSpace(row.FromAddress);
         var message = new MimeKit.MimeMessage();
-        message.From.Add(new MimeKit.MailboxAddress(smtp.FromName, smtp.FromAddress));
+        message.From.Add(new MimeKit.MailboxAddress(
+            SenderDisplayName(row, smtp, useOverride),
+            useOverride ? row.FromAddress!.Trim() : smtp.FromAddress));
+        if (!string.IsNullOrWhiteSpace(row.ReplyTo)
+            && MimeKit.MailboxAddress.TryParse(row.ReplyTo.Trim(), out var replyTo))
+        {
+            if (!string.IsNullOrWhiteSpace(row.FromName)) replyTo.Name = row.FromName;
+            message.ReplyTo.Add(replyTo);
+        }
         message.To.Add(MimeKit.MailboxAddress.Parse(row.Recipient.Trim()));
         message.Subject = row.Subject;
         message.Body = new MimeKit.TextPart("plain")
@@ -80,7 +138,12 @@ public sealed class EmailNotificationProvider : INotificationDeliveryProvider
             Text = row.Body,
             ContentTransferEncoding = MimeKit.ContentEncoding.QuotedPrintable
         };
+        return message;
+    }
 
+    private static async Task SendMessageAsync(
+        MimeKit.MimeMessage message, SmtpRuntimeOptions smtp, bool ignoreSsl, CancellationToken ct)
+    {
         using var client = new MailKit.Net.Smtp.SmtpClient { Timeout = smtp.TimeoutSeconds * 1000 };
         if (ignoreSsl)
             client.ServerCertificateValidationCallback = static (_, _, _, _) => true;
@@ -114,7 +177,13 @@ public sealed class EmailNotificationProvider : INotificationDeliveryProvider
 
         var path = Path.Combine(pickup, $"{Guid.NewGuid():N}.eml");
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"From: {(string.IsNullOrWhiteSpace(smtp.FromAddress) ? "info@tianode.com" : smtp.FromAddress)}");
+        var fromAddress = !string.IsNullOrWhiteSpace(row.FromAddress)
+            ? row.FromAddress
+            : string.IsNullOrWhiteSpace(smtp.FromAddress) ? "info@tianode.com" : smtp.FromAddress;
+        var fromName = SenderDisplayName(row, smtp, !string.IsNullOrWhiteSpace(row.FromAddress));
+        sb.AppendLine(string.IsNullOrWhiteSpace(fromName) ? $"From: {fromAddress}" : $"From: \"{fromName}\" <{fromAddress}>");
+        if (!string.IsNullOrWhiteSpace(row.ReplyTo))
+            sb.AppendLine($"Reply-To: {row.ReplyTo}");
         sb.AppendLine($"To: {row.Recipient}");
         sb.AppendLine($"Subject: {row.Subject}");
         sb.AppendLine($"Date: {DateTime.UtcNow:R}");

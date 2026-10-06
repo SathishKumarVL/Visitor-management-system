@@ -23,10 +23,14 @@ import { FaceCheckoutPage } from './pages/FaceCheckoutPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
 import { FeedbackQuestionsPage } from './pages/FeedbackQuestionsPage'
-import { HostsPage } from './pages/HostsPage'
+import { MailContentPage } from './pages/MailContentPage'
+import { EmployeesPage } from './pages/HostsPage'
 import { UsersPage } from './pages/UsersPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
+import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordResetPages'
+import { VisitorWelcomePage } from './pages/VisitorWelcomePage'
+import { VisitorThankYouPage } from './pages/VisitorThankYouPage'
 
 export default function App() {
   const bootstrap = useAuthStore((s) => s.bootstrap)
@@ -46,6 +50,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<HomeRedirect />} />
@@ -62,6 +68,7 @@ export default function App() {
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Reception']} />}>
               <Route path="/reception" element={<ReceptionModePage />} />
               <Route path="/visitors/new" element={<NewVisitorWizardPage />} />
+              <Route path="/visitors/welcome" element={<VisitorWelcomePage />} />
               <Route path="/reports" element={<ReportsPage />} />
             </Route>
 
@@ -84,14 +91,20 @@ export default function App() {
               <Route path="/verify" element={<VerifyVisitorPage />} />
               <Route path="/scan" element={<VerifyVisitorPage />} />
               <Route path="/checkout/face" element={<FaceCheckoutPage />} />
+              <Route path="/visitors/thank-you" element={<VisitorThankYouPage />} />
+            </Route>
+
+            <Route element={<ProtectedRoute roles={['SuperAdmin']} />}>
+              <Route path="/masters/employees" element={<EmployeesPage />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin']} />}>
               <Route path="/masters/departments" element={<DepartmentsPage />} />
-              <Route path="/masters/hosts" element={<HostsPage />} />
+              <Route path="/masters/hosts" element={<EmployeesPage />} />
               <Route path="/masters/purposes" element={<PurposesPage />} />
               <Route path="/masters/locations" element={<LocationsPage />} />
               <Route path="/masters/feedback" element={<FeedbackQuestionsPage />} />
+              <Route path="/masters/mail-content" element={<MailContentPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>

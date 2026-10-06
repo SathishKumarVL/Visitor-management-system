@@ -7,7 +7,10 @@ import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 import { SecureImage } from '../components/SecureImage'
+import { FaceCameraPanel } from '../components/FaceCameraPanel'
+import { captureFaceJpeg } from '../lib/cameraCapture'
 import { cn } from '../lib/utils'
+import { useAuthStore } from '../store/authStore'
 
 type Step = 'feedback' | 'camera'
 
@@ -43,6 +46,7 @@ function StarRating({
 
 export function FaceCheckoutPage() {
   const navigate = useNavigate()
+  const userLocationId = useAuthStore((s) => s.user?.locationId ?? null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
@@ -96,7 +100,7 @@ export function FaceCheckoutPage() {
     try {
       const [list, qs] = await Promise.all([
         visitorsApi.inside(),
-        mastersApi.feedbackQuestions(true),
+        mastersApi.feedbackQuestions(true, userLocationId || undefined),
       ])
       setInside(list)
       setQuestions(qs)
@@ -118,7 +122,7 @@ export function FaceCheckoutPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [userLocationId])
 
   useEffect(() => {
     void loadData()
@@ -143,15 +147,6 @@ export function FaceCheckoutPage() {
     return null
   }
 
-  function buildFeedbackPayload() {
-    return {
-      answers: questions
-        .map((q) => ({ questionId: q.id, rating: ratings[q.id] ?? 0 }))
-        .filter((a) => a.rating >= 1 && a.rating <= 5),
-      comments: comments.trim() || null,
-    }
-  }
-
   function continueToCamera() {
     const msg = validatePendingFeedback()
     if (msg) {
@@ -163,13 +158,6 @@ export function FaceCheckoutPage() {
     setFeedbackReady(true)
     setStep('camera')
     setStatusText('Camera ready — capture the face. Ratings will be saved for the matched visitor.')
-  }
-
-  async function saveFeedbackForVisit(visitId: string) {
-    if (questions.length === 0) return
-    const existing = await visitorsApi.getFeedback(visitId)
-    if (existing) return
-    await visitorsApi.submitFeedback(visitId, buildFeedbackPayload())
   }
 
   async function captureAndCheckOut() {
@@ -207,17 +195,13 @@ export function FaceCheckoutPage() {
     setCapturing(true)
     setStatusText('Capturing and matching face…')
     try {
-      const canvas = document.createElement('canvas')
-      canvas.width = video.videoWidth || 640
-      canvas.height = video.videoHeight || 480
-      const ctx = canvas.getContext('2d')
-      if (!ctx) {
+      const photoBase64 = captureFaceJpeg(video)
+      if (!photoBase64) {
         setError('Could not read the camera frame. Try again.')
         return
       }
-      ctx.drawImage(video, 0, 0)
 
-      const hit = await visitorsApi.faceIdentifyInside(canvas.toDataURL('image/jpeg', 0.85))
+      const hit = await visitorsApi.faceIdentifyInside(photoBase64)
       if (!hit) {
         setError('Face did not match anyone currently inside. Try Capture again.')
         setStatusText('No match — press Capture to retry')
@@ -227,17 +211,38 @@ export function FaceCheckoutPage() {
       setMatched(hit)
       setStatusText(`Matched ${hit.visitorName} — saving feedback and checking out…`)
 
+      // Load questions for the matched visit location (may differ from desk user location).
+      const visitQs = await mastersApi.feedbackQuestions(true, hit.locationId || userLocationId || undefined)
+      setQuestions(visitQs)
+      for (const q of visitQs) {
+        const rating = ratings[q.id] ?? 0
+        if (q.isRequired && (rating < 1 || rating > 5)) {
+          setFeedbackReady(false)
+          setStep('feedback')
+          setError(`Please rate: ${q.prompt}`)
+          setStatusText('Complete feedback for this visitor location, then capture again.')
+          return
+        }
+      }
+
       // Persist ratings only after we know who was captured.
-      await saveFeedbackForVisit(hit.visitId)
+      if (visitQs.length > 0) {
+        await visitorsApi.submitFeedback(hit.visitId, {
+          answers: visitQs
+            .map((q) => ({ questionId: q.id, rating: ratings[q.id] ?? 0 }))
+            .filter((a) => a.rating >= 1),
+          comments: comments.trim() || null,
+        })
+      }
       await visitorsApi.checkOut(hit.visitId)
 
       stopCamera()
-      navigate('/reception', {
+      navigate('/visitors/thank-you', {
         replace: true,
         state: {
           visitorName: hit.visitorName,
+          salutation: hit.salutation || '',
           visitNumber: hit.visitNumber,
-          checkedOut: true,
         },
       })
     } catch (e) {
@@ -346,11 +351,9 @@ export function FaceCheckoutPage() {
             </Panel>
           ) : (
             <Panel>
-              <div className="overflow-hidden rounded-md border border-gray-200 bg-gray-900">
-                <video ref={videoRef} className="aspect-video w-full object-cover" muted playsInline />
-              </div>
-              <p className="mt-3 text-sm text-gray-600">{statusText}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <FaceCameraPanel videoRef={videoRef} />
+              <p className="mt-3 text-center text-sm text-gray-600">{statusText}</p>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
                 {!cameraReady ? (
                   <Button variant="secondary" onClick={() => void startCamera()}>
                     Start camera

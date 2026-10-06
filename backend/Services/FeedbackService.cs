@@ -8,13 +8,13 @@ namespace Tiaano.Vms.Api.Services;
 
 public interface IFeedbackService
 {
-    Task<IReadOnlyList<FeedbackQuestionDto>> GetQuestionsAsync(bool activeOnly = true);
+    Task<IReadOnlyList<FeedbackQuestionDto>> GetQuestionsAsync(bool activeOnly = true, Guid? locationId = null);
     Task<FeedbackQuestionDto> UpsertQuestionAsync(Guid? id, FeedbackQuestionUpsertRequest request, string? user);
     Task DeactivateQuestionAsync(Guid id, string? user);
     Task<VisitFeedbackDto> SubmitForVisitAsync(Guid visitId, SubmitVisitFeedbackRequest request, string? user);
     Task<VisitFeedbackDto?> GetForVisitAsync(Guid visitId);
     Task<IReadOnlyList<VisitFeedbackDto>> ListResponsesAsync(int take = 50);
-    Task<bool> HasActiveQuestionsAsync();
+    Task<PagedResult<VisitFeedbackDto>> PageResponsesAsync(int page, int pageSize);
     Task EnsureFeedbackCompleteAsync(Guid visitId);
 }
 
@@ -34,10 +34,15 @@ public sealed class FeedbackService : IFeedbackService
             ? id
             : throw new UnauthorizedAccessException("Tenant context is required.");
 
-    public async Task<IReadOnlyList<FeedbackQuestionDto>> GetQuestionsAsync(bool activeOnly = true)
+    public async Task<IReadOnlyList<FeedbackQuestionDto>> GetQuestionsAsync(
+        bool activeOnly = true,
+        Guid? locationId = null)
     {
         var q = _db.FeedbackQuestions.AsNoTracking().AsQueryable();
         if (activeOnly) q = q.Where(x => x.IsActive);
+        if (locationId.HasValue)
+            q = q.Where(x => x.LocationId == null || x.LocationId == locationId.Value);
+
         return await q.OrderBy(x => x.SortOrder).ThenBy(x => x.Prompt)
             .Select(x => new FeedbackQuestionDto
             {
@@ -45,7 +50,9 @@ public sealed class FeedbackService : IFeedbackService
                 Prompt = x.Prompt,
                 IsRequired = x.IsRequired,
                 IsActive = x.IsActive,
-                SortOrder = x.SortOrder
+                SortOrder = x.SortOrder,
+                LocationId = x.LocationId,
+                LocationName = x.Location != null ? x.Location.Name : null
             })
             .ToListAsync();
     }
@@ -54,6 +61,11 @@ public sealed class FeedbackService : IFeedbackService
     {
         if (string.IsNullOrWhiteSpace(request.Prompt))
             throw new InvalidOperationException("Feedback question text is required.");
+        if (!request.LocationId.HasValue)
+            throw new InvalidOperationException("Feedback question must be assigned to a location.");
+
+        var locOk = await _db.Locations.AnyAsync(l => l.Id == request.LocationId.Value);
+        if (!locOk) throw new InvalidOperationException("Selected location was not found.");
 
         FeedbackQuestion entity;
         if (id is Guid existingId)
@@ -77,7 +89,9 @@ public sealed class FeedbackService : IFeedbackService
         entity.IsRequired = request.IsRequired;
         entity.IsActive = request.IsActive;
         entity.SortOrder = request.SortOrder;
+        entity.LocationId = request.LocationId;
         await _db.SaveChangesAsync();
+        await _db.Entry(entity).Reference(e => e.Location).LoadAsync();
 
         return new FeedbackQuestionDto
         {
@@ -85,7 +99,9 @@ public sealed class FeedbackService : IFeedbackService
             Prompt = entity.Prompt,
             IsRequired = entity.IsRequired,
             IsActive = entity.IsActive,
-            SortOrder = entity.SortOrder
+            SortOrder = entity.SortOrder,
+            LocationId = entity.LocationId,
+            LocationName = entity.Location?.Name
         };
     }
 
@@ -99,12 +115,16 @@ public sealed class FeedbackService : IFeedbackService
         await _db.SaveChangesAsync();
     }
 
-    public Task<bool> HasActiveQuestionsAsync() =>
-        _db.FeedbackQuestions.AsNoTracking().AnyAsync(x => x.IsActive);
-
     public async Task EnsureFeedbackCompleteAsync(Guid visitId)
     {
-        if (!await HasActiveQuestionsAsync()) return;
+        var locationIds = await _db.VisitorVisitLocations.AsNoTracking()
+            .Where(vl => vl.VisitorVisitId == visitId)
+            .Select(vl => vl.LocationId)
+            .ToListAsync();
+
+        var hasQuestions = await ActiveQuestionsForLocationsQuery(locationIds).AnyAsync();
+        if (!hasQuestions) return;
+
         var exists = await _db.VisitFeedbacks.AsNoTracking()
             .AnyAsync(f => f.VisitorVisitId == visitId);
         if (!exists)
@@ -130,10 +150,26 @@ public sealed class FeedbackService : IFeedbackService
         return rows.Select(Map).ToList();
     }
 
+    public async Task<PagedResult<VisitFeedbackDto>> PageResponsesAsync(int page, int pageSize)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var q = _db.VisitFeedbacks.AsNoTracking();
+        var total = await q.CountAsync();
+        var rows = await q
+            .Include(f => f.Answers)
+            .OrderByDescending(f => f.SubmittedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+        return new PagedResult<VisitFeedbackDto>(rows.Select(Map).ToList(), total, page, pageSize);
+    }
+
     public async Task<VisitFeedbackDto> SubmitForVisitAsync(Guid visitId, SubmitVisitFeedbackRequest request, string? user)
     {
         var visit = await _db.VisitorVisits
             .Include(v => v.Visitor)
+            .Include(v => v.VisitLocations)
             .FirstOrDefaultAsync(v => v.Id == visitId)
             ?? throw new InvalidOperationException("Visit not found.");
 
@@ -146,13 +182,13 @@ public sealed class FeedbackService : IFeedbackService
         if (existing is not null)
             return Map(existing);
 
-        var activeQuestions = await _db.FeedbackQuestions.AsNoTracking()
-            .Where(q => q.IsActive)
+        var locationIds = visit.VisitLocations.Select(l => l.LocationId).ToList();
+        var activeQuestions = await ActiveQuestionsForLocationsQuery(locationIds)
             .OrderBy(q => q.SortOrder)
             .ToListAsync();
 
         if (activeQuestions.Count == 0)
-            throw new InvalidOperationException("No feedback questions are configured.");
+            throw new InvalidOperationException("No feedback questions are configured for this visit location.");
 
         var answersById = (request.Answers ?? [])
             .GroupBy(a => a.QuestionId)
@@ -204,6 +240,15 @@ public sealed class FeedbackService : IFeedbackService
         _db.VisitFeedbacks.Add(feedback);
         await _db.SaveChangesAsync();
         return Map(feedback);
+    }
+
+    /// <summary>Tenant-wide (null) questions plus any tied to the visit locations.</summary>
+    private IQueryable<FeedbackQuestion> ActiveQuestionsForLocationsQuery(IReadOnlyList<Guid> locationIds)
+    {
+        var q = _db.FeedbackQuestions.AsNoTracking().Where(x => x.IsActive);
+        if (locationIds.Count == 0)
+            return q.Where(x => x.LocationId == null);
+        return q.Where(x => x.LocationId == null || locationIds.Contains(x.LocationId.Value));
     }
 
     private static VisitFeedbackDto Map(VisitFeedback row) => new()

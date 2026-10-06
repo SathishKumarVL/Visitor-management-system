@@ -94,6 +94,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         var response = await client.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = name,
+            gender = 1,
             companyName = "Lifecycle Test Co",
             telephone = "9000000001",
             email = $"{Guid.NewGuid():N}@example.test",
@@ -105,6 +106,8 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             isWalkIn = walkIn,
             idTypeName = "Aadhaar",
             idNumber = "123456789012",
+            // A fresh face per call: a visitor left inside by an earlier run must not be face-matched.
+            photoBase64 = TestPhotos.Base64($"{name}-{Guid.NewGuid():N}"),
             passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
@@ -113,6 +116,19 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
     }
 
     private static Guid VisitId(JsonElement visit) => visit.GetProperty("visitId").GetGuid();
+
+    /// <summary>Check-out requires the visitor's feedback when questions are configured.</summary>
+    private static async Task SubmitFeedbackAsync(HttpClient client, Guid visitId)
+    {
+        var questions = await client.GetFromJsonAsync<JsonElement>("/api/masters/feedback-questions?activeOnly=true", JsonOptions);
+        var answers = questions.GetProperty("data").EnumerateArray()
+            .Where(q => !q.TryGetProperty("locationId", out var loc) || loc.ValueKind == JsonValueKind.Null)
+            .Select(q => new { questionId = q.GetProperty("id").GetGuid(), rating = 5 })
+            .ToArray();
+        if (answers.Length == 0) return;
+        var response = await client.PostAsJsonAsync($"/api/visitors/{visitId}/feedback", new { answers });
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+    }
 
     private static string StatusLabel(JsonElement visit) => visit.GetProperty("statusLabel").GetString() ?? "";
 
@@ -165,6 +181,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         var reception = await LoginAsync("reception");
         var visitId = VisitId(await RegisterAsync(reception, "Checkout Visitor"));
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+        await SubmitFeedbackAsync(reception, visitId);
 
         var first = await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { });
         Assert.True(first.IsSuccessStatusCode, await first.Content.ReadAsStringAsync());
@@ -196,6 +213,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         var reception = await LoginAsync("reception");
         var visitId = VisitId(await RegisterAsync(reception, "Reentry Visitor"));
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+        await SubmitFeedbackAsync(reception, visitId);
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { })).EnsureSuccessStatusCode();
 
         var response = await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { });
@@ -386,6 +404,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         var original = registered.GetProperty("visitNumber").GetString();
 
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+        await SubmitFeedbackAsync(reception, visitId);
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { })).EnsureSuccessStatusCode();
 
         var detail = await reception.GetAsync($"/api/visitors/{visitId}");
@@ -396,21 +415,85 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
 
     // ---------------------------------------------------------- expected visit
 
+    [Theory]
+    [InlineData(-1440)]
+    [InlineData(-30)]
+    public async Task Expected_Visit_Cannot_Be_Booked_In_The_Past(int minutesFromNow)
+    {
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        var slot = AppTime.Now.AddMinutes(minutesFromNow);
+
+        var create = await reception.PostAsJsonAsync("/api/visitors/expected", new
+        {
+            visitorName = "Past Appointment",
+            gender = 1,
+            companyName = "Preregistered Co",
+            phone = "9000000003",
+            email = $"{Guid.NewGuid():N}@example.test",
+            expectedDate = slot.ToString("yyyy-MM-dd"),
+            expectedTime = slot.ToString("HH:mm"),
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, create.StatusCode);
+        Assert.Contains("cannot be in the past", await create.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Expected_Visit_Requires_A_Purpose_And_Keeps_The_Others_Reason()
+    {
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, _) = await SeedRefsAsync();
+        var slot = AppTime.Now.AddHours(2);
+        object Body(string? purposeNotes) => new
+        {
+            visitorName = "Purpose Check",
+            gender = 2,
+            companyName = "Preregistered Co",
+            phone = $"9{Random.Shared.Next(100_000_000, 999_999_999)}",
+            email = $"{Guid.NewGuid():N}@example.test",
+            expectedDate = slot.ToString("yyyy-MM-dd"),
+            expectedTime = slot.ToString("HH:mm"),
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = Array.Empty<Guid>(),
+            purposeNotes,
+            locationIds = Array.Empty<Guid>()
+        };
+
+        var missing = await reception.PostAsJsonAsync("/api/visitors/expected", Body(null));
+        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        Assert.Contains("Purpose of visit is required", await missing.Content.ReadAsStringAsync());
+
+        var others = await reception.PostAsJsonAsync("/api/visitors/expected", Body("  Annual vendor audit  "));
+        Assert.True(others.IsSuccessStatusCode, await others.Content.ReadAsStringAsync());
+        var data = (await others.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+        Assert.Equal("Annual vendor audit", data.GetProperty("purposeNotes").GetString());
+        Assert.Contains(data.GetProperty("purposes").EnumerateArray(), p => p.GetString() == "Others");
+    }
+
     [Fact]
     public async Task Expected_Visit_Is_Superseded_Not_Deleted_On_Arrival()
     {
         await SetApprovalRequiredAsync(false);
         var reception = await LoginAsync("reception");
         var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        var slot = AppTime.Now.AddHours(1);
+        var phone = $"9{Random.Shared.Next(100_000_000, 999_999_999)}";
 
         var create = await reception.PostAsJsonAsync("/api/visitors/expected", new
         {
             visitorName = "Expected Then Arrived",
+            gender = 1,
             companyName = "Preregistered Co",
-            phone = "9000000002",
+            phone,
             email = $"{Guid.NewGuid():N}@example.test",
-            expectedDate = DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd"),
-            expectedTime = "10:00",
+            expectedDate = slot.ToString("yyyy-MM-dd"),
+            expectedTime = slot.ToString("HH:mm"),
             departmentId,
             hostEmployeeId = hostId,
             purposeIds = new[] { purposeId },
@@ -424,8 +507,9 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         var arrival = await reception.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = "Expected Then Arrived",
+            gender = 1,
             companyName = "Preregistered Co",
-            telephone = "9000000002",
+            telephone = phone,
             email = $"{Guid.NewGuid():N}@example.test",
             departmentId,
             hostEmployeeId = hostId,
@@ -442,6 +526,147 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
 
         // The pre-registration must survive as history rather than being erased.
         Assert.Equal(VisitStatus.Cancelled, await StatusOfAsync(expectedVisitId));
+    }
+
+    [Fact]
+    public async Task Expected_Visit_Requires_A_Mobile_Number()
+    {
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        var slot = AppTime.Now.AddHours(1);
+
+        var create = await reception.PostAsJsonAsync("/api/visitors/expected", new
+        {
+            visitorName = "No Mobile",
+            gender = 1,
+            companyName = "Preregistered Co",
+            email = $"{Guid.NewGuid():N}@example.test",
+            expectedDate = slot.ToString("yyyy-MM-dd"),
+            expectedTime = slot.ToString("HH:mm"),
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, create.StatusCode);
+        Assert.Contains("mobile number is required", await create.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Booking_Reuses_The_Visitor_With_That_Mobile_And_Blocks_A_Duplicate_Appointment()
+    {
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        var phone = $"9{Random.Shared.Next(100_000_000, 999_999_999)}";
+        var slot = AppTime.Now.AddDays(1);
+        object Booking(string time) => new
+        {
+            visitorName = "Repeat Booker",
+            gender = 1,
+            companyName = "Repeat Co",
+            phone,
+            email = $"{Guid.NewGuid():N}@example.test",
+            expectedDate = slot.ToString("yyyy-MM-dd"),
+            expectedTime = time,
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        };
+
+        var first = await reception.PostAsJsonAsync("/api/visitors/expected", Booking("10:00"));
+        Assert.True(first.IsSuccessStatusCode, await first.Content.ReadAsStringAsync());
+        var firstData = (await first.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+
+        var lookup = await reception.GetFromJsonAsync<JsonElement>($"/api/visitors/lookup?phone={phone}", JsonOptions);
+        var found = lookup.GetProperty("data");
+        Assert.Equal(firstData.GetProperty("visitorId").GetGuid(), found.GetProperty("visitorId").GetGuid());
+        Assert.Equal("Repeat Booker", found.GetProperty("visitorName").GetString());
+        Assert.Single(found.GetProperty("openBookings").EnumerateArray());
+
+        var duplicate = await reception.PostAsJsonAsync("/api/visitors/expected", Booking("15:00"));
+        Assert.Equal(HttpStatusCode.BadRequest, duplicate.StatusCode);
+        Assert.Contains("already has an appointment", await duplicate.Content.ReadAsStringAsync());
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(1, await db.Visitors.IgnoreQueryFilters().CountAsync(v => v.Phone == phone));
+
+        var bookings = await db.VisitorVisits.IgnoreQueryFilters().Where(v => v.Visitor.Phone == phone).ToListAsync();
+        foreach (var b in bookings) b.Status = VisitStatus.Cancelled;
+        await db.SaveChangesAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Walk_In_Registration_Finds_And_Closes_Todays_Booking(bool deskSaidNotThisVisitor)
+    {
+        await SetApprovalRequiredAsync(false);
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        var phone = $"9{Random.Shared.Next(100_000_000, 999_999_999)}";
+        var slot = AppTime.Now.AddMinutes(30);
+        if (slot.Date != AppTime.Now.Date) return;
+
+        var create = await reception.PostAsJsonAsync("/api/visitors/expected", new
+        {
+            visitorName = "Booked Walk Up",
+            gender = 2,
+            companyName = "Preregistered Co",
+            phone,
+            email = $"{Guid.NewGuid():N}@example.test",
+            expectedDate = slot.ToString("yyyy-MM-dd"),
+            expectedTime = slot.ToString("HH:mm"),
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        });
+        Assert.True(create.IsSuccessStatusCode, await create.Content.ReadAsStringAsync());
+        var bookingId = VisitId((await create.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data"));
+
+        var match = await reception.GetFromJsonAsync<JsonElement>($"/api/visitors/expected/match?phone=%2B91{phone}", JsonOptions);
+        var found = match.GetProperty("data").EnumerateArray().Single(m => m.GetProperty("visitId").GetGuid() == bookingId);
+        Assert.Equal(hostId, found.GetProperty("hostEmployeeId").GetGuid());
+        Assert.Contains(purposeId, found.GetProperty("purposeIds").EnumerateArray().Select(p => p.GetGuid()));
+
+        var walkIn = await reception.PostAsJsonAsync("/api/visitors", new
+        {
+            visitorName = "Booked Walk Up",
+            gender = 2,
+            companyName = "Preregistered Co",
+            telephone = phone,
+            email = $"{Guid.NewGuid():N}@example.test",
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>(),
+            numberOfPersons = 1,
+            isWalkIn = true,
+            skipBookingMatch = deskSaidNotThisVisitor,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012"
+        });
+        Assert.True(walkIn.IsSuccessStatusCode, await walkIn.Content.ReadAsStringAsync());
+
+        Assert.Equal(
+            deskSaidNotThisVisitor ? VisitStatus.Expected : VisitStatus.Cancelled,
+            await StatusOfAsync(bookingId));
+        if (!deskSaidNotThisVisitor)
+        {
+            var after = await reception.GetFromJsonAsync<JsonElement>($"/api/visitors/expected/match?phone={phone}", JsonOptions);
+            Assert.DoesNotContain(after.GetProperty("data").EnumerateArray(), m => m.GetProperty("visitId").GetGuid() == bookingId);
+        }
+        else
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var leftover = await db.VisitorVisits.IgnoreQueryFilters().FirstAsync(v => v.Id == bookingId);
+            leftover.Status = VisitStatus.Cancelled;
+            await db.SaveChangesAsync();
+        }
     }
 
     [Fact]

@@ -21,15 +21,17 @@ const MENU_ICONS: Record<string, string> = {
   dashboard: '▦',
   reception: '⌂',
   host: '◎',
-  visitors: '👤',
+  visitors: '◎',
   inside: '◉',
   expected: '◷',
   reports: '▤',
   departments: '▣',
+  employees: '☰',
   purposes: '◇',
   locations: '⌖',
-  feedback: '★',
-  users: '👥',
+  feedback: '☆',
+  mailcontent: '✉',
+  users: '☰',
   settings: '⚙',
 }
 
@@ -127,8 +129,8 @@ export function AppLayout() {
                 >
                   <span
                     className={cn(
-                      'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xl leading-none',
-                      active ? 'bg-white/20 text-white' : 'bg-mint text-primary',
+                      'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg leading-none',
+                      active ? 'bg-white/20 text-white' : 'bg-mint text-ink',
                     )}
                     aria-hidden
                   >
@@ -139,13 +141,6 @@ export function AppLayout() {
               )
             })}
           </nav>
-          <div className="border-t border-border/70 p-3">
-            <div className="rounded-xl bg-mint px-3 py-3">
-              <p className="text-xs text-ink-muted">{t('nav.signedIn')}</p>
-              <p className="truncate text-sm font-semibold text-ink">{user?.fullName}</p>
-              <p className="truncate text-xs text-primary">{role}</p>
-            </div>
-          </div>
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">

@@ -91,6 +91,7 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
         var response = await client.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = name,
+            gender = 1,
             companyName = "Concurrency Co",
             telephone = "9000000099",
             email = $"{Guid.NewGuid():N}@example.test",
@@ -102,11 +103,26 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
             isWalkIn = true,
             idTypeName = "Aadhaar",
             idNumber = "123456789012",
+            // A fresh face per call: a visitor left inside by an earlier run must not be face-matched.
+            photoBase64 = TestPhotos.Base64($"{name}-{Guid.NewGuid():N}"),
             passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
         return json.GetProperty("data").GetProperty("visitId").GetGuid();
+    }
+
+    /// <summary>Check-out requires the visitor's feedback when questions are configured.</summary>
+    private static async Task SubmitFeedbackAsync(HttpClient client, Guid visitId)
+    {
+        var questions = await client.GetFromJsonAsync<JsonElement>("/api/masters/feedback-questions?activeOnly=true", JsonOptions);
+        var answers = questions.GetProperty("data").EnumerateArray()
+            .Where(q => !q.TryGetProperty("locationId", out var loc) || loc.ValueKind == JsonValueKind.Null)
+            .Select(q => new { questionId = q.GetProperty("id").GetGuid(), rating = 5 })
+            .ToArray();
+        if (answers.Length == 0) return;
+        var response = await client.PostAsJsonAsync($"/api/visitors/{visitId}/feedback", new { answers });
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
     }
 
     private static ClaimsPrincipal ReceptionPrincipal(string userId) =>
@@ -153,6 +169,7 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
         var reception = await LoginAsync("reception");
         var visitId = await RegisterApprovedVisitAsync(reception, "Concurrency Happy CheckOut");
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+        await SubmitFeedbackAsync(reception, visitId);
 
         var response = await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
@@ -304,6 +321,7 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
         var stale = await dbA.VisitorVisits.Include(v => v.Passes).FirstAsync(v => v.Id == visitId);
         var staleVersion = stale.RowVersion.ToArray();
 
+        await SubmitFeedbackAsync(reception, visitId);
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { })).EnsureSuccessStatusCode();
 
         dbA.Entry(stale).Property(v => v.RowVersion).OriginalValue = staleVersion;
@@ -321,6 +339,7 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
         var reception = await LoginAsync("reception");
         var visitId = await RegisterApprovedVisitAsync(reception, "Concurrency Dual CheckOut");
         (await reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-in", new { })).EnsureSuccessStatusCode();
+        await SubmitFeedbackAsync(reception, visitId);
 
         var firstTask = reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { });
         var secondTask = reception.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { });

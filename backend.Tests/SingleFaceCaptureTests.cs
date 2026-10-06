@@ -9,10 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models;
@@ -96,6 +93,7 @@ public class SingleFaceCaptureTests : IClassFixture<TestApiFactory>
         return await client.PostAsJsonAsync("/api/visitors", new
         {
             visitorName = name,
+            gender = 1,
             companyName = "Face Gate Co",
             telephone = "9000000088",
             email = $"{Guid.NewGuid():N}@example.test",
@@ -277,18 +275,20 @@ public class SingleFaceCaptureTests : IClassFixture<TestApiFactory>
 
     private static byte[] CompositeSideBySide(byte[] leftJpeg, byte[] rightJpeg)
     {
-        using var left = Image.Load<Rgb24>(leftJpeg);
-        using var right = Image.Load<Rgb24>(rightJpeg);
+        using var left = SKBitmap.Decode(leftJpeg)
+            ?? throw new InvalidOperationException("Left fixture could not be decoded.");
+        using var right = SKBitmap.Decode(rightJpeg)
+            ?? throw new InvalidOperationException("Right fixture could not be decoded.");
         var height = Math.Max(left.Height, right.Height);
-        using var canvas = new Image<Rgb24>(left.Width + right.Width, height);
-        canvas.Mutate(ctx =>
+        using var canvas = new SKBitmap(left.Width + right.Width, height, SKColorType.Rgba8888, SKAlphaType.Opaque);
+        canvas.Erase(SKColors.Black);
+        using (var skCanvas = new SKCanvas(canvas))
         {
-            ctx.DrawImage(left, new Point(0, 0), 1f);
-            ctx.DrawImage(right, new Point(left.Width, 0), 1f);
-        });
-        using var ms = new MemoryStream();
-        canvas.Save(ms, new JpegEncoder { Quality = 90 });
-        return ms.ToArray();
+            skCanvas.DrawBitmap(left, 0, 0);
+            skCanvas.DrawBitmap(right, left.Width, 0);
+        }
+
+        return TestPhotos.EncodeJpeg(canvas, quality: 90);
     }
 
     private sealed class FakeWebHostEnvironment : IWebHostEnvironment

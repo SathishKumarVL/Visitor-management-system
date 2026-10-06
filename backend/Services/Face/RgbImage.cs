@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace Tiaano.Vms.Api.Services.Face;
 
@@ -8,9 +6,11 @@ namespace Tiaano.Vms.Api.Services.Face;
 /// A decoded image as tightly packed interleaved RGB bytes.
 /// </summary>
 /// <remarks>
-/// Detection and alignment work on this rather than on ImageSharp types so the pixel maths stays
+/// Detection and alignment work on this rather than on SkiaSharp types so the pixel maths stays
 /// testable without an imaging library, and so there is one explicit place where channel order is
 /// decided. Channel order matters: the ONNX models were trained on RGB input.
+/// Decode uses SkiaSharp (MIT). Letterbox resize uses the same bilinear sampler as
+/// <see cref="WarpAffine"/> so SCRFD preprocess stays consistent with ArcFace alignment maths.
 /// </remarks>
 public sealed class RgbImage
 {
@@ -31,10 +31,28 @@ public sealed class RgbImage
 
     public RgbImage(int width, int height) : this(width, height, new byte[width * height * 3]) { }
 
+    /// <summary>
+    /// Decodes JPEG / PNG / WebP (and other formats SkiaSharp supports) into tightly packed RGB.
+    /// </summary>
     public static RgbImage Decode(byte[] encoded)
     {
-        using var image = Image.Load<Rgb24>(encoded);
-        return FromImageSharp(image);
+        if (encoded is null || encoded.Length == 0)
+            throw new InvalidOperationException("The photo could not be read as an image.");
+
+        try
+        {
+            using var bitmap = SKBitmap.Decode(encoded)
+                ?? throw new InvalidOperationException("The photo could not be read as an image.");
+            return FromSkia(bitmap);
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"The photo could not be read as an image: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -42,8 +60,8 @@ public sealed class RgbImage
     /// Returns the scale that was applied so detections can be mapped back to original coordinates.
     /// </summary>
     /// <remarks>
-    /// This letterboxing reproduces what InsightFace does before SCRFD. A triangle filter is used
-    /// because it is the closest match to OpenCV's default bilinear resize.
+    /// This letterboxing reproduces what InsightFace does before SCRFD. Bilinear sampling matches
+    /// OpenCV's default INTER_LINEAR resize (previously approximated via ImageSharp Triangle).
     /// </remarks>
     public (RgbImage Canvas, float Scale) LetterboxTopLeft(int targetWidth, int targetHeight)
     {
@@ -51,29 +69,17 @@ public sealed class RgbImage
         var newWidth = Math.Max(1, (int)(Width * scale));
         var newHeight = Math.Max(1, (int)(Height * scale));
 
-        using var image = ToImageSharp();
-        image.Mutate(x => x.Resize(new ResizeOptions
-        {
-            Size = new Size(newWidth, newHeight),
-            Sampler = KnownResamplers.Triangle,
-            Mode = ResizeMode.Stretch
-        }));
-
+        var resized = ResizeBilinear(newWidth, newHeight);
         var canvas = new RgbImage(targetWidth, targetHeight);
-        image.ProcessPixelRows(accessor =>
+        for (var y = 0; y < newHeight; y++)
         {
-            for (var y = 0; y < accessor.Height; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                var offset = y * targetWidth * 3;
-                for (var x = 0; x < row.Length; x++)
-                {
-                    canvas.Pixels[offset + x * 3] = row[x].R;
-                    canvas.Pixels[offset + x * 3 + 1] = row[x].G;
-                    canvas.Pixels[offset + x * 3 + 2] = row[x].B;
-                }
-            }
-        });
+            Array.Copy(
+                resized.Pixels,
+                y * newWidth * 3,
+                canvas.Pixels,
+                y * targetWidth * 3,
+                newWidth * 3);
+        }
 
         return (canvas, scale);
     }
@@ -127,6 +133,29 @@ public sealed class RgbImage
         return result;
     }
 
+    /// <summary>
+    /// Stretch-resize with bilinear sampling. Destination pixel (x,y) maps to source
+    /// (x * Width / newWidth, y * Height / newHeight), matching a direct OpenCV INTER_LINEAR stretch.
+    /// </summary>
+    private RgbImage ResizeBilinear(int newWidth, int newHeight)
+    {
+        var result = new RgbImage(newWidth, newHeight);
+        var xScale = (float)Width / newWidth;
+        var yScale = (float)Height / newHeight;
+
+        for (var y = 0; y < newHeight; y++)
+        {
+            var sy = y * yScale;
+            for (var x = 0; x < newWidth; x++)
+            {
+                var sx = x * xScale;
+                SampleBilinear(sx, sy, result.Pixels, (y * newWidth + x) * 3);
+            }
+        }
+
+        return result;
+    }
+
     private void SampleBilinear(float x, float y, byte[] destination, int destinationOffset)
     {
         var x0 = (int)MathF.Floor(x);
@@ -155,42 +184,19 @@ public sealed class RgbImage
         return Pixels[(y * Width + x) * 3 + channel];
     }
 
-    private Image<Rgb24> ToImageSharp()
+    private static RgbImage FromSkia(SKBitmap bitmap)
     {
-        var image = new Image<Rgb24>(Width, Height);
-        image.ProcessPixelRows(accessor =>
+        var result = new RgbImage(bitmap.Width, bitmap.Height);
+        var colors = bitmap.Pixels;
+        for (var i = 0; i < colors.Length; i++)
         {
-            for (var y = 0; y < Height; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                var offset = y * Width * 3;
-                for (var x = 0; x < Width; x++)
-                    row[x] = new Rgb24(
-                        Pixels[offset + x * 3],
-                        Pixels[offset + x * 3 + 1],
-                        Pixels[offset + x * 3 + 2]);
-            }
-        });
-        return image;
-    }
+            var c = colors[i];
+            var o = i * 3;
+            result.Pixels[o] = c.Red;
+            result.Pixels[o + 1] = c.Green;
+            result.Pixels[o + 2] = c.Blue;
+        }
 
-    private static RgbImage FromImageSharp(Image<Rgb24> image)
-    {
-        var result = new RgbImage(image.Width, image.Height);
-        image.ProcessPixelRows(accessor =>
-        {
-            for (var y = 0; y < accessor.Height; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                var offset = y * image.Width * 3;
-                for (var x = 0; x < row.Length; x++)
-                {
-                    result.Pixels[offset + x * 3] = row[x].R;
-                    result.Pixels[offset + x * 3 + 1] = row[x].G;
-                    result.Pixels[offset + x * 3 + 2] = row[x].B;
-                }
-            }
-        });
         return result;
     }
 }

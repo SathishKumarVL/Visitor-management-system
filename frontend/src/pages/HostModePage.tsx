@@ -25,7 +25,7 @@ export function HostModePage() {
         <ModeTile
           className="min-h-40"
           title={t('host.inside')}
-          description={t('host.insideDesc')}
+          description="Enter meeting minutes for your visitors, then reception can check them out"
           icon="●"
           onClick={() => navigate('/visitors/inside')}
         />

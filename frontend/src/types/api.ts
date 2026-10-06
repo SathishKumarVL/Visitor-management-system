@@ -7,6 +7,8 @@ export interface ApiResponse<T> {
   errors?: string[] | null
 }
 
+export type SortDir = 'asc' | 'desc'
+
 export interface PagedResult<T> {
   items: T[]
   totalCount: number
@@ -28,6 +30,8 @@ export interface UserDto {
   allowedMenuKeys?: string[]
   mustChangePassword: boolean
   isActive: boolean
+  /** Faces registered for face sign-in (admin user list only). */
+  faceLoginCount?: number
 }
 
 export interface LoginResponse {
@@ -35,6 +39,16 @@ export interface LoginResponse {
   expiresAt: string
   user: UserDto
   refreshToken?: string
+  /** Face sign-in only: the person whose registered face matched. */
+  facePersonName?: string | null
+}
+
+export interface UserFaceLoginDto {
+  id: string
+  personName: string
+  createdAt: string
+  createdBy?: string | null
+  lastUsedAt?: string | null
 }
 
 export interface ChangePasswordRequest {
@@ -59,19 +73,51 @@ export interface MasterItemDto {
   requiresPlantNumber: boolean
   requiresOtherText: boolean
   isDefault: boolean
+  locationId?: string | null
+  locationName?: string | null
 }
 
 export interface EmployeeDto {
   id: string
   fullName: string
+  code?: string | null
   email?: string | null
   phone?: string | null
   intercom?: string | null
   designation?: string | null
   departmentId: string
   departmentName: string
+  locationId?: string | null
+  locationName?: string | null
   userId?: string | null
+  /** Login username of the linked Host account. */
+  userName?: string | null
   isActive: boolean
+}
+
+export interface CreateEmployeeLoginRequest {
+  username: string
+  email?: string | null
+  password: string
+}
+
+export type IntegrationScope = 'reports' | 'employees'
+
+export interface IntegrationApiKeyDto {
+  id: string
+  name: string
+  keyPrefix: string
+  scopes: IntegrationScope[]
+  isActive: boolean
+  createdAt: string
+  createdBy?: string | null
+  lastUsedAt?: string | null
+  revokedAt?: string | null
+}
+
+export interface CreatedIntegrationApiKeyDto {
+  key: IntegrationApiKeyDto
+  plainKey: string
 }
 
 export interface VisitorListItemDto {
@@ -81,6 +127,8 @@ export interface VisitorListItemDto {
   visitNumber: string
   visitorName: string
   companyName: string
+  gender?: number | null
+  salutation?: string
   phone?: string | null
   email?: string | null
   hostName: string
@@ -99,6 +147,12 @@ export interface VisitorListItemDto {
   preRegistrationReference?: string | null
   passCode?: string | null
   numberOfPersons?: number
+  hasMeetingMinutes?: boolean
+  /** Minutes of meeting waived; the check-out email does not wait for them. */
+  momNotRequired?: boolean
+  momNotRequiredBy?: string | null
+  momNotRequiredAt?: string | null
+  isManualCheckOut?: boolean
 }
 
 export interface ApprovalHistoryDto {
@@ -114,6 +168,7 @@ export interface VisitorDetailDto extends VisitorListItemDto {
   intercom?: string | null
   purposeNotes?: string | null
   notes?: string | null
+  meetingMinutes?: string | null
   plantNumber?: string | null
   otherLocationText?: string | null
   idTypeName?: string | null
@@ -126,8 +181,56 @@ export interface VisitorDetailDto extends VisitorListItemDto {
   feedback?: VisitFeedbackDto | null
 }
 
+export interface OpenBookingDto {
+  visitId: string
+  visitNumber: string
+  date: string
+  /** HH:mm:ss */
+  time?: string | null
+  hostEmployeeId: string
+  hostName: string
+}
+
+/** An existing visitor found by mobile number, with their bookings that are still open. */
+export interface VisitorPhoneLookupDto {
+  visitorId: string
+  visitorNumber: string
+  visitorName: string
+  companyName: string
+  gender?: number | null
+  phone?: string | null
+  email?: string | null
+  lastVisitDate?: string | null
+  totalVisits: number
+  openBookings: OpenBookingDto[]
+}
+
+/** A booking for today that a walk-up registration can be linked to. */
+export interface BookingMatchDto {
+  visitId: string
+  visitorId: string
+  visitNumber: string
+  visitorName: string
+  companyName: string
+  gender?: number | null
+  phone?: string | null
+  email?: string | null
+  hostEmployeeId: string
+  hostName: string
+  departmentId: string
+  departmentName: string
+  /** HH:mm:ss */
+  expectedTime?: string | null
+  purposeIds: string[]
+  purposes: string[]
+  purposeNotes?: string | null
+  numberOfPersons: number
+}
+
 export interface RegisterVisitorRequest {
   visitorName: string
+  /** 1 = Male (Mr.), 2 = Female (Ms.) */
+  gender: 1 | 2
   visitDate?: string | null
   visitTime?: string | null
   telephone?: string | null
@@ -151,6 +254,8 @@ export interface RegisterVisitorRequest {
   idNumber?: string | null
   expectedVisitId?: string | null
   recognizedVisitorId?: string | null
+  /** Set when the desk said a matching booking was not this visitor. */
+  skipBookingMatch?: boolean
   numberOfPersons?: number
   /** Server-allocated when omitted; free-text values are ignored by the API. */
   passNumber?: string | null
@@ -163,6 +268,7 @@ export interface FaceSearchMatchDto {
   companyName: string
   phone?: string | null
   email?: string | null
+  gender?: number | null
   photoUrl?: string | null
   lastVisitDate?: string | null
   totalVisits: number
@@ -176,8 +282,10 @@ export interface FaceCheckoutMatchDto {
   visitId: string
   visitorId: string
   visitorName: string
+  salutation?: string
   companyName: string
   visitNumber: string
+  locationId?: string | null
   photoUrl?: string | null
   checkInAt?: string | null
   similarity: number
@@ -189,6 +297,8 @@ export interface FeedbackQuestionDto {
   isRequired: boolean
   isActive: boolean
   sortOrder: number
+  locationId?: string | null
+  locationName?: string | null
 }
 
 export interface FeedbackQuestionUpsertRequest {
@@ -196,6 +306,7 @@ export interface FeedbackQuestionUpsertRequest {
   isRequired: boolean
   isActive: boolean
   sortOrder: number
+  locationId?: string | null
 }
 
 export interface SubmitVisitFeedbackRequest {
@@ -227,6 +338,8 @@ export interface FacePhotoValidationDto {
 export interface ExpectedVisitorRequest {
   visitorName: string
   companyName: string
+  /** 1 = Male (Mr.), 2 = Female (Ms.) */
+  gender: 1 | 2
   phone?: string | null
   email?: string | null
   expectedDate: string
@@ -235,6 +348,7 @@ export interface ExpectedVisitorRequest {
   hostName?: string | null
   departmentId: string
   purposeIds: string[]
+  purposeNotes?: string | null
   locationIds: string[]
   plantNumber?: string | null
   otherLocationText?: string | null
@@ -252,6 +366,8 @@ export interface DashboardDto {
   expectedToday: number
   pendingApprovals: number
   checkedOutToday: number
+  /** SuperAdmin manual check-outs today (no face). */
+  manualCheckOutsToday?: number
   byDepartment: ChartPointDto[]
   byPurpose: ChartPointDto[]
   byLocation: ChartPointDto[]
@@ -259,6 +375,14 @@ export interface DashboardDto {
   recentVisitors: VisitorListItemDto[]
   pendingApprovalItems: VisitorListItemDto[]
   currentlyInsideItems: VisitorListItemDto[]
+  /** Numbers are limited to the signed-in host's own visitors. */
+  isHostView?: boolean
+  /** Checked-out visits still waiting for minutes of meeting. */
+  momPendingCount?: number
+  momPendingItems?: VisitorListItemDto[]
+  /** SuperAdmin only: checked-out visits with no minutes (pending or marked not required). */
+  checkedOutWithoutMomCount?: number
+  checkedOutWithoutMomItems?: VisitorListItemDto[]
 }
 
 export interface SettingsDto {
@@ -301,6 +425,18 @@ export interface PassDto {
   checkInAt?: string | null
   photoUrl?: string | null
   status: string
+  brandCompanyName?: string
+  brandLogoPath?: string
+}
+
+export type MasterImportKind = 'departments' | 'employees' | 'purposes' | 'locations' | 'feedback-questions'
+
+export interface MasterImportResultDto {
+  totalRows: number
+  created: number
+  updated: number
+  failed: number
+  errors: { row: number; message: string }[]
 }
 
 export interface CreateUserRequest {
@@ -328,12 +464,15 @@ export interface UpdateUserRequest {
 
 export interface CreateEmployeeRequest {
   fullName: string
+  code?: string | null
   email?: string | null
   phone?: string | null
   intercom?: string | null
   designation?: string | null
   departmentId: string
+  locationId?: string | null
   userId?: string | null
+  isActive: boolean
 }
 
 export interface MasterUpsertRequest {
@@ -345,6 +484,26 @@ export interface MasterUpsertRequest {
   requiresPlantNumber: boolean
   requiresOtherText: boolean
   isDefault: boolean
+  locationId?: string | null
+}
+
+export interface MailContentTemplateDto {
+  id: string
+  kind: number
+  kindLabel: string
+  subject: string
+  body: string
+  isActive: boolean
+  locationId?: string | null
+  locationName?: string | null
+}
+
+export interface MailContentUpsertRequest {
+  kind: number
+  subject: string
+  body: string
+  isActive: boolean
+  locationId?: string | null
 }
 
 export interface VisitorSearchParams {
@@ -359,6 +518,8 @@ export interface VisitorSearchParams {
   dateFrom?: string
   dateTo?: string
   quickFilter?: string
+  sortBy?: string
+  sortDir?: SortDir
   page?: number
   pageSize?: number
 }
@@ -366,6 +527,8 @@ export interface VisitorSearchParams {
 export interface VisitorWizardDraft {
   step: number
   visitorName: string
+  /** '' | 1 | 2 — required before submit */
+  gender: '' | 1 | 2
   telephone: string
   email: string
   companyName: string
@@ -374,9 +537,11 @@ export interface VisitorWizardDraft {
   numberOfPersons: number
   departmentId: string
   hostName: string
+  hostEmployeeId: string
   purposeIds: string[]
   othersChecked: boolean
   locationIds: string[]
+  locationId: string
   plantNumber: string
   otherLocationText: string
   otherPurposeText: string
@@ -393,6 +558,7 @@ export interface VisitorWizardDraft {
 
 export interface PassNumberSeriesDto {
   id: string
+  locationId?: string | null
   prefix: string
   year?: number | null
   startNumber: number
@@ -403,30 +569,9 @@ export interface PassNumberSeriesDto {
 }
 
 export interface UpsertPassNumberSeriesRequest {
+  locationId?: string | null
   prefix: string
   year?: number | null
-  startNumber: number
-  endNumber: number
-  currentNumber?: number | null
-  isActive: boolean
-}
-
-export interface PassNumberAllocationDto {
-  id: string
-  seriesId: string
-  userId: string
-  userName?: string | null
-  fullName?: string | null
-  startNumber: number
-  endNumber: number
-  currentNumber: number
-  isActive: boolean
-}
-
-export interface UpsertPassNumberAllocationRequest {
-  id?: string | null
-  seriesId?: string | null
-  userId: string
   startNumber: number
   endNumber: number
   currentNumber?: number | null

@@ -38,6 +38,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<EmergencyRollCallEvent> EmergencyRollCallEvents => Set<EmergencyRollCallEvent>();
     public DbSet<PassNumberSeries> PassNumberSeries => Set<PassNumberSeries>();
     public DbSet<PassNumberAllocation> PassNumberAllocations => Set<PassNumberAllocation>();
+    public DbSet<PassNumberHold> PassNumberHolds => Set<PassNumberHold>();
     public DbSet<DevicePushToken> DevicePushTokens => Set<DevicePushToken>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<ProductModule> ProductModules => Set<ProductModule>();
@@ -45,10 +46,30 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<TenantLicense> TenantLicenses => Set<TenantLicense>();
     public DbSet<FeatureFlag> FeatureFlags => Set<FeatureFlag>();
     public DbSet<ApplicationRelease> ApplicationReleases => Set<ApplicationRelease>();
+    public DbSet<MailContentTemplate> MailContentTemplates => Set<MailContentTemplate>();
+    public DbSet<IntegrationApiKey> IntegrationApiKeys => Set<IntegrationApiKey>();
+    public DbSet<UserFaceLogin> UserFaceLogins => Set<UserFaceLogin>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+
+        builder.Entity<UserFaceLogin>(e =>
+        {
+            e.HasIndex(x => x.UserId);
+            e.HasIndex(x => x.Model);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<IntegrationApiKey>(e =>
+        {
+            e.HasIndex(x => x.KeyHash).IsUnique();
+            e.HasIndex(x => x.TenantId);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
 
         builder.Entity<Tenant>(e =>
         {
@@ -61,6 +82,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.Property(x => x.Name).IsRequired();
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             // Fail closed: when a scoped tenant context exists without TenantId, return no rows (never all tenants).
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
@@ -70,6 +92,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.FullName);
             e.HasOne(x => x.Department).WithMany(d => d.Employees).HasForeignKey(x => x.DepartmentId)
                 .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.User).WithMany(u => u.EmployeeProfiles).HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
@@ -99,9 +122,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<VisitorVisit>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.VisitNumber }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.EntryNumber });
+            e.Property(x => x.EntryNumber).HasMaxLength(50);
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.VisitDate);
             e.HasIndex(x => x.PreRegistrationReference);
+            // Additive column: existing rows default to false (face/normal check-out).
+            e.Property(x => x.IsManualCheckOut).HasDefaultValue(false);
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasOne(x => x.Visitor).WithMany(v => v.Visits).HasForeignKey(x => x.VisitorId)
                 .OnDelete(DeleteBehavior.Restrict);
@@ -183,6 +210,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .HasFilter("[IdempotencyKey] IS NOT NULL");
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Location>().WithMany().HasForeignKey(x => x.LocationId)
+                .OnDelete(DeleteBehavior.SetNull);
             // Fail closed: a queued notification is only visible to the tenant that queued it.
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
@@ -190,8 +219,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<PassNumberSeries>(e =>
         {
             e.HasIndex(x => new { x.TenantId, x.IsActive });
+            e.HasIndex(x => x.LocationId);
             e.Property(x => x.Prefix).HasMaxLength(20).IsRequired();
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
@@ -205,6 +237,14 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<PassNumberHold>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.SeriesKey, x.Number }).IsUnique();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -234,7 +274,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
         builder.Entity<VisitorPass>(e =>
         {
-            e.HasIndex(x => x.PassCode).IsUnique();
+            // Physical badges are reused after check-out; only one active pass may hold a code.
+            e.HasIndex(x => x.PassCode).IsUnique().HasFilter("[IsActive] = 1");
             e.HasOne(x => x.VisitorVisit).WithMany(v => v.Passes).HasForeignKey(x => x.VisitorVisitId)
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.IssuedByUser).WithMany().HasForeignKey(x => x.IssuedByUserId)
@@ -252,6 +293,17 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         {
             e.HasIndex(x => new { x.TenantId, x.Name });
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<MailContentTemplate>(e =>
+        {
+            e.HasIndex(x => x.LocationId);
+            e.Property(x => x.Subject).IsRequired().HasMaxLength(200);
+            e.Property(x => x.Body).IsRequired();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -274,6 +326,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.TenantId, x.SortOrder });
             e.Property(x => x.Prompt).IsRequired().HasMaxLength(300);
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 

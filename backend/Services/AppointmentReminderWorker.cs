@@ -53,7 +53,7 @@ public sealed class AppointmentReminderWorker : BackgroundService
         var offsets = await ResolveOffsetsAsync(db);
         if (offsets.Count == 0) return;
 
-        var nowLocal = DateTime.Now;
+        var nowLocal = AppTime.Now;
         var window = TimeSpan.FromMinutes(Math.Clamp(_config.GetValue("Reminders:PollMinutes", 5), 1, 60));
 
         // Background worker has no ambient tenant — read across tenants with filters ignored,

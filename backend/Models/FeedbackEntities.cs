@@ -17,6 +17,10 @@ public class FeedbackQuestion
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
 
+    /// <summary>When set, question is only shown for this location. Null = all locations.</summary>
+    public Guid? LocationId { get; set; }
+    public Location? Location { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public string? CreatedBy { get; set; }

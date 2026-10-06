@@ -7,10 +7,16 @@ namespace Tiaano.Vms.Api.Security;
 public static class RateLimitPolicy
 {
     public const string LoginPolicyName = "login";
-    public const int LoginPermitLimit = 10;
+    // Many phones on one mobile network or office Wi-Fi share a public IP, so the limit is per IP but generous;
+    // account lockout (5 bad passwords) still protects individual accounts.
+    public const int LoginPermitLimit = 20;
     public const int LoginQueueLimit = 0;
 
     public static TimeSpan LoginWindow => TimeSpan.FromMinutes(1);
+
+    /// <summary>Token refresh is separate so background refreshes never use up a user's login attempts.</summary>
+    public const string RefreshPolicyName = "refresh";
+    public const int RefreshPermitLimit = 60;
 
     /// <summary>
     /// Environments allowed to run without the login limiter. Matching is exact and case-sensitive:

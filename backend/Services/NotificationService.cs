@@ -4,11 +4,20 @@ using Tiaano.Vms.Api.Models;
 
 namespace Tiaano.Vms.Api.Services;
 
+/// <summary>Per-message sender override for email; any null part falls back to the SMTP settings.</summary>
+public sealed record MailSender(string? FromAddress, string? FromName, string? ReplyTo);
+
 public interface INotificationService
 {
-    Task NotifyAsync(string channel, string recipient, string subject, string body, string? idempotencyKey = null);
-    Task SendVisitorThankYouEmailAsync(string visitorName, string? email, DateTime visitDateTimeLocal);
-    Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient);
+    Task NotifyAsync(
+        string channel,
+        string recipient,
+        string subject,
+        string body,
+        string? idempotencyKey = null,
+        Guid? locationId = null,
+        MailSender? sender = null);
+    Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null);
     /// <summary>Re-attempts delivery for unsent Email outbox rows (e.g. after SMTP config fix).</summary>
     Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20);
 }
@@ -42,7 +51,9 @@ public class NotificationService : INotificationService
         string recipient,
         string subject,
         string body,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        Guid? locationId = null,
+        MailSender? sender = null)
     {
         var tenantId = QueueingTenantId;
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -59,11 +70,15 @@ public class NotificationService : INotificationService
         var row = new NotificationOutbox
         {
             TenantId = tenantId,
+            LocationId = locationId,
             Channel = channel,
             Recipient = recipient,
             Subject = subject,
             Body = body,
             IdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim(),
+            FromAddress = Clip(sender?.FromAddress, 256),
+            FromName = Clip(sender?.FromName, 200),
+            ReplyTo = Clip(sender?.ReplyTo, 256),
             IsSent = false
         };
         _db.NotificationOutbox.Add(row);
@@ -73,7 +88,6 @@ public class NotificationService : INotificationService
         }
         catch (DbUpdateException) when (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            // Concurrent workers raced on the unique (TenantId, IdempotencyKey) index.
             _db.Entry(row).State = EntityState.Detached;
             _logger.LogDebug("Idempotent notification already queued: {Key}", idempotencyKey);
             return;
@@ -82,21 +96,14 @@ public class NotificationService : INotificationService
         await TryDeliverAsync(row);
     }
 
-    public async Task SendVisitorThankYouEmailAsync(string visitorName, string? email, DateTime visitDateTimeLocal)
+    private static string? Clip(string? value, int max)
     {
-        if (string.IsNullOrWhiteSpace(email))
-        {
-            _logger.LogWarning("Checkout thank-you email skipped — visitor {Name} has no email.", visitorName);
-            return;
-        }
-
-        var when = visitDateTimeLocal.ToString("MMM dd, yyyy hh:mm tt");
-        var subject = "Thank you for visiting Tiaano";
-        var body = BuildThankYouBody(visitorName.Trim(), when);
-        await NotifyAsync("Email", email.Trim(), subject, body);
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return null;
+        return trimmed.Length > max ? trimmed[..max] : trimmed;
     }
 
-    public async Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient)
+    public async Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null)
     {
         if (string.IsNullOrWhiteSpace(recipient))
             return (false, "Recipient email is required.");
@@ -104,18 +111,38 @@ public class NotificationService : INotificationService
         var row = new NotificationOutbox
         {
             TenantId = QueueingTenantId,
+            LocationId = locationId,
             Channel = "Email",
             Recipient = recipient.Trim(),
             Subject = "Tiaano VMS SMTP test",
-            Body = $"SMTP test from Tiaano Visitor Management at {DateTime.Now:dd MMM yyyy HH:mm:ss}.",
+            Body = $"SMTP test from Tiaano Visitor Management at {AppTime.Now:dd MMM yyyy HH:mm:ss}.",
             IsSent = false
         };
         _db.NotificationOutbox.Add(row);
         await _db.SaveChangesAsync();
-        await TryDeliverAsync(row);
-        return row.IsSent
-            ? (true, $"Email sent to {row.Recipient}.")
-            : (false, row.Error ?? "Send failed.");
+
+        var email = _providers.OfType<IEmailNotificationProvider>().FirstOrDefault();
+        if (email is null)
+            return (false, "Email delivery provider is not registered.");
+
+        try
+        {
+            await email.DeliverStrictAsync(row);
+            row.IsSent = true;
+            row.SentAt = DateTime.UtcNow;
+            row.Error = null;
+            await _db.SaveChangesAsync();
+            return (true, $"Email sent to {row.Recipient}.");
+        }
+        catch (Exception ex)
+        {
+            var detail = ex.GetBaseException().Message;
+            row.IsSent = false;
+            row.Error = detail.Length > 480 ? detail[..480] : detail;
+            await _db.SaveChangesAsync();
+            _logger.LogError(ex, "SMTP test failed for {Recipient}", row.Recipient);
+            return (false, $"SMTP failed: {detail}");
+        }
     }
 
     public async Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20)
@@ -138,24 +165,6 @@ public class NotificationService : INotificationService
 
         return (pending.Count, sent);
     }
-
-    private static string BuildThankYouBody(string visitorName, string visitWhen) =>
-        $"""
-        Dear {visitorName},
-
-        Greetings from Tiaano. Thank you so much for taking the time to visit ({visitWhen}) our company. Your support and enthusiasm are invaluable.
-
-        Your ongoing support has been instrumental in our success as a company. We look forward to continuing our business relationship all in the future.
-
-        With Warm Regards,
-        ABILASH.C
-        SENIOR MANAGER - FACILITATION
-
-        TI ANODE FABRICATORS PVT. LTD.
-        Tiaano Bhavan, No. 48, Noothanchary, Madambakkam, Chennai-126, INDIA
-        Phone: +91 9444569900 Mobile: +91 8939663774
-        Email: sales@tiaano.com Website: www.tianode.com
-        """;
 
     private async Task TryDeliverAsync(NotificationOutbox row)
     {

@@ -8,9 +8,11 @@ export type MenuKey =
   | 'expected'
   | 'reports'
   | 'departments'
+  | 'employees'
   | 'purposes'
   | 'locations'
   | 'feedback'
+  | 'mailcontent'
   | 'users'
   | 'settings'
   | 'reception'
@@ -30,9 +32,11 @@ export const MENU_ITEMS: MenuItem[] = [
   { key: 'expected', label: 'Expected Visitors', path: '/visitors/expected', roles: ['SuperAdmin', 'Admin', 'Reception', 'Host', 'Security'] },
   { key: 'reports', label: 'Reports', path: '/reports', roles: ['SuperAdmin', 'Admin', 'Reception'] },
   { key: 'departments', label: 'Departments', path: '/masters/departments', roles: ['SuperAdmin', 'Admin'] },
+  { key: 'employees', label: 'Employees', path: '/masters/employees', roles: ['SuperAdmin'] },
   { key: 'purposes', label: 'Purposes', path: '/masters/purposes', roles: ['SuperAdmin', 'Admin'] },
   { key: 'locations', label: 'Locations', path: '/masters/locations', roles: ['SuperAdmin', 'Admin'] },
   { key: 'feedback', label: 'Feedback', path: '/masters/feedback', roles: ['SuperAdmin', 'Admin'] },
+  { key: 'mailcontent', label: 'Mail Content', path: '/masters/mail-content', roles: ['SuperAdmin', 'Admin'] },
   { key: 'users', label: 'Users', path: '/users', roles: ['SuperAdmin', 'Admin'] },
   { key: 'settings', label: 'Settings', path: '/settings', roles: ['SuperAdmin', 'Admin'] },
 ]
@@ -49,6 +53,8 @@ function normalizeAllowKeys(keys: string[]): Set<string> {
 
 export function visibleMenu(roles: string[], allowedMenuKeys?: string[] | null): MenuItem[] {
   const byRole = MENU_ITEMS.filter((item) => hasAnyRole(roles, item.roles))
+  // SuperAdmin always sees the full SuperAdmin catalog (new menus must not wait on an old allowlist).
+  if (hasAnyRole(roles, ['SuperAdmin'])) return byRole
   if (!allowedMenuKeys || allowedMenuKeys.length === 0) return byRole
   const allow = normalizeAllowKeys(allowedMenuKeys)
   return byRole.filter((item) => allow.has(item.key))

@@ -4,14 +4,14 @@ import { apiErrorMessage, passApi } from '../lib/api'
 import type { PassDto } from '../types/api'
 import { Alert, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
-import { formatDateTime } from '../lib/utils'
+import { assetUrl, formatDateTime } from '../lib/utils'
 import { BrandLogo } from '../components/BrandLogo'
 import { SecureImage } from '../components/SecureImage'
 import { useSettingsStore } from '../store/settingsStore'
 
 export function PassPrintPage() {
   const { visitId } = useParams<{ visitId: string }>()
-  const company = useSettingsStore((s) => s.settings.companyName)
+  const storeCompany = useSettingsStore((s) => s.companyName)
   const [pass, setPass] = useState<PassDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -33,6 +33,9 @@ export function PassPrintPage() {
   if (error) return <Alert tone="error">{error}</Alert>
   if (!pass) return null
 
+  const company = pass.brandCompanyName || storeCompany
+  const passLogo = pass.brandLogoPath ? assetUrl(pass.brandLogoPath) : undefined
+
   return (
     <div>
       <div className="no-print mb-4 flex flex-wrap gap-2">
@@ -53,18 +56,19 @@ export function PassPrintPage() {
 
         <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
           <div>
-            <BrandLogo className="h-12" />
+            <BrandLogo className="h-12" src={passLogo} alt={company} />
             <div className="mt-2 text-xs font-semibold uppercase tracking-[0.2em] text-ink-muted">Visitor Pass</div>
             <div className="text-sm text-ink-muted">{company}</div>
           </div>
           <div className="rounded-xl bg-brand-gradient px-3 py-2 text-center font-mono text-sm font-bold text-white">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-white/80">Visit #</div>
-            {pass.visitNumber}
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-white/80">Pass No.</div>
+            {pass.passCode || '—'}
           </div>
         </div>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_140px]">
           <div className="space-y-2 text-sm">
+            <Row label="Pass No." value={pass.passCode || '—'} />
             <Row label="Visitor" value={pass.visitorName} />
             <Row label="Company" value={pass.companyName} />
             <Row label="Person to meet" value={pass.hostName} />
@@ -88,8 +92,8 @@ export function PassPrintPage() {
               </div>
             )}
             <div className="w-full rounded-xl bg-mint/60 px-3 py-3 text-center">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Visit number</div>
-              <div className="mt-1 break-all font-mono text-sm font-bold text-ink">{pass.visitNumber}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Pass number</div>
+              <div className="mt-1 break-all font-mono text-lg font-bold text-ink">{pass.passCode || '—'}</div>
             </div>
           </div>
         </div>

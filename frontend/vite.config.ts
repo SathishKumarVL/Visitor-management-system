@@ -10,8 +10,9 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5175,
     strictPort: true,
+    // Let the browser use whatever host it opened (localhost or current LAN IP).
+    // A hardcoded HMR host breaks when Wi‑Fi DHCP changes the address.
     hmr: {
-      host: '192.168.0.109',
       clientPort: 5175,
     },
     proxy: {

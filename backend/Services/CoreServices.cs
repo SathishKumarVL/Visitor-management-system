@@ -8,12 +8,12 @@ namespace Tiaano.Vms.Api.Services;
 
 public interface ISettingsService
 {
-    Task<SettingsDto> GetAsync();
+    Task<SettingsDto> GetAsync(Guid? locationId = null);
     Task<SettingsDto> GetPublicBrandingAsync();
-    Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName);
-    Task<SettingsDto> UploadLogoAsync(IFormFile file, string? userName);
+    Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName, Guid? smtpLocationId = null);
+    Task<SettingsDto> UploadLogoAsync(IFormFile file, string? userName, Guid? locationId = null);
     Task<string> GetValueAsync(string key, string fallback);
-    Task<SmtpRuntimeOptions> ResolveSmtpAsync(CancellationToken ct = default);
+    Task<SmtpRuntimeOptions> ResolveSmtpAsync(Guid? locationId = null, CancellationToken ct = default);
 }
 
 public sealed class SmtpRuntimeOptions
@@ -35,7 +35,7 @@ public sealed class SmtpRuntimeOptions
 public class SettingsService : ISettingsService
 {
     private static readonly object CacheLock = new();
-    private static readonly Dictionary<Guid, (SettingsDto Dto, DateTime AtUtc)> Cache = new();
+    private static readonly Dictionary<(Guid Tenant, Guid? Loc), (SettingsDto Dto, DateTime AtUtc)> Cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
     private static readonly HashSet<string> AllowedThemes = new(StringComparer.OrdinalIgnoreCase)
@@ -73,21 +73,47 @@ public class SettingsService : ISettingsService
             ? id
             : throw new UnauthorizedAccessException("Tenant context is required for settings.");
 
-    public async Task<SettingsDto> GetAsync()
+    /// <summary>
+    /// Tenant-default SMTP uses keys like Smtp:Host.
+    /// Per-location overrides use SmtpLoc:{locationGuidN}:Host (etc.).
+    /// </summary>
+    internal static string SmtpStorageKey(string smtpKey, Guid? locationId) =>
+        locationId is Guid id
+            ? $"SmtpLoc:{id:N}:{smtpKey["Smtp:".Length..]}"
+            : smtpKey;
+
+    /// <summary>
+    /// Tenant branding uses CompanyName / LogoPath / ThemePreset / FontPreset.
+    /// Per-location overrides use BrandLoc:{locationGuidN}:LogoPath (etc.).
+    /// </summary>
+    internal static string BrandStorageKey(string brandKey, Guid? locationId) =>
+        locationId is Guid id
+            ? $"BrandLoc:{id:N}:{brandKey}"
+            : brandKey;
+
+    public async Task<SettingsDto> GetAsync(Guid? locationId = null)
     {
         var tenantId = EffectiveTenantId;
         lock (CacheLock)
         {
-            if (Cache.TryGetValue(tenantId, out var hit) && DateTime.UtcNow - hit.AtUtc < CacheTtl)
-                return hit.Dto;
+            if (Cache.TryGetValue((tenantId, locationId), out var hit) && DateTime.UtcNow - hit.AtUtc < CacheTtl)
+                return CloneSettings(hit.Dto);
         }
 
-        var map = await _db.SystemSettings.AsNoTracking().ToDictionaryAsync(x => x.Key, x => x.Value);
-        var dto = Map(map);
+        var rows = await _db.SystemSettings.AsNoTracking().ToListAsync();
+        var tenantMap = rows
+            .Where(x => !x.Key.StartsWith("SmtpLoc:", StringComparison.OrdinalIgnoreCase)
+                        && !x.Key.StartsWith("BrandLoc:", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+
+        var dto = Map(tenantMap);
+        ApplyBrandOverlay(dto, rows, locationId);
+        ApplySmtpOverlay(dto, rows, locationId);
         ApplyConfigSmtpFallback(dto);
+
         lock (CacheLock)
         {
-            Cache[tenantId] = (dto, DateTime.UtcNow);
+            Cache[(tenantId, locationId)] = (CloneSettings(dto), DateTime.UtcNow);
         }
         return dto;
     }
@@ -97,10 +123,11 @@ public class SettingsService : ISettingsService
     {
         var tenantId = WellKnownTenants.TiaanoId;
         var map = await _db.SystemSettings.IgnoreQueryFilters().AsNoTracking()
-            .Where(x => x.TenantId == tenantId)
+            .Where(x => x.TenantId == tenantId
+                        && !x.Key.StartsWith("SmtpLoc:")
+                        && !x.Key.StartsWith("BrandLoc:"))
             .ToDictionaryAsync(x => x.Key, x => x.Value);
         var dto = Map(map);
-        // Never expose mailbox config on the public branding path.
         dto.SmtpEnabled = false;
         dto.SmtpHost = "";
         dto.SmtpUsername = "";
@@ -119,9 +146,10 @@ public class SettingsService : ISettingsService
         return item?.Value ?? fallback;
     }
 
-    public async Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName)
+    public async Task<SettingsDto> UpdateAsync(SettingsDto dto, string? userName, Guid? smtpLocationId = null)
     {
         var tenantId = EffectiveTenantId;
+
         async Task Upsert(string key, string value)
         {
             var row = await _db.SystemSettings.FirstOrDefaultAsync(x => x.Key == key);
@@ -137,40 +165,49 @@ public class SettingsService : ISettingsService
             }
         }
 
-        await Upsert("CompanyName", dto.CompanyName?.Trim() ?? "TIAANO");
-        await Upsert("LogoPath", string.IsNullOrWhiteSpace(dto.LogoPath) ? "/branding/tiaano-logo.png" : dto.LogoPath.Trim());
-        await Upsert("ThemePreset", NormalizeTheme(dto.ThemePreset));
-        await Upsert("FontPreset", NormalizeFont(dto.FontPreset));
-        await Upsert("VisitorIdPrefix", dto.VisitorIdPrefix);
-        await Upsert("VisitorPassValidityHours", dto.VisitorPassValidityHours.ToString());
-        await Upsert("ApprovalRequired", dto.ApprovalRequired.ToString().ToLowerInvariant());
-        await Upsert("WalkInApprovalRequired", dto.WalkInApprovalRequired.ToString().ToLowerInvariant());
-        await Upsert("PhotoRequired", dto.PhotoRequired.ToString().ToLowerInvariant());
-        await Upsert("IdVerificationRequired", dto.IdVerificationRequired.ToString().ToLowerInvariant());
-        await Upsert("MaxVisitDurationWarningMinutes", dto.MaxVisitDurationWarningMinutes.ToString());
-        await Upsert("SessionTimeoutMinutes", dto.SessionTimeoutMinutes.ToString());
+        // Branding can be tenant-wide or BrandLoc:{id}:* when a location is selected.
+        // Other non-SMTP settings stay tenant-wide.
+        string Bk(string brandKey) => BrandStorageKey(brandKey, smtpLocationId);
+        await Upsert(Bk("CompanyName"), dto.CompanyName?.Trim() ?? "TIAANO");
+        await Upsert(Bk("LogoPath"), string.IsNullOrWhiteSpace(dto.LogoPath) ? "/branding/tiaano-logo.png" : dto.LogoPath.Trim());
+        await Upsert(Bk("ThemePreset"), NormalizeTheme(dto.ThemePreset));
+        await Upsert(Bk("FontPreset"), NormalizeFont(dto.FontPreset));
 
-        await Upsert("Smtp:Enabled", dto.SmtpEnabled.ToString().ToLowerInvariant());
-        await Upsert("Smtp:Host", (dto.SmtpHost ?? "").Trim());
-        await Upsert("Smtp:Port", Math.Clamp(dto.SmtpPort <= 0 ? 587 : dto.SmtpPort, 1, 65535).ToString());
-        await Upsert("Smtp:EnableSsl", dto.SmtpEnableSsl.ToString().ToLowerInvariant());
-        await Upsert("Smtp:Username", (dto.SmtpUsername ?? "").Trim());
-        await Upsert("Smtp:FromAddress", (dto.SmtpFromAddress ?? "").Trim());
-        await Upsert("Smtp:FromName", string.IsNullOrWhiteSpace(dto.SmtpFromName) ? "Visitor Management" : dto.SmtpFromName.Trim());
-        await Upsert("Smtp:IgnoreSslErrors", dto.SmtpIgnoreSslErrors.ToString().ToLowerInvariant());
+        if (smtpLocationId is null)
+        {
+            await Upsert("VisitorIdPrefix", dto.VisitorIdPrefix);
+            await Upsert("VisitorPassValidityHours", dto.VisitorPassValidityHours.ToString());
+            await Upsert("ApprovalRequired", dto.ApprovalRequired.ToString().ToLowerInvariant());
+            await Upsert("WalkInApprovalRequired", dto.WalkInApprovalRequired.ToString().ToLowerInvariant());
+            await Upsert("PhotoRequired", dto.PhotoRequired.ToString().ToLowerInvariant());
+            await Upsert("IdVerificationRequired", dto.IdVerificationRequired.ToString().ToLowerInvariant());
+            await Upsert("MaxVisitDurationWarningMinutes", dto.MaxVisitDurationWarningMinutes.ToString());
+            await Upsert("SessionTimeoutMinutes", dto.SessionTimeoutMinutes.ToString());
+        }
+
+        string Sk(string smtpKey) => SmtpStorageKey(smtpKey, smtpLocationId);
+
+        await Upsert(Sk("Smtp:Enabled"), dto.SmtpEnabled.ToString().ToLowerInvariant());
+        await Upsert(Sk("Smtp:Host"), (dto.SmtpHost ?? "").Trim());
+        await Upsert(Sk("Smtp:Port"), Math.Clamp(dto.SmtpPort <= 0 ? 587 : dto.SmtpPort, 1, 65535).ToString());
+        await Upsert(Sk("Smtp:EnableSsl"), dto.SmtpEnableSsl.ToString().ToLowerInvariant());
+        await Upsert(Sk("Smtp:Username"), (dto.SmtpUsername ?? "").Trim());
+        await Upsert(Sk("Smtp:FromAddress"), (dto.SmtpFromAddress ?? "").Trim());
+        await Upsert(Sk("Smtp:FromName"), string.IsNullOrWhiteSpace(dto.SmtpFromName) ? "Visitor Management" : dto.SmtpFromName.Trim());
+        await Upsert(Sk("Smtp:IgnoreSslErrors"), dto.SmtpIgnoreSslErrors.ToString().ToLowerInvariant());
 
         if (!string.IsNullOrWhiteSpace(dto.SmtpPassword))
         {
             var key = SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
-            await Upsert("Smtp:PasswordEncrypted", SensitiveDataHelper.Encrypt(dto.SmtpPassword.Trim(), key));
+            await Upsert(Sk("Smtp:PasswordEncrypted"), SensitiveDataHelper.Encrypt(dto.SmtpPassword.Trim(), key));
         }
 
         await _db.SaveChangesAsync();
         ClearCache(tenantId);
-        return await GetAsync();
+        return await GetAsync(smtpLocationId);
     }
 
-    public async Task<SettingsDto> UploadLogoAsync(IFormFile file, string? userName)
+    public async Task<SettingsDto> UploadLogoAsync(IFormFile file, string? userName, Guid? locationId = null)
     {
         if (file is null || file.Length == 0)
             throw new InvalidOperationException("Choose an image file to upload.");
@@ -185,7 +222,9 @@ public class SettingsService : ISettingsService
 
         var tenantId = EffectiveTenantId;
         var webRoot = _env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot");
-        var brandingDir = Path.Combine(webRoot, "branding", "tenants", tenantId.ToString("N"));
+        var brandingDir = locationId is Guid loc
+            ? Path.Combine(webRoot, "branding", "tenants", tenantId.ToString("N"), "locations", loc.ToString("N"))
+            : Path.Combine(webRoot, "branding", "tenants", tenantId.ToString("N"));
         Directory.CreateDirectory(brandingDir);
 
         foreach (var old in Directory.EnumerateFiles(brandingDir, "logo.*"))
@@ -201,21 +240,24 @@ public class SettingsService : ISettingsService
         var fullPath = Path.Combine(brandingDir, fileName);
         await File.WriteAllBytesAsync(fullPath, bytes);
 
-        var publicPath = $"/branding/tenants/{tenantId:N}/{fileName}";
-        var current = await GetAsync();
+        var publicPath = locationId is Guid locId
+            ? $"/branding/tenants/{tenantId:N}/locations/{locId:N}/{fileName}"
+            : $"/branding/tenants/{tenantId:N}/{fileName}";
+        var current = await GetAsync(locationId);
         current.LogoPath = publicPath;
-        current.SmtpPassword = null; // preserve stored password on logo-only update
-        return await UpdateAsync(current, userName);
+        current.SmtpPassword = null;
+        return await UpdateAsync(current, userName, locationId);
     }
 
-    public async Task<SmtpRuntimeOptions> ResolveSmtpAsync(CancellationToken ct = default)
+    public async Task<SmtpRuntimeOptions> ResolveSmtpAsync(Guid? locationId = null, CancellationToken ct = default)
     {
         Dictionary<string, string> map = new(StringComparer.OrdinalIgnoreCase);
         if (_tenant.TenantId is Guid tid && tid != Guid.Empty)
         {
-            map = await _db.SystemSettings.AsNoTracking()
-                .Where(x => x.Key.StartsWith("Smtp:"))
-                .ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+            var rows = await _db.SystemSettings.AsNoTracking()
+                .Where(x => x.Key.StartsWith("Smtp:") || x.Key.StartsWith("SmtpLoc:"))
+                .ToListAsync(ct);
+            map = MergeSmtpMap(rows, locationId);
         }
 
         string Pick(string key, string? configFallback = null)
@@ -274,6 +316,77 @@ public class SettingsService : ISettingsService
         };
     }
 
+    private void ApplyBrandOverlay(SettingsDto dto, List<SystemSetting> rows, Guid? locationId)
+    {
+        if (locationId is not Guid id)
+            return;
+
+        var prefix = $"BrandLoc:{id:N}:";
+        foreach (var row in rows)
+        {
+            if (!row.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var suffix = row.Key[prefix.Length..];
+            if (suffix.Equals("CompanyName", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(row.Value))
+                dto.CompanyName = row.Value;
+            else if (suffix.Equals("LogoPath", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(row.Value))
+                dto.LogoPath = row.Value;
+            else if (suffix.Equals("ThemePreset", StringComparison.OrdinalIgnoreCase))
+                dto.ThemePreset = NormalizeTheme(row.Value);
+            else if (suffix.Equals("FontPreset", StringComparison.OrdinalIgnoreCase))
+                dto.FontPreset = NormalizeFont(row.Value);
+        }
+    }
+
+    private void ApplySmtpOverlay(SettingsDto dto, List<SystemSetting> rows, Guid? locationId)
+    {
+        var map = MergeSmtpMap(rows, locationId);
+        if (map.TryGetValue("Smtp:Enabled", out var se) && bool.TryParse(se, out var enabled))
+            dto.SmtpEnabled = enabled;
+        if (map.TryGetValue("Smtp:Host", out var host))
+            dto.SmtpHost = host ?? "";
+        if (map.TryGetValue("Smtp:Port", out var port) && int.TryParse(port, out var p))
+            dto.SmtpPort = p;
+        if (map.TryGetValue("Smtp:EnableSsl", out var ssl) && bool.TryParse(ssl, out var enableSsl))
+            dto.SmtpEnableSsl = enableSsl;
+        if (map.TryGetValue("Smtp:Username", out var user))
+            dto.SmtpUsername = user ?? "";
+        if (map.TryGetValue("Smtp:FromAddress", out var from))
+            dto.SmtpFromAddress = from ?? "";
+        if (map.TryGetValue("Smtp:FromName", out var fromName) && !string.IsNullOrWhiteSpace(fromName))
+            dto.SmtpFromName = fromName;
+        if (map.TryGetValue("Smtp:IgnoreSslErrors", out var ise) && bool.TryParse(ise, out var ignore))
+            dto.SmtpIgnoreSslErrors = ignore;
+        dto.SmtpPassword = null;
+        dto.SmtpPasswordConfigured = map.TryGetValue("Smtp:PasswordEncrypted", out var enc) && !string.IsNullOrWhiteSpace(enc);
+    }
+
+    /// <summary>Tenant Smtp:* keys, overlaid by SmtpLoc:{id}:* when a location is selected.</summary>
+    internal static Dictionary<string, string> MergeSmtpMap(IEnumerable<SystemSetting> rows, Guid? locationId)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            if (row.Key.StartsWith("Smtp:", StringComparison.OrdinalIgnoreCase)
+                && !row.Key.StartsWith("SmtpLoc:", StringComparison.OrdinalIgnoreCase))
+                map[row.Key] = row.Value;
+        }
+
+        if (locationId is Guid id)
+        {
+            var prefix = $"SmtpLoc:{id:N}:";
+            foreach (var row in rows)
+            {
+                if (!row.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var suffix = row.Key[prefix.Length..];
+                map[$"Smtp:{suffix}"] = row.Value;
+            }
+        }
+
+        return map;
+    }
+
     private void ApplyConfigSmtpFallback(SettingsDto dto)
     {
         if (string.IsNullOrWhiteSpace(dto.SmtpHost))
@@ -298,9 +411,37 @@ public class SettingsService : ISettingsService
     {
         lock (CacheLock)
         {
-            Cache.Remove(tenantId);
+            var keys = Cache.Keys.Where(k => k.Tenant == tenantId).ToList();
+            foreach (var k in keys)
+                Cache.Remove(k);
         }
     }
+
+    private static SettingsDto CloneSettings(SettingsDto s) => new()
+    {
+        CompanyName = s.CompanyName,
+        LogoPath = s.LogoPath,
+        ThemePreset = s.ThemePreset,
+        FontPreset = s.FontPreset,
+        VisitorIdPrefix = s.VisitorIdPrefix,
+        VisitorPassValidityHours = s.VisitorPassValidityHours,
+        ApprovalRequired = s.ApprovalRequired,
+        WalkInApprovalRequired = s.WalkInApprovalRequired,
+        PhotoRequired = s.PhotoRequired,
+        IdVerificationRequired = s.IdVerificationRequired,
+        MaxVisitDurationWarningMinutes = s.MaxVisitDurationWarningMinutes,
+        SessionTimeoutMinutes = s.SessionTimeoutMinutes,
+        SmtpEnabled = s.SmtpEnabled,
+        SmtpHost = s.SmtpHost,
+        SmtpPort = s.SmtpPort,
+        SmtpEnableSsl = s.SmtpEnableSsl,
+        SmtpUsername = s.SmtpUsername,
+        SmtpFromAddress = s.SmtpFromAddress,
+        SmtpFromName = s.SmtpFromName,
+        SmtpIgnoreSslErrors = s.SmtpIgnoreSslErrors,
+        SmtpPassword = null,
+        SmtpPasswordConfigured = s.SmtpPasswordConfigured,
+    };
 
     private static string NormalizeTheme(string? value)
     {

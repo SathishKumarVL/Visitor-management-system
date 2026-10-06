@@ -4,19 +4,27 @@ import { apiErrorMessage, mastersApi } from '../lib/api'
 import type {
   FeedbackQuestionDto,
   FeedbackQuestionUpsertRequest,
+  MasterItemDto,
   VisitFeedbackDto,
 } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
-import { TextInput, FieldLabel } from '../components/ui/Field'
+import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
+import { ExcelImportButtons } from '../components/ExcelImportButtons'
+import { Modal } from '../components/ui/Modal'
+import { Pagination } from '../components/ui/Pagination'
+import { usePagination } from '../lib/usePagination'
+import { useSort } from '../lib/useSort'
+import { SortHeader } from '../components/ui/SortHeader'
 import { formatDateTime, cn } from '../lib/utils'
 
-const blank = (): FeedbackQuestionUpsertRequest => ({
+const blank = (locationId: string | null = null): FeedbackQuestionUpsertRequest => ({
   prompt: '',
   isRequired: true,
   isActive: true,
   sortOrder: 0,
+  locationId,
 })
 
 function Stars({ rating }: { rating: number }) {
@@ -34,36 +42,61 @@ function Stars({ rating }: { rating: number }) {
 export function FeedbackQuestionsPage() {
   const [tab, setTab] = useState<'questions' | 'responses'>('responses')
   const [items, setItems] = useState<FeedbackQuestionDto[]>([])
+  const [locations, setLocations] = useState<MasterItemDto[]>([])
+  const [filterLocationId, setFilterLocationId] = useState('')
   const [responses, setResponses] = useState<VisitFeedbackDto[]>([])
+  const [responsesTotal, setResponsesTotal] = useState(0)
+  const [responsesPage, setResponsesPage] = useState(1)
+  const [responsesPageSize, setResponsesPageSize] = useState(10)
+  const { sorted: sortedQuestions, sort, onSort } = useSort(items, {
+    order: (q) => q.sortOrder,
+    prompt: (q) => q.prompt,
+    location: (q) => q.locationName,
+    required: (q) => (q.isRequired ? 0 : 1),
+    active: (q) => (q.isActive ? 0 : 1),
+  })
+  const { pageItems: questionItems, pagination: questionPagination } = usePagination(
+    sortedQuestions,
+    20,
+    `${filterLocationId}|${sort?.key}|${sort?.dir}`,
+  )
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [editing, setEditing] = useState<FeedbackQuestionDto | null>(null)
   const [form, setForm] = useState<FeedbackQuestionUpsertRequest>(blank())
   const [saving, setSaving] = useState(false)
+  const [formOpen, setFormOpen] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
   const loadQuestions = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setItems(await mastersApi.feedbackQuestions(false))
+      setItems(await mastersApi.feedbackQuestions(false, filterLocationId || undefined))
     } catch (e) {
       setError(apiErrorMessage(e))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [filterLocationId])
 
   const loadResponses = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setResponses(await mastersApi.feedbackResponses(100))
+      const result = await mastersApi.feedbackResponsesPaged(responsesPage, responsesPageSize)
+      setResponses(result.items)
+      setResponsesTotal(result.totalCount)
     } catch (e) {
       setError(apiErrorMessage(e))
     } finally {
       setLoading(false)
     }
+  }, [responsesPage, responsesPageSize])
+
+  useEffect(() => {
+    void mastersApi.locations(true).then(setLocations).catch(() => setLocations([]))
   }, [])
 
   useEffect(() => {
@@ -71,35 +104,51 @@ export function FeedbackQuestionsPage() {
     else void loadResponses()
   }, [tab, loadQuestions, loadResponses])
 
+  function closeForm() {
+    setFormOpen(false)
+    setEditing(null)
+    setFormError(null)
+  }
+
   function startCreate() {
     setEditing(null)
-    setForm({ ...blank(), sortOrder: items.length + 1 })
+    setFormError(null)
+    setMessage(null)
+    setForm({ ...blank(filterLocationId || null), sortOrder: items.length + 1 })
+    setFormOpen(true)
   }
 
   function startEdit(item: FeedbackQuestionDto) {
     setEditing(item)
+    setFormError(null)
+    setMessage(null)
+    setFormOpen(true)
     setForm({
       prompt: item.prompt,
       isRequired: item.isRequired,
       isActive: item.isActive,
       sortOrder: item.sortOrder,
+      locationId: item.locationId || null,
     })
   }
 
   async function save(e: FormEvent) {
     e.preventDefault()
+    if (!form.locationId) {
+      setFormError('Select a location for this feedback question.')
+      return
+    }
     setSaving(true)
     setMessage(null)
-    setError(null)
+    setFormError(null)
     try {
       if (editing) await mastersApi.updateFeedbackQuestion(editing.id, form)
       else await mastersApi.createFeedbackQuestion(form)
       setMessage('Saved.')
-      setEditing(null)
-      setForm(blank())
+      closeForm()
       await loadQuestions()
     } catch (err) {
-      setError(apiErrorMessage(err))
+      setFormError(apiErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -122,12 +171,25 @@ export function FeedbackQuestionsPage() {
       {loading ? <Spinner label="Loading feedback…" /> : null}
       <PageHeader
         title="Visitor feedback"
-        subtitle="View submitted star ratings, or manage the questions shown at check-out."
+        subtitle="View submitted star ratings, or manage location-specific questions shown at check-out."
         actions={
           tab === 'questions' ? (
-            <Button variant="amber" onClick={startCreate}>
-              Add question
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <TextSelect
+                value={filterLocationId}
+                onChange={(e) => setFilterLocationId(e.target.value)}
+                className="w-full min-w-[12rem] sm:w-56"
+              >
+                <option value="">All locations</option>
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </TextSelect>
+              <ExcelImportButtons kind="feedback-questions" label="Feedback questions" onImported={loadQuestions} />
+              <Button variant="amber" onClick={startCreate}>
+                Add question
+              </Button>
+            </div>
           ) : (
             <Button variant="secondary" onClick={() => void loadResponses()}>
               Refresh
@@ -210,31 +272,45 @@ export function FeedbackQuestionsPage() {
               ))}
             </ul>
           ) : null}
+          {!loading ? (
+            <Pagination
+              page={responsesPage}
+              pageSize={responsesPageSize}
+              total={responsesTotal}
+              onPageChange={setResponsesPage}
+              onPageSizeChange={(size) => {
+                setResponsesPageSize(size)
+                setResponsesPage(1)
+              }}
+            />
+          ) : null}
         </Panel>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+        <>
           <Panel className="overflow-x-auto p-0">
             {!loading && items.length === 0 ? (
               <div className="p-4">
-                <EmptyState title="No feedback questions" description="Add questions to collect star ratings at check-out." />
+                <EmptyState title="No feedback questions" description="Add questions for a location to collect star ratings at check-out." />
               </div>
             ) : null}
             {!loading && items.length > 0 ? (
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-gray-50 text-gray-500">
                   <tr>
-                    <th className="px-4 py-3">#</th>
-                    <th className="px-4 py-3">Question</th>
-                    <th className="px-4 py-3">Required</th>
-                    <th className="px-4 py-3">Active</th>
+                    <SortHeader sortKey="order" sort={sort} onSort={onSort}>#</SortHeader>
+                    <SortHeader sortKey="prompt" sort={sort} onSort={onSort}>Question</SortHeader>
+                    <SortHeader sortKey="location" sort={sort} onSort={onSort}>Location</SortHeader>
+                    <SortHeader sortKey="required" sort={sort} onSort={onSort}>Required</SortHeader>
+                    <SortHeader sortKey="active" sort={sort} onSort={onSort}>Active</SortHeader>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => (
+                  {questionItems.map((item) => (
                     <tr key={item.id} className="border-t border-gray-100">
                       <td className="px-4 py-3">{item.sortOrder}</td>
                       <td className="px-4 py-3 font-medium">{item.prompt}</td>
+                      <td className="px-4 py-3">{item.locationName || 'All locations'}</td>
                       <td className="px-4 py-3">{item.isRequired ? 'Yes' : 'No'}</td>
                       <td className="px-4 py-3">{item.isActive ? 'Yes' : 'No'}</td>
                       <td className="px-4 py-3 text-right">
@@ -254,11 +330,30 @@ export function FeedbackQuestionsPage() {
                 </tbody>
               </table>
             ) : null}
+            {!loading ? <Pagination {...questionPagination} /> : null}
           </Panel>
 
-          <Panel>
-            <h2 className="mb-3 text-sm font-semibold text-steel">{editing ? 'Edit question' : 'New question'}</h2>
+          <Modal
+            open={formOpen}
+            title={editing ? 'Edit question' : 'Add question'}
+            onClose={closeForm}
+          >
             <form onSubmit={save} className="grid gap-3">
+              {formError ? <Alert tone="error">{formError}</Alert> : null}
+              <div>
+                <FieldLabel htmlFor="fb-location">Location *</FieldLabel>
+                <TextSelect
+                  id="fb-location"
+                  required
+                  value={form.locationId || ''}
+                  onChange={(e) => setForm({ ...form, locationId: e.target.value || null })}
+                >
+                  <option value="">Select location</option>
+                  {locations.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </TextSelect>
+              </div>
               <div>
                 <FieldLabel htmlFor="fb-prompt">Question text</FieldLabel>
                 <TextInput
@@ -297,12 +392,15 @@ export function FeedbackQuestionsPage() {
                 />
                 Active
               </label>
-              <Button type="submit" disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
-              </Button>
+              <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+                <Button type="button" variant="secondary" onClick={closeForm}>Cancel</Button>
+                <Button type="submit" disabled={saving}>
+                  {saving ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
             </form>
-          </Panel>
-        </div>
+          </Modal>
+        </>
       )}
     </div>
   )

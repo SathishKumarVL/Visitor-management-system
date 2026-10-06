@@ -8,7 +8,7 @@ export function ReceptionModePage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t } = useI18n()
-  const company = useSettingsStore((s) => s.settings.companyName)
+  const company = useSettingsStore((s) => s.companyName)
   const notice = location.state as
     | {
         visitorName?: string

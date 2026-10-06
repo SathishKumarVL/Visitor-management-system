@@ -24,7 +24,12 @@ export function formatDate(value?: string | null, pattern = 'dd MMM yyyy'): stri
 
 export function formatDateTime(value?: string | null): string {
   if (!value) return '—'
-  const d = new Date(value)
+  // API stores UTC; SQL/JSON often omit "Z", so treat timezone-less values as UTC.
+  const normalized =
+    /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value.trim()) || value.length <= 10
+      ? value
+      : `${value.trim()}Z`
+  const d = new Date(normalized)
   return isValid(d) ? format(d, 'dd MMM yyyy HH:mm') : value
 }
 
@@ -126,6 +131,21 @@ export function nowIsoTime(): string {
   return format(new Date(), 'HH:mm')
 }
 
+/** Next quarter-hour at least a minute away, e.g. 10:07 -> 10:15; rolls over to tomorrow near midnight. */
+export function nextBookingSlot(): { date: string; time: string } {
+  const d = new Date()
+  d.setSeconds(0, 0)
+  d.setMinutes(Math.ceil((d.getMinutes() + 1) / 15) * 15)
+  return { date: format(d, 'yyyy-MM-dd'), time: format(d, 'HH:mm') }
+}
+
+/** True when a local yyyy-MM-dd + HH:mm is already in the past (missing parts count as not past). */
+export function isPastDateTime(date: string, time: string): boolean {
+  if (!date || !time) return false
+  const when = new Date(`${date}T${time}`)
+  return !Number.isNaN(when.getTime()) && when.getTime() < Date.now() - 60_000
+}
+
 const EMAIL_MAX_LENGTH = 150
 
 /** Visitor email: required and must look like a valid address. */
@@ -140,6 +160,22 @@ export function validateVisitorEmail(value: string): string | null {
     return 'Enter a valid email address (e.g. name@company.com).'
   }
   return null
+}
+
+/** Keep only digits, max 10 (Indian mobile without country code). */
+export function sanitizePhoneDigits(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 10)
+}
+
+/**
+ * Optional phone: empty is OK. When provided, must be exactly 10 digits.
+ * Returns normalized digits, or throws-style message string on error.
+ */
+export function validateOptionalTenDigitPhone(value: string): { ok: true; phone: string | null } | { ok: false; error: string } {
+  const digits = sanitizePhoneDigits(value)
+  if (!digits) return { ok: true, phone: null }
+  if (digits.length !== 10) return { ok: false, error: 'Phone number must be exactly 10 digits.' }
+  return { ok: true, phone: digits }
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

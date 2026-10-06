@@ -12,7 +12,7 @@ public static class MenuAccess
     public static readonly string[] AllKeys =
     [
         "dashboard", "reception", "visitors", "inside", "expected",
-        "reports", "departments", "purposes", "locations", "feedback", "users", "settings"
+        "reports", "departments", "employees", "purposes", "locations", "feedback", "mailcontent", "users", "settings"
     ];
 
     private static readonly HashSet<string> Known = new(AllKeys, StringComparer.OrdinalIgnoreCase);
@@ -20,7 +20,12 @@ public static class MenuAccess
     private static readonly Dictionary<string, string[]> RoleMenus = new(StringComparer.OrdinalIgnoreCase)
     {
         [AppRoles.SuperAdmin] = AllKeys,
-        [AppRoles.Admin] = AllKeys,
+        // Employees master is SuperAdmin-only; Admin keeps the rest of the catalog.
+        [AppRoles.Admin] =
+        [
+            "dashboard", "reception", "visitors", "inside", "expected",
+            "reports", "departments", "purposes", "locations", "feedback", "mailcontent", "users", "settings"
+        ],
         [AppRoles.Reception] = ["dashboard", "reception", "visitors", "inside", "expected", "reports"],
         [AppRoles.Security] = ["dashboard", "visitors", "inside", "expected"],
         [AppRoles.Host] = ["dashboard", "visitors", "inside", "expected"],
@@ -32,6 +37,11 @@ public static class MenuAccess
     public static IReadOnlyList<string> NormalizeForRole(string role, IEnumerable<string>? requested)
     {
         var ceiling = new HashSet<string>(KeysForRole(role), StringComparer.OrdinalIgnoreCase);
+        // SuperAdmin always receives the full role catalog so newly added menus appear without
+        // requiring a one-off allowlist edit on existing accounts.
+        if (string.Equals(role, AppRoles.SuperAdmin, StringComparison.OrdinalIgnoreCase))
+            return ceiling.OrderBy(k => Array.IndexOf(AllKeys, k)).ToList();
+
         if (requested is null) return ceiling.OrderBy(k => Array.IndexOf(AllKeys, k)).ToList();
 
         var selected = requested
@@ -56,6 +66,9 @@ public static class MenuAccess
 
     public static IReadOnlyList<string> Deserialize(string? json, string role)
     {
+        if (string.Equals(role, AppRoles.SuperAdmin, StringComparison.OrdinalIgnoreCase))
+            return KeysForRole(role).ToList();
+
         if (string.IsNullOrWhiteSpace(json))
             return KeysForRole(role).ToList();
 

@@ -30,16 +30,24 @@ const defaults: SettingsDto = {
 }
 
 interface SettingsState {
+  /** Tenant-level settings (what the Settings page edits). */
   settings: SettingsDto
+  /** Displayed branding — follows the signed-in user's location when it has overrides. */
   logoSrc: string
+  companyName: string
   loaded: boolean
   load: () => Promise<void>
-  update: (next: SettingsDto) => Promise<SettingsDto>
-  uploadLogo: (file: File) => Promise<SettingsDto>
+  refreshDisplayBranding: () => Promise<void>
+  update: (next: SettingsDto, locationId?: string) => Promise<SettingsDto>
+  uploadLogo: (file: File, locationId?: string) => Promise<SettingsDto>
 }
 
 function applyFromSettings(settings: SettingsDto) {
   applyBranding(settings.themePreset, settings.fontPreset)
+}
+
+function displayFrom(b: { companyName: string; logoPath: string }) {
+  return { companyName: b.companyName, logoSrc: assetUrl(b.logoPath) }
 }
 
 async function loadBrandingFallback(
@@ -58,7 +66,7 @@ async function loadBrandingFallback(
     applyFromSettings(settings)
     set({
       settings,
-      logoSrc: assetUrl(branding.logoPath),
+      ...displayFrom(branding),
       loaded: true,
     })
   } catch {
@@ -70,6 +78,7 @@ async function loadBrandingFallback(
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaults,
   logoSrc: assetUrl(defaults.logoPath),
+  companyName: defaults.companyName,
   loaded: false,
   load: async () => {
     const token = getStoredToken()
@@ -77,7 +86,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       try {
         const settings = await settingsApi.get()
         applyFromSettings(settings)
-        set({ settings, logoSrc: assetUrl(settings.logoPath), loaded: true })
+        set({ settings, ...displayFrom(settings), loaded: true })
+        await get().refreshDisplayBranding()
         return
       } catch {
         await loadBrandingFallback(set, get().settings)
@@ -87,16 +97,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     await loadBrandingFallback(set, get().settings)
   },
-  update: async (next) => {
-    const settings = await settingsApi.update(next)
-    applyFromSettings(settings)
-    set({ settings, logoSrc: assetUrl(settings.logoPath) })
+  refreshDisplayBranding: async () => {
+    if (!getStoredToken()) return
+    try {
+      const branding = await settingsApi.getCurrentBranding()
+      applyBranding(branding.themePreset, branding.fontPreset)
+      set(displayFrom(branding))
+    } catch {
+      // Keep tenant branding already shown.
+    }
+  },
+  update: async (next, locationId) => {
+    const settings = await settingsApi.update(next, locationId)
+    if (!locationId) set({ settings })
+    await get().refreshDisplayBranding()
     return settings
   },
-  uploadLogo: async (file) => {
-    const settings = await settingsApi.uploadLogo(file)
-    applyFromSettings(settings)
-    set({ settings, logoSrc: assetUrl(settings.logoPath) })
+  uploadLogo: async (file, locationId) => {
+    const settings = await settingsApi.uploadLogo(file, locationId)
+    if (!locationId) set({ settings })
+    await get().refreshDisplayBranding()
     return settings
   },
 }))

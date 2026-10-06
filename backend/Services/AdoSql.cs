@@ -31,6 +31,9 @@ public static class AdoSql
     public static SqlParameter GuidParam(string name, Guid value) =>
         Param(name, value, SqlDbType.UniqueIdentifier);
 
+    public static SqlParameter GuidParam(string name, Guid? value) =>
+        Param(name, value, SqlDbType.UniqueIdentifier);
+
     public static SqlParameter NVarChar(string name, string? value, int size) =>
         new(name, SqlDbType.NVarChar, size) { Value = (object?)value ?? DBNull.Value };
 

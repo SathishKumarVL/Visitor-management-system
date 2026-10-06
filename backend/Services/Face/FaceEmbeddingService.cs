@@ -28,6 +28,18 @@ public sealed class FaceRecognitionOptions
     /// commonly operated around 0.4; higher is stricter.
     /// </summary>
     public double MatchThreshold { get; set; } = 0.42;
+
+    /// <summary>
+    /// Stricter similarity required to sign in with a face. A false match here grants a session, so it
+    /// is never allowed to fall below <see cref="MatchThreshold"/>.
+    /// </summary>
+    public double LoginMatchThreshold { get; set; } = 0.5;
+
+    /// <summary>
+    /// Face sign-in is refused when the best and second-best different logins score within this margin,
+    /// so a look-alike can never land in whichever account happens to score slightly higher.
+    /// </summary>
+    public double LoginAmbiguityMargin { get; set; } = 0.05;
 }
 
 /// <summary>A face template extracted from an uploaded image.</summary>
