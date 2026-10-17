@@ -16,6 +16,20 @@ export function assetUrl(path?: string | null): string {
   return normalized
 }
 
+/** "Ms. Priya Kumar" from the Employee master title and name. */
+export function titledName(person: { title?: string | null; fullName: string }): string {
+  return person.title ? `${person.title}. ${person.fullName}` : person.fullName
+}
+
+/** Random v4 UUID; crypto.randomUUID is missing when the app is opened over plain http on the LAN. */
+export function newUuid(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 export function formatDate(value?: string | null, pattern = 'dd MMM yyyy'): string {
   if (!value) return '—'
   const d = value.length <= 10 ? parseISO(value) : new Date(value)
@@ -87,7 +101,7 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
 
   const order = [
     'dashboard', 'reception', 'visitors', 'inside', 'expected',
-    'reports', 'departments', 'purposes', 'locations', 'feedback', 'users', 'settings',
+    'reports', 'employeemaster', 'departments', 'purposes', 'locations', 'feedback', 'meetinghalls', 'settings',
   ]
   const pathByKey: Record<string, string> = {
     dashboard: '/dashboard',
@@ -100,7 +114,8 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
     purposes: '/masters/purposes',
     locations: '/masters/locations',
     feedback: '/masters/feedback',
-    users: '/users',
+    employeemaster: '/employee-master',
+    meetinghalls: '/masters/meeting-halls',
     settings: '/settings',
   }
   for (const key of order) {

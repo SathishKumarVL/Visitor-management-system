@@ -3,24 +3,28 @@ import type {
   ApiResponse,
   BookingMatchDto,
   ChangePasswordRequest,
-  CreateEmployeeRequest,
   CreateEmployeeLoginRequest,
   CreatedIntegrationApiKeyDto,
-  CreateUserRequest,
   IntegrationApiKeyDto,
   IntegrationScope,
   DashboardDto,
+  MomNotSentByEmployeeDto,
   EmployeeDto,
+  EmployeeProfileRequest,
   ExpectedVisitorRequest,
   FaceCheckoutMatchDto,
   FacePhotoValidationDto,
   FaceSearchMatchDto,
+  GroupEmployeeMatchDto,
   LoginResponse,
+  MyDetailsDto,
   MailContentTemplateDto,
   MailContentUpsertRequest,
   MasterImportKind,
   MasterImportResultDto,
   MasterItemDto,
+  MeetingHallDto,
+  MeetingHallUpsertRequest,
   MasterUpsertRequest,
   PagedResult,
   PassDto,
@@ -32,6 +36,7 @@ import type {
   UserFaceLoginDto,
   VisitorPhoneLookupDto,
   VisitorDetailDto,
+  SaveMeetingMinutesRequest,
   VisitorListItemDto,
   VisitorSearchParams,
   PassNumberSeriesDto,
@@ -296,6 +301,7 @@ export const authApi = {
   faceLoginStatus: () =>
     unwrap(api.get<ApiResponse<{ available: boolean }>>('/auth/face-login/status')),
   me: () => unwrap(api.get<ApiResponse<UserDto>>('/auth/me')),
+  myDetails: () => unwrap(api.get<ApiResponse<MyDetailsDto>>('/auth/me/details')),
   logout: () => api.post<ApiResponse<object>>('/auth/logout'),
   changePassword: (body: ChangePasswordRequest) =>
     unwrap(api.post<ApiResponse<LoginResponse>>('/auth/change-password', body)),
@@ -312,7 +318,7 @@ export const visitorsApi = {
     unwrap(api.get<ApiResponse<PagedResult<VisitorListItemDto>>>('/visitors', { params })),
   get: (id: string) => unwrap(api.get<ApiResponse<VisitorDetailDto>>(`/visitors/${id}`)),
   register: (body: RegisterVisitorRequest) =>
-    unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors', body)),
+    unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors', body, { timeout: 60000 })),
   inside: () => unwrap(api.get<ApiResponse<VisitorListItemDto[]>>('/visitors/inside')),
   expected: (date?: string) =>
     unwrap(api.get<ApiResponse<VisitorListItemDto[]>>('/visitors/expected', { params: { date } })),
@@ -332,8 +338,8 @@ export const visitorsApi = {
       occurredAt: new Date().toISOString(),
       skipFeedback: options?.skipFeedback === true,
     })),
-  saveMeetingMinutes: (id: string, meetingMinutes: string) =>
-    unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/${id}/meeting-minutes`, { meetingMinutes })),
+  saveMeetingMinutes: (id: string, body: SaveMeetingMinutesRequest) =>
+    unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/${id}/meeting-minutes`, body)),
   setMomNotRequired: (id: string, notRequired: boolean) =>
     unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/${id}/mom-not-required`, { notRequired })),
   getFeedback: (id: string) =>
@@ -342,6 +348,8 @@ export const visitorsApi = {
     unwrap(api.post<ApiResponse<VisitFeedbackDto>>(`/visitors/${id}/feedback`, body)),
   faceSearch: (photoBase64: string) =>
     unwrapNullable(api.post<ApiResponse<FaceSearchMatchDto | null>>('/visitors/face-search', { photoBase64 })),
+  employeeFaceSearch: (photoBase64: string) =>
+    unwrapNullable(api.post<ApiResponse<GroupEmployeeMatchDto | null>>('/visitors/employee-face-search', { photoBase64 })),
   faceIdentifyInside: (photoBase64: string) =>
     unwrapNullable(api.post<ApiResponse<FaceCheckoutMatchDto | null>>('/visitors/face-identify-inside', { photoBase64 })),
   /** Exactly-one-face gate before accepting a visitor registration photo. Does not store the image. */
@@ -365,6 +373,19 @@ export const passApi = {
 
 export const dashboardApi = {
   get: () => unwrap(api.get<ApiResponse<DashboardDto>>('/dashboard')),
+  momNotSentByEmployee: () => unwrap(api.get<ApiResponse<MomNotSentByEmployeeDto[]>>('/dashboard/mom-not-sent-by-employee')),
+}
+
+/** Employee menu: employee profiles with their face. Admins only see their own location. */
+export const employeeMasterApi = {
+  list: (locationId?: string, departmentId?: string, activeOnly = false) =>
+    unwrap(api.get<ApiResponse<EmployeeDto[]>>('/employee-master', { params: { locationId, departmentId, activeOnly } })),
+  create: (body: EmployeeProfileRequest) =>
+    unwrap(api.post<ApiResponse<EmployeeDto>>('/employee-master', body)),
+  update: (id: string, body: EmployeeProfileRequest) =>
+    unwrap(api.put<ApiResponse<EmployeeDto>>(`/employee-master/${id}`, body)),
+  deactivate: (id: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>(`/employee-master/${id}/deactivate`)),
 }
 
 export const mastersApi = {
@@ -376,12 +397,6 @@ export const mastersApi = {
     unwrap(api.put<ApiResponse<MasterItemDto>>(`/masters/departments/${id}`, body)),
   hosts: (departmentId?: string, activeOnly = true, locationId?: string) =>
     unwrap(api.get<ApiResponse<EmployeeDto[]>>('/masters/hosts', { params: { departmentId, activeOnly, locationId } })),
-  createHost: (body: CreateEmployeeRequest) =>
-    unwrap(api.post<ApiResponse<EmployeeDto>>('/masters/hosts', body)),
-  updateHost: (id: string, body: CreateEmployeeRequest) =>
-    unwrap(api.put<ApiResponse<EmployeeDto>>(`/masters/hosts/${id}`, body)),
-  deactivateHost: (id: string) =>
-    unwrapVoid(api.post<ApiResponse<object>>(`/masters/hosts/${id}/deactivate`)),
   purposes: (activeOnly = true, locationId?: string) =>
     unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/purposes', { params: { activeOnly, locationId } })),
   createPurpose: (body: MasterUpsertRequest) =>
@@ -400,6 +415,14 @@ export const mastersApi = {
     })),
   upsertMailContent: (body: MailContentUpsertRequest) =>
     unwrap(api.put<ApiResponse<MailContentTemplateDto>>('/masters/mail-content', body)),
+  meetingHalls: (activeOnly = true, locationId?: string) =>
+    unwrap(api.get<ApiResponse<MeetingHallDto[]>>('/masters/meeting-halls', {
+      params: { activeOnly, locationId: locationId || undefined },
+    })),
+  createMeetingHall: (body: MeetingHallUpsertRequest) =>
+    unwrap(api.post<ApiResponse<MeetingHallDto>>('/masters/meeting-halls', body)),
+  updateMeetingHall: (id: string, body: MeetingHallUpsertRequest) =>
+    unwrap(api.put<ApiResponse<MeetingHallDto>>(`/masters/meeting-halls/${id}`, body)),
   idTypes: (activeOnly = true) =>
     unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/id-types', { params: { activeOnly } })),
   feedbackQuestions: (activeOnly = true, locationId?: string) =>
@@ -479,7 +502,6 @@ export const settingsApi = {
 
 export const usersApi = {
   list: () => unwrap(api.get<ApiResponse<UserDto[]>>('/users')),
-  create: (body: CreateUserRequest) => unwrap(api.post<ApiResponse<UserDto>>('/users', body)),
   update: (id: string, body: UpdateUserRequest) =>
     unwrap(api.put<ApiResponse<UserDto>>(`/users/${id}`, body)),
   createForEmployee: (employeeId: string, body: CreateEmployeeLoginRequest) =>

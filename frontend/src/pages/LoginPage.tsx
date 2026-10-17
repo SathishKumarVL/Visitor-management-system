@@ -7,6 +7,7 @@ import { Alert } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { OfflineBanner } from '../components/layout/OfflineBanner'
 import { FaceCapture } from '../components/FaceCapture'
+import { EcosystemOrbit } from '../components/EcosystemOrbit'
 import { apiErrorMessage, authApi } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { useSettingsStore } from '../store/settingsStore'
@@ -18,7 +19,6 @@ export function LoginPage() {
   const [params] = useSearchParams()
   const { login, faceLogin, loading, token, user } = useAuthStore()
   const loadSettings = useSettingsStore((s) => s.load)
-  const company = useSettingsStore((s) => s.companyName)
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -96,6 +96,9 @@ export function LoginPage() {
               {t('login.heroBody')}
             </p>
           </div>
+          <div className="relative flex flex-1 items-center justify-center py-6">
+            <EcosystemOrbit className="max-h-[calc(100vh-30rem)] min-h-[240px] max-w-[440px]" />
+          </div>
           <p className="text-xs text-white/55">{t('login.heroFooter')}</p>
         </section>
 
@@ -103,9 +106,8 @@ export function LoginPage() {
           <div className="absolute inset-0 bg-brand-soft opacity-70 lg:hidden" />
           <div className="relative w-full max-w-md rounded-3xl border border-border/80 bg-white p-6 shadow-elevated sm:p-8">
             <div className="mb-8 text-center lg:text-left">
-              <BrandLogo className="mx-auto h-12 lg:mx-0" />
-              <h2 className="mt-5 text-2xl font-semibold text-ink">{company}</h2>
-              <p className="mt-1 text-sm text-ink-muted">{t('login.title')}</p>
+              <BrandLogo className="mx-auto h-14 lg:mx-0" />
+              <p className="mt-4 text-sm text-ink-muted">{t('login.title')}</p>
             </div>
 
             {faceMode ? (
@@ -115,7 +117,6 @@ export function LoginPage() {
                   onCapture={(photo) => void onFaceCapture(photo)}
                   busy={loading}
                   captureLabel={loading ? t('login.signingIn') : t('login.signInWithFace')}
-                  cameraErrorText={t('login.faceCameraError')}
                 />
                 <label className="flex min-h-11 items-center gap-2 text-sm text-ink-muted">
                   <input

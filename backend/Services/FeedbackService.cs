@@ -34,10 +34,21 @@ public sealed class FeedbackService : IFeedbackService
             ? id
             : throw new UnauthorizedAccessException("Tenant context is required.");
 
+    private void EnsureInUserLocation(Guid? recordLocationId)
+    {
+        if (_tenant.LocationId is Guid scope && recordLocationId.HasValue && recordLocationId.Value != scope)
+            throw new UnauthorizedAccessException("This feedback question belongs to another location.");
+    }
+
     public async Task<IReadOnlyList<FeedbackQuestionDto>> GetQuestionsAsync(
         bool activeOnly = true,
         Guid? locationId = null)
     {
+        if (_tenant.LocationId is Guid scope)
+        {
+            if (locationId.HasValue && locationId.Value != scope) return [];
+            locationId = scope;
+        }
         var q = _db.FeedbackQuestions.AsNoTracking().AsQueryable();
         if (activeOnly) q = q.Where(x => x.IsActive);
         if (locationId.HasValue)
@@ -61,8 +72,10 @@ public sealed class FeedbackService : IFeedbackService
     {
         if (string.IsNullOrWhiteSpace(request.Prompt))
             throw new InvalidOperationException("Feedback question text is required.");
+        request.LocationId ??= _tenant.LocationId;
         if (!request.LocationId.HasValue)
             throw new InvalidOperationException("Feedback question must be assigned to a location.");
+        EnsureInUserLocation(request.LocationId);
 
         var locOk = await _db.Locations.AnyAsync(l => l.Id == request.LocationId.Value);
         if (!locOk) throw new InvalidOperationException("Selected location was not found.");
@@ -72,6 +85,7 @@ public sealed class FeedbackService : IFeedbackService
         {
             entity = await _db.FeedbackQuestions.FirstOrDefaultAsync(x => x.Id == existingId)
                 ?? throw new InvalidOperationException("Feedback question not found.");
+            EnsureInUserLocation(entity.LocationId);
             entity.UpdatedAt = DateTime.UtcNow;
             entity.UpdatedBy = user;
         }
@@ -109,6 +123,7 @@ public sealed class FeedbackService : IFeedbackService
     {
         var entity = await _db.FeedbackQuestions.FirstOrDefaultAsync(x => x.Id == id)
             ?? throw new InvalidOperationException("Feedback question not found.");
+        EnsureInUserLocation(entity.LocationId);
         entity.IsActive = false;
         entity.UpdatedAt = DateTime.UtcNow;
         entity.UpdatedBy = user;
@@ -139,10 +154,18 @@ public sealed class FeedbackService : IFeedbackService
         return row is null ? null : Map(row);
     }
 
+    private IQueryable<VisitFeedback> ScopedResponses()
+    {
+        var q = _db.VisitFeedbacks.AsNoTracking();
+        if (_tenant.LocationId is Guid scope)
+            q = q.Where(f => _db.VisitorVisitLocations.Any(vl => vl.VisitorVisitId == f.VisitorVisitId && vl.LocationId == scope));
+        return q;
+    }
+
     public async Task<IReadOnlyList<VisitFeedbackDto>> ListResponsesAsync(int take = 50)
     {
         take = Math.Clamp(take, 1, 200);
-        var rows = await _db.VisitFeedbacks.AsNoTracking()
+        var rows = await ScopedResponses()
             .Include(f => f.Answers)
             .OrderByDescending(f => f.SubmittedAt)
             .Take(take)
@@ -154,7 +177,7 @@ public sealed class FeedbackService : IFeedbackService
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var q = _db.VisitFeedbacks.AsNoTracking();
+        var q = ScopedResponses();
         var total = await q.CountAsync();
         var rows = await q
             .Include(f => f.Answers)

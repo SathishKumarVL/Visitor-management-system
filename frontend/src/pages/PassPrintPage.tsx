@@ -73,6 +73,12 @@ export function PassPrintPage() {
             <Row label="Company" value={pass.companyName} />
             <Row label="Person to meet" value={pass.hostName} />
             <Row label="Department" value={pass.departmentName} />
+            {pass.meetingHallName ? (
+              <Row
+                label="Meeting hall"
+                value={pass.meetingHallIntercom ? `${pass.meetingHallName} (Intercom ${pass.meetingHallIntercom})` : pass.meetingHallName}
+              />
+            ) : null}
             <Row label="Visit #" value={pass.visitNumber} />
             <Row label="Check-in" value={formatDateTime(pass.checkInAt)} />
             <Row label="Purpose" value={pass.purposes.join(', ') || '—'} />

@@ -4,7 +4,13 @@ import { apiErrorMessage, usersApi } from '../lib/api'
 import type { EmployeeDto } from '../types/api'
 import { Button } from './ui/Button'
 import { Alert } from './ui/Panel'
-import { FieldLabel, TextInput } from './ui/Field'
+import { FieldLabel, TextInput, TextSelect } from './ui/Field'
+import { menusForRole, roleLabel } from '../lib/roles'
+import { hasAnyRole } from '../lib/utils'
+import { useAuthStore } from '../store/authStore'
+
+const ROLES = ['Host', 'Reception', 'Security', 'Admin', 'SuperAdmin'] as const
+const LOCATION_BOUND_ROLES: readonly string[] = ['Admin', 'Reception', 'Security']
 
 function randomFrom(chars: string) {
   const buf = new Uint32Array(1)
@@ -34,10 +40,7 @@ function suggestUsername(employee: EmployeeDto) {
   return base.toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 50)
 }
 
-/**
- * Creates a Host login for an employee so they can see their own visitors
- * and add minutes of meeting.
- */
+/** Creates a login of any role for an employee; it signs in with the face on the employee record. */
 export function EmployeeLoginModal({
   employee,
   onClose,
@@ -50,6 +53,10 @@ export function EmployeeLoginModal({
   const [username, setUsername] = useState(() => suggestUsername(employee))
   const [email, setEmail] = useState(employee.email || '')
   const [password, setPassword] = useState(generatePassword)
+  const [role, setRole] = useState('Host')
+  const actorIsSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
+  const roles = ROLES.filter((r) => r !== 'SuperAdmin' || actorIsSuperAdmin)
+  const missingLocation = !employee.locationId && LOCATION_BOUND_ROLES.includes(role)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<EmployeeDto | null>(null)
@@ -64,13 +71,15 @@ export function EmployeeLoginModal({
         username: username.trim(),
         email: email.trim() || null,
         password,
+        role,
+        allowedMenuKeys: menusForRole(role).map((m) => m.key),
       })
       setCreated(updated)
       await onCreated(updated)
     } catch (err) {
       const forbiddenWithoutReason =
         axios.isAxiosError(err) && err.response?.status === 403 && !(err.response.data as { message?: string } | undefined)?.message
-      setError(forbiddenWithoutReason ? 'Only a SuperAdmin can create logins for employees.' : apiErrorMessage(err))
+      setError(forbiddenWithoutReason ? 'You can only create logins for employees at your own location.' : apiErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -94,12 +103,16 @@ export function EmployeeLoginModal({
       onClick={onClose}
     >
       <div
-        className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+        className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-1 text-lg font-semibold text-steel">Create login</h2>
         <p className="mb-4 text-sm text-ink-muted">
-          {employee.fullName} will sign in as a <strong>Host</strong>, see only their own visitors and add minutes of meeting.
+          {employee.fullName} will sign in as <strong>{roleLabel(role)}</strong>.
+          {role === 'Host' ? ' They see only their own visitors and add minutes of meeting.' : ''}
+          {employee.hasFace
+            ? ' The face captured at employee registration is used for face sign-in.'
+            : ' No face is on their employee record; capture it with Edit on the employee to enable face sign-in.'}
         </p>
 
         {created ? (
@@ -120,8 +133,19 @@ export function EmployeeLoginModal({
             </div>
           </div>
         ) : (
-          <form onSubmit={submit} className="space-y-3">
-            {error ? <Alert tone="error">{error}</Alert> : null}
+          <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+            {error ? <div className="sm:col-span-2"><Alert tone="error">{error}</Alert></div> : null}
+            <div className="sm:col-span-2">
+              <FieldLabel>Role *</FieldLabel>
+              <TextSelect value={role} onChange={(e) => setRole(e.target.value)}>
+                {roles.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+              </TextSelect>
+              {missingLocation ? (
+                <p className="mt-1 text-xs font-medium text-amber-700">
+                  {employee.fullName} has no location. Set it on the employee record first; {roleLabel(role)} logins work at one location.
+                </p>
+              ) : null}
+            </div>
             <div>
               <FieldLabel>Username *</FieldLabel>
               <TextInput required maxLength={50} value={username} onChange={(e) => setUsername(e.target.value)} />
@@ -130,7 +154,7 @@ export function EmployeeLoginModal({
               <FieldLabel>Email *</FieldLabel>
               <TextInput required type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
-            <div>
+            <div className="sm:col-span-2">
               <FieldLabel>Temporary password *</FieldLabel>
               <div className="flex gap-2">
                 <TextInput required minLength={10} value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -142,9 +166,9 @@ export function EmployeeLoginModal({
                 At least 10 characters with upper and lower case, a number and a symbol.
               </p>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-2 sm:col-span-2">
               <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-              <Button type="submit" loading={saving}>Create login</Button>
+              <Button type="submit" loading={saving} disabled={missingLocation}>Create login</Button>
             </div>
           </form>
         )}

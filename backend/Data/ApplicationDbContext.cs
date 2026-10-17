@@ -49,6 +49,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<MailContentTemplate> MailContentTemplates => Set<MailContentTemplate>();
     public DbSet<IntegrationApiKey> IntegrationApiKeys => Set<IntegrationApiKey>();
     public DbSet<UserFaceLogin> UserFaceLogins => Set<UserFaceLogin>();
+    public DbSet<MeetingHall> MeetingHalls => Set<MeetingHall>();
+
+    /// <summary>One inside visit per hall: concurrent check-ins cannot both take the same hall.</summary>
+    public const string MeetingHallInsideIndex = "IX_VisitorVisits_MeetingHallId_Inside";
+
+    /// <summary>A registration form submitted twice (retry after a timeout) can only create one visit.</summary>
+    public const string ClientRequestIndex = "IX_VisitorVisits_TenantId_ClientRequestId";
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -84,6 +91,15 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             // Fail closed: when a scoped tenant context exists without TenantId, return no rows (never all tenants).
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<MeetingHall>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LocationId });
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -136,6 +152,14 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.HostEmployee).WithMany().HasForeignKey(x => x.HostEmployeeId)
                 .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.MeetingHall).WithMany().HasForeignKey(x => x.MeetingHallId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.MeetingHallId).IsUnique()
+                .HasFilter($"[MeetingHallId] IS NOT NULL AND [Status] = {(int)Models.Enums.VisitStatus.Inside}")
+                .HasDatabaseName(MeetingHallInsideIndex);
+            e.HasIndex(x => new { x.TenantId, x.ClientRequestId }).IsUnique()
+                .HasFilter("[ClientRequestId] IS NOT NULL")
+                .HasDatabaseName(ClientRequestIndex);
             e.HasOne(x => x.CheckedInByUser).WithMany().HasForeignKey(x => x.CheckedInByUserId)
                 .OnDelete(DeleteBehavior.NoAction);
             e.HasOne(x => x.SecurityCheckInUser).WithMany().HasForeignKey(x => x.SecurityCheckInUserId)

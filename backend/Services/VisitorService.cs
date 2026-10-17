@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -37,6 +39,7 @@ public interface IVisitorService
     Task<PassDto> ReprintPassAsync(Guid visitId, ClaimsPrincipal user, string webRoot);
     Task<PassDto?> LookupByVisitNumberAsync(string visitNumber, string webRoot);
     Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes);
+    Task<IReadOnlyList<MomNotSentByEmployeeDto>> GetMomNotSentByEmployeeAsync(ClaimsPrincipal user);
     Task<FaceSearchMatchDto?> FaceSearchAsync(string photoBase64, ClaimsPrincipal user);
     Task<FaceCheckoutMatchDto?> FaceIdentifyInsideAsync(string photoBase64, ClaimsPrincipal user);
     /// <summary>Validates that a visitor photo contains exactly one detectable face (no persistence).</summary>
@@ -60,6 +63,7 @@ public class VisitorService : IVisitorService
     private readonly IPassNumberService _passNumbers;
     private readonly IFeedbackService _feedback;
     private readonly IVisitMailService _visitMail;
+    private readonly IMeetingHallAllocator _meetingHalls;
     private static readonly Regex TenDigitPhone = new(@"^\d{10}$", RegexOptions.Compiled);
 
     public VisitorService(
@@ -75,7 +79,8 @@ public class VisitorService : IVisitorService
         IFaceEmbeddingService faces,
         IPassNumberService passNumbers,
         IFeedbackService feedback,
-        IVisitMailService visitMail)
+        IVisitMailService visitMail,
+        IMeetingHallAllocator meetingHalls)
     {
         _db = db;
         _settings = settings;
@@ -90,6 +95,7 @@ public class VisitorService : IVisitorService
         _passNumbers = passNumbers;
         _feedback = feedback;
         _visitMail = visitMail;
+        _meetingHalls = meetingHalls;
     }
 
     private string EncryptionKey() => SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
@@ -97,6 +103,10 @@ public class VisitorService : IVisitorService
     public async Task<VisitorDetailDto> RegisterAsync(RegisterVisitorRequest request, ClaimsPrincipal user, string webRoot)
     {
         ValidateRegistration(request);
+        var clientRequestId = request.ClientRequestId is Guid sent && sent != Guid.Empty ? sent : (Guid?)null;
+        if (clientRequestId is Guid resubmitted && await VisitForClientRequestAsync(resubmitted) is Guid alreadyRegistered)
+            return (await BuildDetailAsync(alreadyRegistered, user, EncryptionKey()))!;
+
         await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, TenantClaims.RequireTenantId(user, _tenant));
         if (!string.IsNullOrWhiteSpace(request.PurposeNotes))
         {
@@ -128,6 +138,24 @@ public class VisitorService : IVisitorService
 
         var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
 
+        var groupEmployeeUserId = string.IsNullOrWhiteSpace(request.GroupEmployeeUserId) ? null : request.GroupEmployeeUserId.Trim();
+        var registeringTenantId = ResolveTenantId(user);
+        if (groupEmployeeUserId is not null
+            && !await _db.Users.AnyAsync(u => u.Id == groupEmployeeUserId && u.TenantId == registeringTenantId && u.IsActive))
+            throw new InvalidOperationException("The recognised employee login was not found or is inactive.");
+        var groupEmployeeId = request.GroupEmployeeId is Guid requestedEmployeeId && requestedEmployeeId != Guid.Empty
+            ? requestedEmployeeId
+            : (Guid?)null;
+        if (groupEmployeeId is Guid geId)
+        {
+            var groupEmployee = await _db.Employees.AsNoTracking()
+                .Where(e => e.Id == geId && e.TenantId == registeringTenantId && e.IsActive)
+                .Select(e => new { e.UserId })
+                .FirstOrDefaultAsync()
+                ?? throw new InvalidOperationException("The recognised employee was not found or is inactive.");
+            groupEmployeeUserId ??= groupEmployee.UserId;
+        }
+
         var purposes = await _db.VisitPurposes.Where(p => request.PurposeIds.Contains(p.Id) && p.IsActive).ToListAsync();
         if (purposes.Count == 0) throw new InvalidOperationException("At least one valid purpose is required.");
 
@@ -142,11 +170,6 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("At least one valid location is required.");
         if (_tenant.LocationId is Guid requiredLoc && !locations.Any(l => l.Id == requiredLoc))
             throw new InvalidOperationException("Visits must include your assigned location.");
-        if (locations.Any(l => l.RequiresPlantNumber) && string.IsNullOrWhiteSpace(request.PlantNumber))
-            throw new InvalidOperationException("Plant number is required when Plant No. is selected.");
-        if (locations.Any(l => l.RequiresOtherText) && string.IsNullOrWhiteSpace(request.OtherLocationText))
-            throw new InvalidOperationException("Please specify the other location.");
-
         // Always allocate from the location (or tenant) series — free-text desk badges collide with unique PassCode.
         Guid? passLocationId = locations.Select(l => (Guid?)l.Id).FirstOrDefault()
             ?? (_tenant.LocationId is Guid tl && tl != Guid.Empty ? tl : null);
@@ -251,6 +274,10 @@ public class VisitorService : IVisitorService
             PassNumber = passNumber,
             NumberOfPersons = request.NumberOfPersons < 1 ? 1 : Math.Min(request.NumberOfPersons, 99),
             IsWalkIn = request.IsWalkIn,
+            IsGroupEmployee = groupEmployeeUserId is not null || groupEmployeeId is not null,
+            GroupEmployeeUserId = groupEmployeeUserId,
+            GroupEmployeeId = groupEmployeeId,
+            ClientRequestId = clientRequestId,
             CreatedBy = user.Identity?.Name
         };
 
@@ -281,7 +308,19 @@ public class VisitorService : IVisitorService
         }
 
         _db.VisitorVisits.Add(visit);
-        await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix);
+        try
+        {
+            await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix);
+        }
+        catch (DbUpdateException ex) when (clientRequestId is Guid racing && IsClientRequestTaken(ex))
+        {
+            // The same form arrived twice at once; the other request registered it.
+            _db.ChangeTracker.Clear();
+            await _passNumbers.ReleaseHoldAsync(passNumber);
+            var winner = await VisitForClientRequestAsync(racing)
+                ?? throw new InvalidOperationException("This registration is already being saved. Refresh the visitor list.");
+            return (await BuildDetailAsync(winner, user, EncryptionKey()))!;
+        }
 
         if (!string.IsNullOrWhiteSpace(request.PhotoBase64))
         {
@@ -326,8 +365,52 @@ public class VisitorService : IVisitorService
                 $"Visitor {visitor.FullName} from {visitor.CompanyName} is pending your approval.");
         }
 
-        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+        try
+        {
+            return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+        }
+        catch (Exception ex) when (ex is not UnauthorizedAccessException and not OperationCanceledException)
+        {
+            // The visit is saved; reporting an error here would make the desk register the visitor again.
+            _logger.LogWarning(ex, "Visit {VisitNumber} was registered but reading it back failed; returning the saved summary.", visit.VisitNumber);
+            return RegisteredSummary(visit, visitor, host);
+        }
     }
+
+    private Task<Guid?> VisitForClientRequestAsync(Guid clientRequestId) =>
+        _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.ClientRequestId == clientRequestId)
+            .Select(v => (Guid?)v.Id)
+            .FirstOrDefaultAsync();
+
+    private static bool IsClientRequestTaken(DbUpdateException ex) =>
+        ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 } sql
+        && sql.Message.Contains(ApplicationDbContext.ClientRequestIndex, StringComparison.OrdinalIgnoreCase);
+
+    private static VisitorDetailDto RegisteredSummary(VisitorVisit visit, Visitor visitor, Employee host) => new()
+    {
+        VisitId = visit.Id,
+        VisitorId = visitor.Id,
+        VisitorNumber = visitor.VisitorNumber,
+        VisitNumber = visit.VisitNumber,
+        VisitorName = visitor.FullName,
+        CompanyName = visitor.CompanyName,
+        Gender = visitor.Gender,
+        Salutation = SalutationFor(visitor.Gender),
+        Phone = visitor.Phone,
+        Email = visitor.Email,
+        HostName = host.FullName,
+        DepartmentName = host.Department?.Name ?? string.Empty,
+        VisitDate = visit.VisitDate,
+        VisitTime = visit.VisitTime,
+        Status = visit.Status,
+        StatusLabel = visit.Status.ToString(),
+        PassCode = visit.Status == VisitStatus.Approved ? visit.PassNumber : null,
+        NumberOfPersons = visit.NumberOfPersons,
+        IsGroupEmployee = visit.IsGroupEmployee,
+        PurposeNotes = visit.PurposeNotes,
+        Notes = visit.Notes
+    };
 
     public async Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user)
     {
@@ -520,7 +603,8 @@ public class VisitorService : IVisitorService
         return new VisitMailContext(
             VisitorName: visit.Visitor?.FullName ?? "",
             Salutation: SalutationFor(visit.Visitor?.Gender),
-            VisitorEmail: visit.Visitor?.Email,
+            // Group employees visit on official work: they get no visitor emails.
+            VisitorEmail: visit.IsGroupEmployee ? null : visit.Visitor?.Email,
             Company: visit.Visitor?.CompanyName ?? "",
             VisitingPerson: visit.HostEmployee?.FullName ?? "",
             VisitingPersonEmail: visit.HostEmployee?.Email,
@@ -530,10 +614,51 @@ public class VisitorService : IVisitorService
             LocationId: locationId,
             Department: visit.Department?.Name ?? "",
             Purpose: purpose,
-            MeetingMinutes: !string.IsNullOrWhiteSpace(visit.MeetingMinutes)
-                ? visit.MeetingMinutes.Trim()
-                : visit.MomNotRequired ? "Not required" : "",
-            MomentLocal: momentLocal);
+            MeetingMinutes: visit.MeetingMinutes?.Trim() ?? "",
+            MomentLocal: momentLocal,
+            MeetingHall: visit.MeetingHall?.Name ?? "");
+    }
+
+    /// <summary>The minutes email is dated by the meeting (check-in), not by when the minutes were sent.</summary>
+    private VisitMailContext BuildMinutesMailContext(VisitorVisit visit, string sendKey)
+    {
+        var meetingLocal = AsUtc(visit.CheckInAt) is DateTime checkIn
+            ? AppTime.ToLocal(checkIn)
+            : visit.VisitDate.ToDateTime(visit.VisitTime);
+        return BuildVisitMailContext(visit, meetingLocal) with
+        {
+            MomDecisions = visit.MomDecisions?.Trim() ?? "",
+            MomActionItems = FormatActionItems(ReadActionItems(visit.MomActionItemsJson)),
+            MomNextMeetingDate = visit.MomNextMeetingDate?.ToString("dd MMM yyyy") ?? "",
+            MomSendKey = sendKey,
+        };
+    }
+
+    private static List<MomActionItem> ReadActionItems(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try
+        {
+            return JsonSerializer.Deserialize<List<MomActionItem>>(json) ?? new();
+        }
+        catch (JsonException)
+        {
+            return new();
+        }
+    }
+
+    private static string FormatActionItems(IReadOnlyList<MomActionItem> items)
+    {
+        var sb = new StringBuilder();
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(i + 1).Append(". ").Append(item.Task);
+            if (!string.IsNullOrWhiteSpace(item.Owner)) sb.Append(" (Owner: ").Append(item.Owner).Append(')');
+            if (item.DueDate is DateOnly due) sb.Append(" (Due: ").Append(due.ToString("dd MMM yyyy")).Append(')');
+        }
+        return sb.ToString();
     }
 
     private void QueueVisitMail(Guid tenantId, VisitMailContext ctx, MailContentKind kind)
@@ -555,6 +680,9 @@ public class VisitorService : IVisitorService
                         break;
                     case MailContentKind.Appointment:
                         await mail.SendAppointmentAsync(ctx);
+                        break;
+                    case MailContentKind.MeetingMinutes:
+                        await mail.SendMeetingMinutesAsync(ctx);
                         break;
                 }
             }
@@ -616,7 +744,7 @@ public class VisitorService : IVisitorService
         // Full decrypted ID numbers: SuperAdmin/Admin/Reception only. Security sees masked values.
         var canViewFullId = user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin) || user.IsInRole(AppRoles.Reception);
         var doc = await _db.VisitorDocuments.AsNoTracking().Include(d => d.IdType)
-            .Where(d => d.VisitorVisitId == visitId || d.VisitorId == visit.VisitorId)
+            .Where(d => d.VisitorVisitId == visitId)
             .OrderByDescending(d => d.CreatedAt)
             .FirstOrDefaultAsync();
 
@@ -650,13 +778,24 @@ public class VisitorService : IVisitorService
             PassCode = dto.PassCode,
             NumberOfPersons = dto.NumberOfPersons,
             HasMeetingMinutes = dto.HasMeetingMinutes,
+            MomEmailSent = dto.MomEmailSent,
             MomNotRequired = dto.MomNotRequired,
             MomNotRequiredBy = dto.MomNotRequiredBy,
             MomNotRequiredAt = dto.MomNotRequiredAt,
+            MeetingHallName = dto.MeetingHallName,
+            IsGroupEmployee = dto.IsGroupEmployee,
             Intercom = visit.HostIntercom,
             PurposeNotes = visit.PurposeNotes,
             Notes = visit.Notes,
             MeetingMinutes = visit.MeetingMinutes,
+            MomDecisions = visit.MomDecisions,
+            MomActionItems = ReadActionItems(visit.MomActionItemsJson)
+                .Select(a => new MomActionItemDto { Task = a.Task, Owner = a.Owner, DueDate = a.DueDate })
+                .ToList(),
+            MomNextMeetingDate = visit.MomNextMeetingDate,
+            MomRecordedBy = visit.MomRecordedBy,
+            MomRecordedAt = AsUtc(visit.MomRecordedAt),
+            MomEmailSentAt = AsUtc(visit.MomEmailSentAt),
             PlantNumber = visit.PlantNumber,
             OtherLocationText = visit.OtherLocationText,
             IdTypeName = doc?.IdType.Name,
@@ -776,12 +915,36 @@ public class VisitorService : IVisitorService
         pass.PrintCount += 1;
         pass.LastPrintedAt = occurredAt;
 
-        await SaveVisitLifecycleAsync();
+        var allocation = await _meetingHalls.AllocateAsync(visit);
+        visit.MeetingHallId = allocation.Hall?.Id;
+        var lostHalls = new List<Guid>();
+        while (true)
+        {
+            try
+            {
+                await SaveVisitLifecycleAsync();
+                break;
+            }
+            catch (DbUpdateException ex) when (visit.MeetingHallId is Guid taken && lostHalls.Count < 5 && IsMeetingHallTaken(ex))
+            {
+                lostHalls.Add(taken);
+                allocation = await _meetingHalls.AllocateAsync(visit, lostHalls);
+                visit.MeetingHallId = allocation.Hall?.Id;
+            }
+        }
+        if (visit.MeetingHallId.HasValue)
+            await _db.Entry(visit).Reference(v => v.MeetingHall).LoadAsync();
 
         QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckIn);
 
-        return await BuildPassDto(visit, pass, webRoot);
+        var dto = await BuildPassDto(visit, pass, webRoot);
+        dto.MeetingHallWarning = allocation.Warning;
+        return dto;
     }
+
+    private static bool IsMeetingHallTaken(DbUpdateException ex) =>
+        ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 } sql
+        && sql.Message.Contains(ApplicationDbContext.MeetingHallInsideIndex, StringComparison.OrdinalIgnoreCase);
 
     public async Task<VisitorListItemDto> CheckOutAsync(Guid visitId, CheckOutRequest request, ClaimsPrincipal user)
     {
@@ -792,6 +955,7 @@ public class VisitorService : IVisitorService
             .Include(v => v.Passes)
             .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
             .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
+            .Include(v => v.MeetingHall)
             .FirstOrDefaultAsync(v => v.Id == visitId)
             ?? throw new InvalidOperationException("Visit not found.");
 
@@ -824,10 +988,7 @@ public class VisitorService : IVisitorService
         await SaveVisitLifecycleAsync();
         await _passNumbers.ReleaseHoldAsync(visit.PassNumber);
 
-        // Without MoM the check-out email is deferred until the host saves minutes (SaveMeetingMinutesAsync)
-        // or someone marks them not required (SetMomNotRequiredAsync).
-        if (!IsCheckOutMailWaitingForMom(visit))
-            QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
+        QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
 
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
@@ -860,6 +1021,7 @@ public class VisitorService : IVisitorService
                     .Include(v => v.Passes)
                     .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
                     .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
+                    .Include(v => v.MeetingHall)
                     .FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken);
 
                 if (visit is null || visit.Status != VisitStatus.Inside || visit.CheckInAt is null)
@@ -889,8 +1051,7 @@ public class VisitorService : IVisitorService
                 await SaveVisitLifecycleAsync();
                 await _passNumbers.ReleaseHoldAsync(visit.PassNumber);
 
-                if (!IsCheckOutMailWaitingForMom(visit))
-                    QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
+                QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
                 completed++;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -915,24 +1076,52 @@ public class VisitorService : IVisitorService
 
         EnsureHostAuthorization(visit, user);
 
+        if (visit.MomEmailSentAt.HasValue)
+            throw new InvalidOperationException("The MOM email has already been sent. These minutes are read-only.");
+
         var text = (request.MeetingMinutes ?? "").Trim();
         if (string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException("Meeting minutes are required.");
+            throw new InvalidOperationException("Discussion points are required.");
         if (text.Length > 4000)
-            throw new InvalidOperationException("Meeting minutes must be at most 4000 characters.");
+            throw new InvalidOperationException("Discussion points must be at most 4000 characters.");
 
-        var checkOutMailPending = visit.Status == VisitStatus.CheckedOut && IsCheckOutMailWaitingForMom(visit);
+        var decisions = (request.Decisions ?? "").Trim();
+        if (decisions.Length > 4000)
+            throw new InvalidOperationException("Decisions must be at most 4000 characters.");
 
+        var actionItems = (request.ActionItems ?? new())
+            .Where(a => !string.IsNullOrWhiteSpace(a.Task) || !string.IsNullOrWhiteSpace(a.Owner) || a.DueDate.HasValue)
+            .Select(a => new MomActionItem
+            {
+                Task = (a.Task ?? "").Trim(),
+                Owner = string.IsNullOrWhiteSpace(a.Owner) ? null : a.Owner.Trim(),
+                DueDate = a.DueDate,
+            })
+            .ToList();
+        if (actionItems.Count > 20)
+            throw new InvalidOperationException("Add at most 20 action items.");
+        if (actionItems.Any(a => a.Task.Length == 0))
+            throw new InvalidOperationException("Each action item needs a task.");
+        if (actionItems.Any(a => a.Task.Length > 500 || (a.Owner?.Length ?? 0) > 150))
+            throw new InvalidOperationException("Action item tasks must be at most 500 characters and owners at most 150.");
+
+        var now = DateTime.UtcNow;
         visit.MeetingMinutes = text;
-        visit.UpdatedAt = DateTime.UtcNow;
+        visit.MomDecisions = decisions.Length == 0 ? null : decisions;
+        visit.MomActionItemsJson = actionItems.Count == 0 ? null : JsonSerializer.Serialize(actionItems);
+        visit.MomNextMeetingDate = request.NextMeetingDate;
+        visit.MomRecordedBy = user.Identity?.Name;
+        visit.MomRecordedAt = now;
+        if (request.SendEmail)
+            visit.MomEmailSentAt = now;
+        visit.UpdatedAt = now;
         visit.UpdatedBy = user.Identity?.Name;
         await SaveVisitLifecycleAsync();
 
-        // Check-out happened without MoM, so its email was held back; send it now with the minutes.
-        if (checkOutMailPending)
+        if (request.SendEmail)
         {
-            var checkedOutAt = AppTime.ToLocal(AsUtc(visit.CheckOutAt) ?? DateTime.UtcNow);
-            QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, checkedOutAt), MailContentKind.CheckOut);
+            var sendKey = $"{visit.Id:N}:{now:yyyyMMddHHmmssfff}";
+            QueueVisitMail(visit.TenantId, BuildMinutesMailContext(visit, sendKey), MailContentKind.MeetingMinutes);
         }
 
         return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
@@ -953,10 +1142,6 @@ public class VisitorService : IVisitorService
 
         if (request.NotRequired && !string.IsNullOrWhiteSpace(visit.MeetingMinutes))
             throw new InvalidOperationException("Minutes of meeting have already been saved for this visit.");
-        if (!request.NotRequired && visit.Status == VisitStatus.CheckedOut)
-            throw new InvalidOperationException("The visitor has checked out and the check-out email has already been sent.");
-
-        var sendHeldMail = request.NotRequired && visit.Status == VisitStatus.CheckedOut && IsCheckOutMailWaitingForMom(visit);
 
         visit.MomNotRequired = request.NotRequired;
         visit.MomNotRequiredBy = request.NotRequired ? user.Identity?.Name : null;
@@ -965,17 +1150,8 @@ public class VisitorService : IVisitorService
         visit.UpdatedBy = user.Identity?.Name;
         await SaveVisitLifecycleAsync();
 
-        if (sendHeldMail)
-        {
-            var checkedOutAt = AppTime.ToLocal(AsUtc(visit.CheckOutAt) ?? DateTime.UtcNow);
-            QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, checkedOutAt), MailContentKind.CheckOut);
-        }
-
         return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
     }
-
-    private static bool IsCheckOutMailWaitingForMom(VisitorVisit visit) =>
-        string.IsNullOrWhiteSpace(visit.MeetingMinutes) && !visit.MomNotRequired;
 
     public async Task<IReadOnlyList<VisitorListItemDto>> GetInsideAsync(int warningMinutes, ClaimsPrincipal? user = null)
     {
@@ -1271,20 +1447,12 @@ public class VisitorService : IVisitorService
             .Where(v => v.Status == VisitStatus.Inside)
             .OrderBy(v => v.CheckInAt).Take(8).Select(v => v.Id).ToListAsync();
 
-        var withoutMom = visits.Where(v =>
-            v.Status == VisitStatus.CheckedOut && (v.MeetingMinutes == null || v.MeetingMinutes == ""));
-        var momPending = withoutMom.Where(v => !v.MomNotRequired);
-        var momPendingCount = await momPending.CountAsync();
-        var momPendingIds = await momPending
-            .OrderByDescending(v => v.CheckOutAt).Take(10).Select(v => v.Id).ToListAsync();
+        // Only the counts: the dashboard cards open the Manual check-outs and MOM not sent pages for the lists.
+        var withoutMom = visits.Where(v => v.Status == VisitStatus.CheckedOut && v.MomEmailSentAt == null);
+        var momPendingCount = await withoutMom.CountAsync(v => !v.MomNotRequired);
+        var withoutMomCount = await withoutMom.CountAsync();
 
-        var isSuperAdmin = user.IsInRole(AppRoles.SuperAdmin);
-        var withoutMomCount = isSuperAdmin ? await withoutMom.CountAsync() : 0;
-        var withoutMomIds = isSuperAdmin
-            ? await withoutMom.OrderByDescending(v => v.CheckOutAt).Take(15).Select(v => v.Id).ToListAsync()
-            : [];
-
-        var detailIds = recentIds.Concat(insideIds).Concat(momPendingIds).Concat(withoutMomIds).Distinct().ToList();
+        var detailIds = recentIds.Concat(insideIds).Distinct().ToList();
         var detailItems = detailIds.Count == 0
             ? []
             : await ProjectListAsync(_db.VisitorVisits.AsNoTracking().Where(v => detailIds.Contains(v.Id)), warningMinutes);
@@ -1321,10 +1489,56 @@ public class VisitorService : IVisitorService
             CurrentlyInsideItems = insideIds.Select(MapId).ToList(),
             IsHostView = hostEmployeeIds is not null,
             MomPendingCount = momPendingCount,
-            MomPendingItems = momPendingIds.Select(MapId).ToList(),
-            CheckedOutWithoutMomCount = withoutMomCount,
-            CheckedOutWithoutMomItems = withoutMomIds.Select(MapId).ToList()
+            CheckedOutWithoutMomCount = withoutMomCount
         };
+    }
+
+    public async Task<IReadOnlyList<MomNotSentByEmployeeDto>> GetMomNotSentByEmployeeAsync(ClaimsPrincipal user)
+    {
+        var hostEmployeeIds = await HostOnlyEmployeeIdsAsync(user);
+        var visits = _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Status == VisitStatus.CheckedOut && v.MomEmailSentAt == null);
+        if (hostEmployeeIds is not null)
+            visits = visits.Where(v => hostEmployeeIds.Contains(v.HostEmployeeId));
+        return await MomNotSentByEmployeeAsync(visits);
+    }
+
+    private async Task<List<MomNotSentByEmployeeDto>> MomNotSentByEmployeeAsync(IQueryable<VisitorVisit> withoutMom)
+    {
+        var groups = await withoutMom
+            .GroupBy(v => v.HostEmployeeId)
+            .Select(g => new
+            {
+                EmployeeId = g.Key,
+                NotRecorded = g.Count(v => !v.MomNotRequired && (v.MeetingMinutes == null || v.MeetingMinutes == "")),
+                NotSent = g.Count(v => !v.MomNotRequired && v.MeetingMinutes != null && v.MeetingMinutes != ""),
+                NotRequired = g.Count(v => v.MomNotRequired),
+                OldestCheckOutAt = g.Min(v => v.MomNotRequired ? null : v.CheckOutAt)
+            })
+            .ToListAsync();
+        if (groups.Count == 0) return [];
+
+        var ids = groups.Select(g => g.EmployeeId).ToList();
+        var employees = await _db.Employees.AsNoTracking()
+            .Where(e => ids.Contains(e.Id))
+            .Select(e => new { e.Id, e.FullName, DepartmentName = e.Department.Name })
+            .ToDictionaryAsync(e => e.Id);
+
+        return groups
+            .Select(g => new MomNotSentByEmployeeDto
+            {
+                EmployeeId = g.EmployeeId,
+                EmployeeName = employees.TryGetValue(g.EmployeeId, out var e) ? e.FullName : "Unknown employee",
+                DepartmentName = employees.TryGetValue(g.EmployeeId, out var d) ? d.DepartmentName : null,
+                NotRecorded = g.NotRecorded,
+                NotSent = g.NotSent,
+                NotRequired = g.NotRequired,
+                OldestCheckOutAt = AsUtc(g.OldestCheckOutAt)
+            })
+            .OrderByDescending(x => x.NotRecorded + x.NotSent)
+            .ThenBy(x => x.OldestCheckOutAt)
+            .ThenBy(x => x.EmployeeName)
+            .ToList();
     }
 
     private async Task<List<VisitorListItemDto>> ProjectListAsync(IQueryable<VisitorVisit> query, int warningMinutes)
@@ -1361,8 +1575,12 @@ public class VisitorService : IVisitorService
             v.MomNotRequired,
             v.MomNotRequiredBy,
             v.MomNotRequiredAt,
+            v.MomEmailSentAt,
             v.IsManualCheckOut,
-            PassCode = v.Passes.OrderByDescending(p => p.IssuedAt).Select(p => p.PassCode).FirstOrDefault()
+            CheckedOutBy = v.CheckedOutByUser != null ? v.CheckedOutByUser.FullName : null,
+            v.IsGroupEmployee,
+            PassCode = v.Passes.OrderByDescending(p => p.IssuedAt).Select(p => p.PassCode).FirstOrDefault(),
+            MeetingHallName = v.MeetingHall != null ? v.MeetingHall.Name : null
         }).ToListAsync();
 
         return rows.Select(v =>
@@ -1405,10 +1623,14 @@ public class VisitorService : IVisitorService
                 PassCode = v.PassCode,
                 NumberOfPersons = v.NumberOfPersons < 1 ? 1 : v.NumberOfPersons,
                 HasMeetingMinutes = !string.IsNullOrWhiteSpace(v.MeetingMinutes),
+                MomEmailSent = v.MomEmailSentAt.HasValue,
                 MomNotRequired = v.MomNotRequired,
                 MomNotRequiredBy = v.MomNotRequiredBy,
                 MomNotRequiredAt = AsUtc(v.MomNotRequiredAt),
-                IsManualCheckOut = v.IsManualCheckOut
+                IsManualCheckOut = v.IsManualCheckOut,
+                CheckedOutBy = v.CheckedOutBy,
+                MeetingHallName = v.MeetingHallName,
+                IsGroupEmployee = v.IsGroupEmployee
             };
         }).ToList();
     }
@@ -1422,6 +1644,7 @@ public class VisitorService : IVisitorService
             .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
             .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
             .Include(v => v.Passes)
+            .Include(v => v.MeetingHall)
             .AsSplitQuery();
 
     private IQueryable<VisitorVisit> DetailVisitQuery() =>
@@ -1441,6 +1664,7 @@ public class VisitorService : IVisitorService
             .Include(v => v.Passes)
             .Include(v => v.CheckedInByUser)
             .Include(v => v.CheckedOutByUser)
+            .Include(v => v.MeetingHall)
             .AsSplitQuery();
 
     private static void ApplyFilters(ref IQueryable<VisitorVisit> query, VisitorSearchRequest request)
@@ -1475,6 +1699,12 @@ public class VisitorService : IVisitorService
                     break;
                 case "manualcheckout":
                     query = query.Where(v => v.IsManualCheckOut); break;
+                case "momnotsent":
+                    query = query.Where(v => v.Status == VisitStatus.CheckedOut
+                        && !v.MomNotRequired && v.MomEmailSentAt == null); break;
+                case "momnotrequired":
+                    query = query.Where(v => v.Status == VisitStatus.CheckedOut
+                        && v.MomNotRequired && v.MomEmailSentAt == null); break;
             }
         }
 
@@ -1552,10 +1782,14 @@ public class VisitorService : IVisitorService
             PassCode = visit.Passes.OrderByDescending(p => p.IssuedAt).FirstOrDefault()?.PassCode,
             NumberOfPersons = visit.NumberOfPersons < 1 ? 1 : visit.NumberOfPersons,
             HasMeetingMinutes = !string.IsNullOrWhiteSpace(visit.MeetingMinutes),
+            MomEmailSent = visit.MomEmailSentAt.HasValue,
             MomNotRequired = visit.MomNotRequired,
             MomNotRequiredBy = visit.MomNotRequiredBy,
             MomNotRequiredAt = AsUtc(visit.MomNotRequiredAt),
-            IsManualCheckOut = visit.IsManualCheckOut
+            IsManualCheckOut = visit.IsManualCheckOut,
+            CheckedOutBy = visit.CheckedOutByUser?.FullName,
+            MeetingHallName = visit.MeetingHall?.Name,
+            IsGroupEmployee = visit.IsGroupEmployee
         };
     }
 
@@ -1581,7 +1815,9 @@ public class VisitorService : IVisitorService
             PhotoUrl = item.PhotoUrl,
             Status = item.StatusLabel,
             BrandCompanyName = brand.CompanyName,
-            BrandLogoPath = brand.LogoPath
+            BrandLogoPath = brand.LogoPath,
+            MeetingHallName = visit.MeetingHall?.Name,
+            MeetingHallIntercom = visit.MeetingHall?.IntercomNo
         };
     }
 

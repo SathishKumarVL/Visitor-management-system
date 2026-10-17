@@ -14,6 +14,9 @@ export type VisitorWelcomeState = {
   visitNumber?: string
   visitId?: string
   passCode?: string | null
+  meetingHallName?: string | null
+  meetingHallIntercom?: string | null
+  meetingHallWarning?: string | null
 }
 
 export function VisitorWelcomePage() {
@@ -80,6 +83,22 @@ export function VisitorWelcomePage() {
                   <p className="mt-1 font-mono text-3xl font-bold tracking-wider text-ink sm:text-4xl">{passCode}</p>
                   <p className="mt-2 text-sm text-ink-muted">{t('welcome.passHint').replace('{pass}', passCode)}</p>
                 </div>
+              ) : null}
+              {notice.meetingHallName ? (
+                <div className="mx-auto w-fit rounded-2xl border border-border bg-mint/60 px-6 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+                    {t('welcome.meetingHall')}
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-ink">{notice.meetingHallName}</p>
+                  {notice.meetingHallIntercom ? (
+                    <p className="mt-1 text-sm text-ink-muted">
+                      {t('welcome.meetingHallIntercom').replace('{intercom}', notice.meetingHallIntercom)}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {notice.meetingHallWarning ? (
+                <p className="mx-auto max-w-md text-sm text-amber-800">{notice.meetingHallWarning}</p>
               ) : null}
               {notice.visitNumber ? (
                 <p className="text-sm text-ink-muted">

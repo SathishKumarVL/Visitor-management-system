@@ -20,6 +20,8 @@ const QUICK_FILTERS = [
   { value: 'checkedouttoday', label: 'Checked out today' },
   { value: 'manualcheckouttoday', label: 'Manual check-outs today' },
   { value: 'manualcheckout', label: 'All manual check-outs' },
+  { value: 'momnotsent', label: 'MOM not sent' },
+  { value: 'momnotrequired', label: 'MOM not required' },
 ]
 
 export function VisitorsPage() {
@@ -35,14 +37,14 @@ export function VisitorsPage() {
 
   const [query, setQuery] = useState(params.get('query') || '')
   const [company, setCompany] = useState('')
-  const [host, setHost] = useState('')
+  const [host, setHost] = useState(params.get('host') || '')
   const [departmentId, setDepartmentId] = useState('')
   const [status, setStatus] = useState(params.get('status') || '')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [quickFilter, setQuickFilter] = useState(params.get('quickFilter') || '')
   const [sort, setSort] = useState<SortState | null>(null)
-  const showCheckOut = quickFilter.includes('checkout')
+  const showCheckOut = quickFilter.includes('checkout') || quickFilter.startsWith('mom')
 
   // The dashboard links here with ?quickFilter=…; follow later link clicks too, not just the first mount.
   const urlQuickFilter = params.get('quickFilter') || ''
@@ -50,6 +52,12 @@ export function VisitorsPage() {
   if (urlQuickFilter !== lastUrlQuickFilter) {
     setLastUrlQuickFilter(urlQuickFilter)
     setQuickFilter(urlQuickFilter)
+  }
+  const urlHost = params.get('host') || ''
+  const [lastUrlHost, setLastUrlHost] = useState(urlHost)
+  if (urlHost !== lastUrlHost) {
+    setLastUrlHost(urlHost)
+    setHost(urlHost)
   }
 
   useEffect(() => {
@@ -200,6 +208,7 @@ export function VisitorsPage() {
               setParams((p) => {
                 const next = new URLSearchParams(p)
                 next.delete('quickFilter')
+                next.delete('host')
                 return next
               })
               setPage(1)
@@ -236,6 +245,11 @@ export function VisitorsPage() {
                   <td className="px-4 py-3">
                     <div className="font-medium text-gray-900">{v.visitorName}</div>
                     <div className="text-xs text-gray-500">{v.visitNumber}</div>
+                    {v.isGroupEmployee ? (
+                      <Badge className="mt-1 bg-violet-50 text-violet-800 ring-1 ring-violet-200" title="Official visit; no visitor emails are sent">
+                        Group employee
+                      </Badge>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3">{v.companyName}</td>
                   <td className="px-4 py-3">
@@ -251,9 +265,11 @@ export function VisitorsPage() {
                     {v.isManualCheckOut ? (
                       <Badge className="ml-1 bg-orange-100 text-orange-900 ring-1 ring-orange-200">Manual</Badge>
                     ) : null}
-                    {v.statusLabel === 'CheckedOut' && !v.hasMeetingMinutes ? (
+                    {v.statusLabel === 'CheckedOut' && !v.momEmailSent ? (
                       v.momNotRequired ? (
                         <Badge className="ml-1 bg-slate-100 text-slate-700 ring-1 ring-slate-200">MoM not required</Badge>
+                      ) : v.hasMeetingMinutes ? (
+                        <Badge className="ml-1 bg-sky-50 text-sky-800 ring-1 ring-sky-200">MoM not sent</Badge>
                       ) : (
                         <Badge className="ml-1 bg-amber-100 text-amber-900 ring-1 ring-amber-200">MoM pending</Badge>
                       )

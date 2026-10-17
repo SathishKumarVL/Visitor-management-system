@@ -12,6 +12,12 @@ public static class AppRoles
     [
         SuperAdmin, Admin, Reception, Security, Host
     ];
+
+    /// <summary>Desk and admin roles work at one location; only SuperAdmin spans every location.</summary>
+    public static readonly string[] LocationBound =
+    [
+        Admin, Reception, Security
+    ];
 }
 
 public enum VisitStatus
@@ -62,11 +68,27 @@ public enum MailContentKind
     CheckIn = 1,
     CheckOut = 2,
     Appointment = 3,
-    AppointmentVisitor = 4
+    AppointmentVisitor = 4,
+    MeetingMinutes = 5
 }
 
 public enum VisitorGender
 {
     Male = 1,
     Female = 2
+}
+
+public enum EmployeeGender
+{
+    Male = 1,
+    Female = 2,
+    Other = 3
+}
+
+public static class EmployeeTitles
+{
+    public const string Mr = "Mr";
+    public const string Ms = "Ms";
+
+    public static readonly string[] All = [Mr, Ms];
 }

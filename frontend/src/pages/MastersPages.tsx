@@ -11,6 +11,8 @@ import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
 import { useSort } from '../lib/useSort'
 import { SortHeader } from '../components/ui/SortHeader'
+import { hasAnyRole } from '../lib/utils'
+import { useAuthStore } from '../store/authStore'
 
 type MasterKind = 'departments' | 'purposes' | 'locations'
 
@@ -25,7 +27,6 @@ const config: Record<MasterKind, {
   list: (activeOnly?: boolean, locationId?: string) => Promise<MasterItemDto[]>
   create: (body: MasterUpsertRequest) => Promise<MasterItemDto>
   update: (id: string, body: MasterUpsertRequest) => Promise<MasterItemDto>
-  showFlags?: boolean
   locationScoped?: boolean
 }> = {
   departments: {
@@ -47,7 +48,6 @@ const config: Record<MasterKind, {
     list: (a) => mastersApi.locations(a),
     create: (b) => mastersApi.createLocation(b),
     update: (id, b) => mastersApi.updateLocation(id, b),
-    showFlags: true,
   },
 }
 
@@ -65,6 +65,8 @@ const blank = (): MasterUpsertRequest => ({
 
 export function MasterListPage({ kind }: { kind: MasterKind }) {
   const cfg = config[kind]
+  const isSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
+  const canAddAndRemove = kind !== 'locations' || isSuperAdmin
   const [items, setItems] = useState<MasterItemDto[]>([])
   const [locations, setLocations] = useState<MasterItemDto[]>([])
   const [filterLocationId, setFilterLocationId] = useState('')
@@ -198,8 +200,12 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                 ))}
               </TextSelect>
             ) : null}
-            <ExcelImportButtons kind={kind} label={cfg.title} onImported={load} />
-            <Button variant="amber" onClick={startCreate}>Add new</Button>
+            {canAddAndRemove ? (
+              <>
+                <ExcelImportButtons kind={kind} label={cfg.title} onImported={load} />
+                <Button variant="amber" onClick={startCreate}>Add new</Button>
+              </>
+            ) : null}
           </div>
         }
       />
@@ -231,7 +237,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
-                        {item.isActive ? (
+                        {item.isActive && canAddAndRemove ? (
                           <Button size="sm" variant="danger" onClick={() => void deactivate(item.id)}>Deactivate</Button>
                         ) : null}
                       </div>
@@ -249,9 +255,10 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
         title={`${editing ? 'Edit' : 'Add'} ${singular[kind]}`}
         subtitle={editing ? editing.name : undefined}
         onClose={closeForm}
+        size="lg"
       >
-          <form onSubmit={save} className="space-y-3">
-            {formError ? <Alert tone="error">{formError}</Alert> : null}
+          <form onSubmit={save} className="grid gap-3 sm:grid-cols-2">
+            {formError ? <div className="sm:col-span-2"><Alert tone="error">{formError}</Alert></div> : null}
             <div>
               <FieldLabel>Name *</FieldLabel>
               <TextInput required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -294,23 +301,13 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                 onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
               />
             </div>
-            <label className="flex min-h-11 items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
-              Active
-            </label>
-            {cfg.showFlags ? (
-              <>
-                <label className="flex min-h-11 items-center gap-2 text-sm">
-                  <input type="checkbox" checked={form.requiresPlantNumber} onChange={(e) => setForm({ ...form, requiresPlantNumber: e.target.checked })} />
-                  Requires plant number
-                </label>
-                <label className="flex min-h-11 items-center gap-2 text-sm">
-                  <input type="checkbox" checked={form.requiresOtherText} onChange={(e) => setForm({ ...form, requiresOtherText: e.target.checked })} />
-                  Requires other text
-                </label>
-              </>
+            {canAddAndRemove ? (
+              <label className="flex min-h-11 items-center gap-2 self-end text-sm">
+                <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                Active
+              </label>
             ) : null}
-            <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+            <div className="flex justify-end gap-2 border-t border-gray-100 pt-3 sm:col-span-2">
               <Button type="button" variant="secondary" onClick={closeForm}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
             </div>

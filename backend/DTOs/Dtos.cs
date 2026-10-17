@@ -109,6 +109,7 @@ public class PublicBrandingDto
     public string LogoPath { get; set; } = "/branding/tiaano-logo.png";
     public string ThemePreset { get; set; } = "tiaano";
     public string FontPreset { get; set; } = "inter";
+    public string FontSize { get; set; } = "medium";
 }
 
 public class UserDto
@@ -133,6 +134,9 @@ public class UserDto
 
     /// <summary>Number of faces registered for face sign-in (only filled on the admin user list).</summary>
     public int FaceLoginCount { get; set; }
+
+    /// <summary>Employee record this login belongs to; null for shared desk and system accounts (admin user list only).</summary>
+    public Guid? EmployeeId { get; set; }
 }
 
 public class CreateUserRequest
@@ -201,6 +205,7 @@ public class MasterItemDto
 public class EmployeeDto
 {
     public Guid Id { get; set; }
+    public string? Title { get; set; }
     public string FullName { get; set; } = string.Empty;
     public string? Code { get; set; }
     public string? Email { get; set; }
@@ -215,6 +220,53 @@ public class EmployeeDto
     /// <summary>Login username of the linked Host account, if any.</summary>
     public string? UserName { get; set; }
     public bool IsActive { get; set; }
+    public DateOnly? DateOfBirth { get; set; }
+    public EmployeeGender? Gender { get; set; }
+    /// <summary>True when a face is enrolled on the employee record.</summary>
+    public bool HasFace { get; set; }
+    public string? PhotoUrl { get; set; }
+}
+
+/// <summary>
+/// Employee master entry from the Employee menu: every profile field and the face are required. Checked by
+/// <c>EmployeeMasterService</c> so each missing field gets its own message.
+/// </summary>
+public class EmployeeProfileRequest
+{
+    /// <summary>Mr or Ms.</summary>
+    [MaxLength(10)]
+    public string? Title { get; set; }
+
+    [MaxLength(150)]
+    public string FullName { get; set; } = string.Empty;
+
+    [MaxLength(50)]
+    public string Code { get; set; } = string.Empty;
+
+    public DateOnly? DateOfBirth { get; set; }
+
+    public EmployeeGender? Gender { get; set; }
+
+    [MaxLength(20)]
+    public string Phone { get; set; } = string.Empty;
+
+    [MaxLength(100)]
+    public string Email { get; set; } = string.Empty;
+
+    [MaxLength(100)]
+    public string? Designation { get; set; }
+
+    [MaxLength(50)]
+    public string? Intercom { get; set; }
+
+    public Guid DepartmentId { get; set; }
+
+    public Guid? LocationId { get; set; }
+
+    public bool IsActive { get; set; } = true;
+
+    /// <summary>Required for a new employee; when editing, leave blank to keep the enrolled face.</summary>
+    public string? FacePhotoBase64 { get; set; }
 }
 
 public class CreateEmployeeLoginRequest
@@ -228,6 +280,29 @@ public class CreateEmployeeLoginRequest
 
     [Required, MinLength(10)]
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>Role of the new login; defaults to Host (shown as "Employee").</summary>
+    [MaxLength(50)]
+    public string? Role { get; set; }
+
+    /// <summary>Visible menus, narrowed to the role. Blank means every menu of the role.</summary>
+    public List<string>? AllowedMenuKeys { get; set; }
+}
+
+/// <summary>The signed-in user's own account and, for employees, their Employees master record.</summary>
+public class MyDetailsDto
+{
+    public string Username { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public IReadOnlyList<string> Roles { get; set; } = Array.Empty<string>();
+    public string? EmployeeCode { get; set; }
+    public string? Designation { get; set; }
+    public string? DepartmentName { get; set; }
+    public string? LocationName { get; set; }
+    public string? Phone { get; set; }
+    public string? Intercom { get; set; }
+    public int FaceLoginCount { get; set; }
 }
 
 public class CreateEmployeeRequest
@@ -305,8 +380,24 @@ public class RegisterVisitorRequest
     /// </summary>
     public Guid? RecognizedVisitorId { get; set; }
 
+    /// <summary>
+    /// Login of the group employee the operator confirmed from the face match. The visit is official, so no
+    /// visitor emails are sent.
+    /// </summary>
+    [MaxLength(450)]
+    public string? GroupEmployeeUserId { get; set; }
+
+    /// <summary>Employees master record of the confirmed group employee, set when they have no login.</summary>
+    public Guid? GroupEmployeeId { get; set; }
+
     /// <summary>The desk said a matching booking was not this visitor; do not link one automatically.</summary>
     public bool SkipBookingMatch { get; set; }
+
+    /// <summary>
+    /// Generated once per filled-in form. Sending the same form again (e.g. after the browser timed out)
+    /// returns the visit already registered with it instead of creating another.
+    /// </summary>
+    public Guid? ClientRequestId { get; set; }
 
     /// <summary>
     /// Optional client-supplied value (ignored). The server always allocates from the tenant series.
@@ -387,6 +478,28 @@ public class FaceSearchMatchDto
 
     /// <summary>True when this visitor already has an open (Inside) visit and must check out first.</summary>
     public bool IsCurrentlyInside { get; set; }
+}
+
+/// <summary>
+/// A group employee recognised, at any location, from the face on their login or on their Employees record.
+/// </summary>
+public class GroupEmployeeMatchDto
+{
+    /// <summary>Their login, when they have one.</summary>
+    public string? UserId { get; set; }
+    /// <summary>Their Employees master record, when one is linked.</summary>
+    public Guid? EmployeeId { get; set; }
+    public string FullName { get; set; } = string.Empty;
+    public EmployeeGender? Gender { get; set; }
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string? EmployeeCode { get; set; }
+    public string? Designation { get; set; }
+    public string? DepartmentName { get; set; }
+    /// <summary>Location the employee works at.</summary>
+    public string? LocationName { get; set; }
+    public string CompanyName { get; set; } = string.Empty;
+    public double Similarity { get; set; }
 }
 
 /// <summary>A visitor currently inside, recognised from a live capture at the exit desk.</summary>
@@ -474,12 +587,19 @@ public class VisitorListItemDto
     public int NumberOfPersons { get; set; } = 1;
     /// <summary>True when the host has saved meeting minutes for this visit.</summary>
     public bool HasMeetingMinutes { get; set; }
-    /// <summary>Minutes of meeting waived; the check-out email does not wait for them.</summary>
+    /// <summary>True once the MOM email has been sent for this visit.</summary>
+    public bool MomEmailSent { get; set; }
+    /// <summary>Minutes of meeting waived for this visit.</summary>
     public bool MomNotRequired { get; set; }
     public string? MomNotRequiredBy { get; set; }
     public DateTime? MomNotRequiredAt { get; set; }
     /// <summary>Checked out from the list by an admin or by the system, not by the visitor.</summary>
     public bool IsManualCheckOut { get; set; }
+    /// <summary>User who checked the visitor out; null for a face check-out at the desk or the automatic check-out.</summary>
+    public string? CheckedOutBy { get; set; }
+    public string? MeetingHallName { get; set; }
+    /// <summary>A group employee on official work; visitor emails are not sent.</summary>
+    public bool IsGroupEmployee { get; set; }
 }
 
 public class VisitorDetailDto : VisitorListItemDto
@@ -487,7 +607,14 @@ public class VisitorDetailDto : VisitorListItemDto
     public string? Intercom { get; set; }
     public string? PurposeNotes { get; set; }
     public string? Notes { get; set; }
+    /// <summary>Minutes of meeting: discussion points.</summary>
     public string? MeetingMinutes { get; set; }
+    public string? MomDecisions { get; set; }
+    public IReadOnlyList<MomActionItemDto> MomActionItems { get; set; } = Array.Empty<MomActionItemDto>();
+    public DateOnly? MomNextMeetingDate { get; set; }
+    public string? MomRecordedBy { get; set; }
+    public DateTime? MomRecordedAt { get; set; }
+    public DateTime? MomEmailSentAt { get; set; }
     public string? PlantNumber { get; set; }
     public string? OtherLocationText { get; set; }
     public string? IdTypeName { get; set; }
@@ -495,7 +622,6 @@ public class VisitorDetailDto : VisitorListItemDto
     public string? IdNumberFull { get; set; }
     public IdVerificationStatus IdVerificationStatus { get; set; }
     public string? CheckedInBy { get; set; }
-    public string? CheckedOutBy { get; set; }
     public IReadOnlyList<ApprovalHistoryDto> ApprovalHistory { get; set; } = Array.Empty<ApprovalHistoryDto>();
     public VisitFeedbackDto? Feedback { get; set; }
 }
@@ -581,10 +707,33 @@ public class CheckOutRequest
     public bool SkipFeedback { get; set; }
 }
 
+public class MomActionItemDto
+{
+    [MaxLength(500)]
+    public string Task { get; set; } = string.Empty;
+
+    [MaxLength(150)]
+    public string? Owner { get; set; }
+
+    public DateOnly? DueDate { get; set; }
+}
+
 public class SaveMeetingMinutesRequest
 {
+    /// <summary>Discussion points.</summary>
     [Required, MaxLength(4000)]
     public string MeetingMinutes { get; set; } = string.Empty;
+
+    [MaxLength(4000)]
+    public string? Decisions { get; set; }
+
+    [MaxLength(20)]
+    public List<MomActionItemDto> ActionItems { get; set; } = new();
+
+    public DateOnly? NextMeetingDate { get; set; }
+
+    /// <summary>Also email the minutes to the visitor and host.</summary>
+    public bool SendEmail { get; set; }
 }
 
 public class SetMomNotRequiredRequest
@@ -631,12 +780,28 @@ public class DashboardDto
     public IReadOnlyList<VisitorListItemDto> CurrentlyInsideItems { get; set; } = Array.Empty<VisitorListItemDto>();
     /// <summary>True when the numbers are limited to the signed-in host's own visitors.</summary>
     public bool IsHostView { get; set; }
-    /// <summary>Checked-out visits still waiting for minutes of meeting (check-out email is held until then).</summary>
+    /// <summary>Checked-out visits whose MOM email has not been sent: minutes not recorded, or saved but not sent.</summary>
     public int MomPendingCount { get; set; }
     public IReadOnlyList<VisitorListItemDto> MomPendingItems { get; set; } = Array.Empty<VisitorListItemDto>();
-    /// <summary>SuperAdmin only: checked-out visits with no minutes, whether pending or marked not required.</summary>
+    /// <summary>SuperAdmin only: checked-out visits with no MOM email sent, including those marked not required.</summary>
     public int CheckedOutWithoutMomCount { get; set; }
     public IReadOnlyList<VisitorListItemDto> CheckedOutWithoutMomItems { get; set; } = Array.Empty<VisitorListItemDto>();
+    /// <summary>SuperAdmin only: MOM emails not sent, grouped by the employee who was visited.</summary>
+    public IReadOnlyList<MomNotSentByEmployeeDto> MomNotSentByEmployee { get; set; } = Array.Empty<MomNotSentByEmployeeDto>();
+}
+
+public class MomNotSentByEmployeeDto
+{
+    public Guid EmployeeId { get; set; }
+    public string EmployeeName { get; set; } = string.Empty;
+    public string? DepartmentName { get; set; }
+    /// <summary>Checked out with no minutes recorded.</summary>
+    public int NotRecorded { get; set; }
+    /// <summary>Minutes saved but the MOM email never sent.</summary>
+    public int NotSent { get; set; }
+    public int NotRequired { get; set; }
+    /// <summary>Earliest check-out among the outstanding (not recorded or not sent) visits.</summary>
+    public DateTime? OldestCheckOutAt { get; set; }
 }
 
 public class ChartPointDto
@@ -651,6 +816,7 @@ public class SettingsDto
     public string LogoPath { get; set; } = "/branding/tiaano-logo.png";
     public string ThemePreset { get; set; } = "tiaano";
     public string FontPreset { get; set; } = "inter";
+    public string FontSize { get; set; } = "medium";
     public string VisitorIdPrefix { get; set; } = "TIA";
     public int VisitorPassValidityHours { get; set; } = 12;
     public bool ApprovalRequired { get; set; } = false;
@@ -691,6 +857,10 @@ public class PassDto
     public string Status { get; set; } = string.Empty;
     public string BrandCompanyName { get; set; } = string.Empty;
     public string BrandLogoPath { get; set; } = string.Empty;
+    public string? MeetingHallName { get; set; }
+    public string? MeetingHallIntercom { get; set; }
+    /// <summary>Check-in response only: why no hall was allocated although the location has halls.</summary>
+    public string? MeetingHallWarning { get; set; }
 }
 
 public class EmergencyRosterDto
@@ -776,6 +946,41 @@ public class MasterUpsertRequest
     public bool RequiresOtherText { get; set; }
     public bool IsDefault { get; set; }
     public Guid? LocationId { get; set; }
+}
+
+public class MeetingHallDto
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int SeatingCapacity { get; set; }
+    public string? IntercomNo { get; set; }
+    public Guid LocationId { get; set; }
+    public string LocationName { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+    /// <summary>Visit currently holding the hall (inside, not yet checked out); null when free.</summary>
+    public string? OccupiedByVisitNumber { get; set; }
+    public string? OccupiedByVisitorName { get; set; }
+}
+
+public class MeetingHallUpsertRequest
+{
+    [Required, MaxLength(50)]
+    public string Code { get; set; } = string.Empty;
+
+    [Required, MaxLength(150)]
+    public string Name { get; set; } = string.Empty;
+
+    [Range(1, 10000)]
+    public int SeatingCapacity { get; set; }
+
+    [MaxLength(50)]
+    public string? IntercomNo { get; set; }
+
+    /// <summary>Required; a location-bound user may omit it and gets their own location.</summary>
+    public Guid? LocationId { get; set; }
+
+    public bool IsActive { get; set; } = true;
 }
 
 public class MasterImportRowError

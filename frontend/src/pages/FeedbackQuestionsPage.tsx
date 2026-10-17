@@ -172,45 +172,45 @@ export function FeedbackQuestionsPage() {
       <PageHeader
         title="Visitor feedback"
         subtitle="View submitted star ratings, or manage location-specific questions shown at check-out."
-        actions={
-          tab === 'questions' ? (
-            <div className="flex flex-wrap gap-2">
-              <TextSelect
-                value={filterLocationId}
-                onChange={(e) => setFilterLocationId(e.target.value)}
-                className="w-full min-w-[12rem] sm:w-56"
-              >
-                <option value="">All locations</option>
-                {locations.map((l) => (
-                  <option key={l.id} value={l.id}>{l.name}</option>
-                ))}
-              </TextSelect>
-              <ExcelImportButtons kind="feedback-questions" label="Feedback questions" onImported={loadQuestions} />
-              <Button variant="amber" onClick={startCreate}>
-                Add question
-              </Button>
-            </div>
-          ) : (
-            <Button variant="secondary" onClick={() => void loadResponses()}>
-              Refresh
-            </Button>
-          )
-        }
       />
 
-      <div className="mb-4 flex gap-2">
-        <Button
-          variant={tab === 'responses' ? 'primary' : 'secondary'}
-          onClick={() => setTab('responses')}
-        >
-          Responses
-        </Button>
-        <Button
-          variant={tab === 'questions' ? 'primary' : 'secondary'}
-          onClick={() => setTab('questions')}
-        >
-          Questions
-        </Button>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-2">
+          <Button
+            variant={tab === 'responses' ? 'primary' : 'secondary'}
+            onClick={() => setTab('responses')}
+          >
+            Responses
+          </Button>
+          <Button
+            variant={tab === 'questions' ? 'primary' : 'secondary'}
+            onClick={() => setTab('questions')}
+          >
+            Questions
+          </Button>
+        </div>
+        {tab === 'questions' ? (
+          <div className="flex flex-wrap gap-2">
+            <TextSelect
+              value={filterLocationId}
+              onChange={(e) => setFilterLocationId(e.target.value)}
+              className="w-full min-w-[12rem] sm:w-56"
+            >
+              <option value="">All locations</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </TextSelect>
+            <ExcelImportButtons kind="feedback-questions" label="Feedback questions" onImported={loadQuestions} />
+            <Button variant="amber" onClick={startCreate}>
+              Add question
+            </Button>
+          </div>
+        ) : (
+          <Button variant="secondary" onClick={() => void loadResponses()}>
+            Refresh
+          </Button>
+        )}
       </div>
 
       {error ? (
@@ -337,9 +337,10 @@ export function FeedbackQuestionsPage() {
             open={formOpen}
             title={editing ? 'Edit question' : 'Add question'}
             onClose={closeForm}
+            size="lg"
           >
-            <form onSubmit={save} className="grid gap-3">
-              {formError ? <Alert tone="error">{formError}</Alert> : null}
+            <form onSubmit={save} className="grid gap-3 sm:grid-cols-2">
+              {formError ? <div className="sm:col-span-2"><Alert tone="error">{formError}</Alert></div> : null}
               <div>
                 <FieldLabel htmlFor="fb-location">Location *</FieldLabel>
                 <TextSelect
@@ -355,6 +356,15 @@ export function FeedbackQuestionsPage() {
                 </TextSelect>
               </div>
               <div>
+                <FieldLabel htmlFor="fb-sort">Sort order</FieldLabel>
+                <TextInput
+                  id="fb-sort"
+                  type="number"
+                  value={form.sortOrder}
+                  onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
+                />
+              </div>
+              <div className="sm:col-span-2">
                 <FieldLabel htmlFor="fb-prompt">Question text</FieldLabel>
                 <TextInput
                   id="fb-prompt"
@@ -363,15 +373,6 @@ export function FeedbackQuestionsPage() {
                   value={form.prompt}
                   onChange={(e) => setForm({ ...form, prompt: e.target.value })}
                   placeholder="e.g. Overall visit experience"
-                />
-              </div>
-              <div>
-                <FieldLabel htmlFor="fb-sort">Sort order</FieldLabel>
-                <TextInput
-                  id="fb-sort"
-                  type="number"
-                  value={form.sortOrder}
-                  onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
                 />
               </div>
               <label className="flex min-h-11 items-center gap-2 text-sm">
@@ -392,7 +393,7 @@ export function FeedbackQuestionsPage() {
                 />
                 Active
               </label>
-              <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+              <div className="flex justify-end gap-2 border-t border-gray-100 pt-3 sm:col-span-2">
                 <Button type="button" variant="secondary" onClick={closeForm}>Cancel</Button>
                 <Button type="submit" disabled={saving}>
                   {saving ? 'Saving…' : 'Save'}

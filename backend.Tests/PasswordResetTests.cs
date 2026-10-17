@@ -144,14 +144,19 @@ public class PasswordResetTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         var superadmin = await LoginAsync("superadmin");
         var username = $"pwd{Guid.NewGuid():N}"[..18];
         var email = $"{username}@example.test";
-        var response = await superadmin.PostAsJsonAsync("/api/users", new
+        Guid? adminLocationId;
+        using (var lookup = _factory.Services.CreateScope())
         {
-            fullName = "Password Reset User",
+            adminLocationId = await lookup.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>().Users
+                .IgnoreQueryFilters().Where(u => u.UserName == "admin").Select(u => u.LocationId).FirstAsync();
+        }
+        var employeeId = await TestUsers.CreateEmployeeAsync(_factory.Services, WellKnownTenants.TiaanoId, adminLocationId);
+        var response = await superadmin.PostAsJsonAsync($"/api/users/from-employee/{employeeId}", new
+        {
             username,
             email,
             role = "Reception",
-            password = TestSecrets.SeedPassword,
-            allowedMenuKeys = Array.Empty<string>()
+            password = TestSecrets.SeedPassword
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
 

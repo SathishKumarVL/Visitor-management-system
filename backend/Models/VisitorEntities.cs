@@ -97,11 +97,27 @@ public class VisitorVisit
     [MaxLength(1000)]
     public string? Notes { get; set; }
 
-    /// <summary>Minutes of meeting entered by the host after the visit.</summary>
+    /// <summary>Minutes of meeting: discussion points entered by the host. A visit "has minutes" when this is set.</summary>
     [MaxLength(4000)]
     public string? MeetingMinutes { get; set; }
 
-    /// <summary>Minutes of meeting waived: the check-out email goes out without waiting for them.</summary>
+    [MaxLength(4000)]
+    public string? MomDecisions { get; set; }
+
+    /// <summary>JSON array of <see cref="MomActionItem"/>.</summary>
+    public string? MomActionItemsJson { get; set; }
+
+    public DateOnly? MomNextMeetingDate { get; set; }
+
+    [MaxLength(256)]
+    public string? MomRecordedBy { get; set; }
+
+    public DateTime? MomRecordedAt { get; set; }
+
+    /// <summary>When the minutes of meeting email last went to the visitor and host.</summary>
+    public DateTime? MomEmailSentAt { get; set; }
+
+    /// <summary>Minutes of meeting waived for this visit; no MOM email is expected.</summary>
     public bool MomNotRequired { get; set; }
 
     [MaxLength(256)]
@@ -111,6 +127,10 @@ public class VisitorVisit
 
     /// <summary>How many people are included in this visit (including the primary visitor).</summary>
     public int NumberOfPersons { get; set; } = 1;
+
+    /// <summary>Hall allocated at check-in. Kept after check-out as history; the hall is free once the visit leaves.</summary>
+    public Guid? MeetingHallId { get; set; }
+    public MeetingHall? MeetingHall { get; set; }
 
     public bool IsWalkIn { get; set; }
 
@@ -127,6 +147,21 @@ public class VisitorVisit
     /// <summary>True when SuperAdmin manual check-out or system auto check-out after max stay.</summary>
     public bool IsManualCheckOut { get; set; }
 
+    /// <summary>
+    /// The visitor was recognised by face as a group employee on official work: no visitor emails are sent.
+    /// </summary>
+    public bool IsGroupEmployee { get; set; }
+
+    /// <summary>Login of the recognised group employee.</summary>
+    [MaxLength(450)]
+    public string? GroupEmployeeUserId { get; set; }
+
+    /// <summary>Employees master record of the recognised group employee (they may not have a login).</summary>
+    public Guid? GroupEmployeeId { get; set; }
+
+    /// <summary>One per filled-in registration form, so a resubmitted form returns this visit instead of a duplicate.</summary>
+    public Guid? ClientRequestId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public string? CreatedBy { get; set; }
@@ -142,6 +177,14 @@ public class VisitorVisit
     public ICollection<VisitorVisitLocation> VisitLocations { get; set; } = new List<VisitorVisitLocation>();
     public ICollection<Approval> Approvals { get; set; } = new List<Approval>();
     public ICollection<VisitorPass> Passes { get; set; } = new List<VisitorPass>();
+}
+
+/// <summary>One follow-up from a meeting, stored in <see cref="VisitorVisit.MomActionItemsJson"/>.</summary>
+public class MomActionItem
+{
+    public string Task { get; set; } = string.Empty;
+    public string? Owner { get; set; }
+    public DateOnly? DueDate { get; set; }
 }
 
 public class VisitorVisitPurpose

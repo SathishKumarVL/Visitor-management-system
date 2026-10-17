@@ -28,7 +28,7 @@ public class HostLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
     public Task DisposeAsync() => TestUsers.DeactivateAsync(_factory, _createdUserIds);
 
     [Fact]
-    public async Task SuperAdmin_Creates_Login_Once_And_Admin_Cannot()
+    public async Task SuperAdmin_Creates_Login_Once_And_Admin_Cannot_For_Another_Location()
     {
         var employee = await CreateEmployeeAsync();
         var superadmin = await LoginAsync("superadmin");
@@ -86,9 +86,12 @@ public class HostLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
 
         var dashboard = (await host.GetFromJsonAsync<ApiResponse<DashboardDto>>("/api/dashboard", JsonOptions))!.Data!;
         Assert.True(dashboard.IsHostView);
-        Assert.Contains(dashboard.MomPendingItems, v => v.VisitId == myVisit);
-        Assert.DoesNotContain(dashboard.MomPendingItems, v => v.VisitId == otherVisit);
+        Assert.Equal(1, dashboard.MomPendingCount);
         Assert.DoesNotContain(dashboard.RecentVisitors, v => v.VisitId == otherVisit);
+        var pending = await MomNotSentAsync(host);
+        Assert.Contains(pending, v => v.VisitId == myVisit);
+        Assert.DoesNotContain(pending, v => v.VisitId == otherVisit);
+        Assert.Equal([mine.Id], (await MomByEmployeeAsync(host)).Select(e => e.EmployeeId));
 
         var forbidden = await host.PutAsJsonAsync($"/api/visitors/{otherVisit}/meeting-minutes", new { meetingMinutes = "Not my meeting." });
         Assert.False(forbidden.IsSuccessStatusCode);
@@ -96,12 +99,41 @@ public class HostLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         var save = await host.PutAsJsonAsync($"/api/visitors/{myVisit}/meeting-minutes", new { meetingMinutes = "Reviewed the proposal." });
         Assert.True(save.IsSuccessStatusCode, await save.Content.ReadAsStringAsync());
 
-        var after = (await host.GetFromJsonAsync<ApiResponse<DashboardDto>>("/api/dashboard", JsonOptions))!.Data!;
-        Assert.DoesNotContain(after.MomPendingItems, v => v.VisitId == myVisit);
+        var savedItem = Assert.Single(await MomNotSentAsync(host), v => v.VisitId == myVisit);
+        Assert.True(savedItem.HasMeetingMinutes);
+        Assert.False(savedItem.MomEmailSent);
 
         var adminDashboard = (await superadmin.GetFromJsonAsync<ApiResponse<DashboardDto>>("/api/dashboard", JsonOptions))!.Data!;
         Assert.False(adminDashboard.IsHostView);
+        var byEmployee = await MomByEmployeeAsync(superadmin);
+        var mineRow = Assert.Single(byEmployee, e => e.EmployeeId == mine.Id);
+        Assert.Equal(mine.FullName, mineRow.EmployeeName);
+        Assert.Equal(0, mineRow.NotRecorded);
+        Assert.Equal(1, mineRow.NotSent);
+        var otherRow = Assert.Single(byEmployee, e => e.EmployeeId == someoneElse.Id);
+        Assert.Equal(1, otherRow.NotRecorded);
+        Assert.Equal(0, otherRow.NotSent);
+
+        var send = await host.PutAsJsonAsync($"/api/visitors/{myVisit}/meeting-minutes",
+            new { meetingMinutes = "Reviewed the proposal.", sendEmail = true });
+        Assert.True(send.IsSuccessStatusCode, await send.Content.ReadAsStringAsync());
+
+        Assert.DoesNotContain(await MomNotSentAsync(host), v => v.VisitId == myVisit);
+        Assert.DoesNotContain(await MomByEmployeeAsync(superadmin), e => e.EmployeeId == mine.Id);
+
+        var filtered = await superadmin.GetFromJsonAsync<ApiResponse<PagedResult<VisitorListItemDto>>>(
+            $"/api/visitors?quickFilter=momnotsent&host={Uri.EscapeDataString(someoneElse.FullName)}&pageSize=100", JsonOptions);
+        Assert.Contains(filtered!.Data!.Items, v => v.VisitId == otherVisit);
+        Assert.DoesNotContain(filtered.Data.Items, v => v.VisitId == myVisit);
     }
+
+    private static async Task<List<VisitorListItemDto>> MomNotSentAsync(HttpClient client) =>
+        (await client.GetFromJsonAsync<ApiResponse<PagedResult<VisitorListItemDto>>>(
+            "/api/visitors?quickFilter=momnotsent&pageSize=100", JsonOptions))!.Data!.Items.ToList();
+
+    private static async Task<List<MomNotSentByEmployeeDto>> MomByEmployeeAsync(HttpClient client) =>
+        (await client.GetFromJsonAsync<ApiResponse<List<MomNotSentByEmployeeDto>>>(
+            "/api/dashboard/mom-not-sent-by-employee", JsonOptions))!.Data!;
 
     private async Task<EmployeeDto> CreateLoginAsync(HttpClient superadmin, Guid employeeId, string username)
     {
@@ -126,12 +158,28 @@ public class HostLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
 
         var superadmin = await LoginAsync("superadmin");
         var suffix = Guid.NewGuid().ToString("N")[..10];
-        var response = await superadmin.PostAsJsonAsync("/api/masters/hosts", new
+        var legacy = await superadmin.PostAsJsonAsync("/api/masters/hosts", new
         {
             fullName = $"Host Login {suffix}",
             email = $"host.{suffix}@example.test",
             departmentId,
             isActive = true
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, legacy.StatusCode);
+        Assert.Contains("Masters → Employees", await legacy.Content.ReadAsStringAsync());
+
+        var response = await superadmin.PostAsJsonAsync("/api/employee-master", new
+        {
+            title = EmployeeTitles.Mr,
+            fullName = $"Host Login {suffix}",
+            code = $"HL{suffix}",
+            dateOfBirth = "1988-02-11",
+            gender = EmployeeGender.Male,
+            email = $"host.{suffix}@example.test",
+            phone = $"94{Random.Shared.Next(10000000, 99999999)}",
+            departmentId,
+            isActive = true,
+            facePhotoBase64 = TestPhotos.Base64($"host-login-{suffix}")
         });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         return (await response.Content.ReadFromJsonAsync<ApiResponse<EmployeeDto>>(JsonOptions))!.Data!;
@@ -139,7 +187,7 @@ public class HostLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
 
     private async Task<Guid> RegisterAndCheckInAsync(EmployeeDto host, string namePrefix)
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         var settings = (await (await admin.GetAsync("/api/settings")).Content
             .ReadFromJsonAsync<ApiResponse<SettingsDto>>(JsonOptions))!.Data!;
         settings.ApprovalRequired = false;

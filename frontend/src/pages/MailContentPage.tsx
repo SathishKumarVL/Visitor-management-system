@@ -18,16 +18,22 @@ const PLACEHOLDERS = [
   '{{Location}}',
   '{{Department}}',
   '{{Purpose}}',
-  '{{MeetingMinutes}}',
+  '{{MeetingHall}}',
   '{{Date}}',
   '{{Time}}',
 ]
+
+/** Only the minutes of meeting email fills these. */
+const MINUTES_PLACEHOLDERS = ['{{Discussion}}', '{{Decisions}}', '{{ActionItems}}', '{{NextMeetingDate}}']
+
+const MINUTES_KIND = 5
 
 const KIND_LABELS: Record<number, string> = {
   1: 'Check-in (to employee)',
   2: 'Check-out (to visitor and employee)',
   3: 'Appointment (to employee)',
   4: 'Appointment (to visitor)',
+  5: 'Minutes of meeting (to visitor and employee)',
 }
 
 const kindLabel = (item: MailContentTemplateDto) => KIND_LABELS[item.kind] ?? item.kindLabel
@@ -197,7 +203,7 @@ export function MailContentPage() {
                 </label>
                 <p className="text-xs text-ink-muted">
                   Placeholders:{' '}
-                  {PLACEHOLDERS.join(', ')}
+                  {(form.kind === MINUTES_KIND ? [...PLACEHOLDERS, ...MINUTES_PLACEHOLDERS] : PLACEHOLDERS).join(', ')}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>

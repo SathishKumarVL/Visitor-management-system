@@ -60,7 +60,7 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
 
     private async Task SetApprovalRequiredAsync(bool required)
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         var current = await admin.GetAsync("/api/settings");
         current.EnsureSuccessStatusCode();
         var dto = (await current.Content.ReadFromJsonAsync<ApiResponse<SettingsDto>>(JsonOptions))!.Data!;
@@ -356,6 +356,57 @@ public class VisitConcurrencyTests : IClassFixture<TestApiFactory>
             : await first.Content.ReadAsStringAsync();
         if (codes.Contains(HttpStatusCode.Conflict))
             Assert.Contains("modified by another user", loserBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Resubmitted_Registration_Form_Returns_The_Saved_Visit_Instead_Of_A_Duplicate()
+    {
+        await SetApprovalRequiredAsync(false);
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        object Form(Guid clientRequestId, string name) => new
+        {
+            visitorName = name,
+            gender = 1,
+            companyName = "Retry Co",
+            telephone = "9000000098",
+            email = $"{Guid.NewGuid():N}@example.test",
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>(),
+            numberOfPersons = 1,
+            isWalkIn = true,
+            idTypeName = "Aadhaar",
+            idNumber = "123456789012",
+            photoBase64 = TestPhotos.Base64($"{name}-{Guid.NewGuid():N}"),
+            clientRequestId
+        };
+        async Task<Guid> VisitIdOf(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+            return json.GetProperty("data").GetProperty("visitId").GetGuid();
+        }
+
+        var retried = Guid.NewGuid();
+        var first = await VisitIdOf(await reception.PostAsJsonAsync("/api/visitors", Form(retried, "Retry After Timeout")));
+        var again = await VisitIdOf(await reception.PostAsJsonAsync("/api/visitors", Form(retried, "Retry After Timeout")));
+        Assert.Equal(first, again);
+
+        var doubleClicked = Guid.NewGuid();
+        var pair = await Task.WhenAll(
+            reception.PostAsJsonAsync("/api/visitors", Form(doubleClicked, "Retry Double Click")),
+            reception.PostAsJsonAsync("/api/visitors", Form(doubleClicked, "Retry Double Click")));
+        Assert.Equal(await VisitIdOf(pair[0]), await VisitIdOf(pair[1]));
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(1, await db.VisitorVisits.IgnoreQueryFilters().CountAsync(v => v.ClientRequestId == retried));
+        Assert.Equal(1, await db.VisitorVisits.IgnoreQueryFilters().CountAsync(v => v.ClientRequestId == doubleClicked));
+
+        var fresh = await VisitIdOf(await reception.PostAsJsonAsync("/api/visitors", Form(Guid.NewGuid(), "Retry New Form")));
+        Assert.NotEqual(first, fresh);
     }
 
     [Fact]

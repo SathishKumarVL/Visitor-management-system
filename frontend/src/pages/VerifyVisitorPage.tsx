@@ -51,7 +51,15 @@ export function VerifyVisitorPage() {
       } else if (status.includes('approved') || status.includes('expected')) {
         const updated = await visitorsApi.checkIn(result.visitId)
         setPass(updated)
-        setMessage(`Checked in: ${result.visitorName}`)
+        setMessage(
+          [
+            `Checked in: ${result.visitorName}`,
+            updated.meetingHallName ? `Meeting hall: ${updated.meetingHallName}` : null,
+            updated.meetingHallWarning,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        )
       } else if (status.includes('checkedout') || status.includes('checked out')) {
         setMessage(`Visitor already checked out: ${result.visitorName}`)
       } else {

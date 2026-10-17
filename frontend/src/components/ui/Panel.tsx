@@ -15,15 +15,15 @@ export function PageHeader({
   eyebrow?: string
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mb-4">
       <div>
         {eyebrow ? (
           <p className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-primary">{eyebrow}</p>
         ) : null}
         <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">{title}</h1>
-        {subtitle ? <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">{subtitle}</p> : null}
+        {subtitle ? <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-ink-muted">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
+      {actions ? <div className="mt-4 flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
     </div>
   )
 }
@@ -41,9 +41,10 @@ export function Panel({ children, className }: PropsWithChildren<{ className?: s
   )
 }
 
-export function Badge({ children, className }: PropsWithChildren<{ className?: string }>) {
+export function Badge({ children, className, title }: PropsWithChildren<{ className?: string; title?: string }>) {
   return (
     <span
+      title={title}
       className={cn(
         'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold tracking-wide',
         className,

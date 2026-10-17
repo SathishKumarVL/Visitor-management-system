@@ -95,7 +95,7 @@ export function ExcelImportButtons({
           onClick={() => setOpen(false)}
         >
           <div
-            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+            className="max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-3 text-lg font-semibold text-steel">{label} import</h2>
@@ -113,9 +113,9 @@ export function ExcelImportButtons({
                 {result.errors.length > 0 ? (
                   <div>
                     <div className="mb-1 font-medium text-ink">Rows that were not saved</div>
-                    <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200">
+                    <ul className="grid divide-gray-100 rounded-xl border border-gray-200 sm:grid-cols-2">
                       {result.errors.map((err) => (
-                        <li key={`${err.row}-${err.message}`} className="px-3 py-2">
+                        <li key={`${err.row}-${err.message}`} className="border-b border-gray-100 px-3 py-2">
                           <span className="font-mono text-xs text-ink-muted">Row {err.row}:</span>{' '}
                           {err.message}
                         </li>

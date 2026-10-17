@@ -5,13 +5,13 @@ import type { EmployeeDto, MasterItemDto, RegisterVisitorRequest, VisitorWizardD
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../components/ui/Field'
-import { nowIsoTime, sanitizePhoneDigits, todayIsoDate, validateVisitorEmail } from '../lib/utils'
+import { newUuid, nowIsoTime, sanitizePhoneDigits, todayIsoDate, validateVisitorEmail } from '../lib/utils'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { SecureImage } from '../components/SecureImage'
 import { LoadingMask } from '../components/LoadingMask'
 import { FaceCameraPanel } from '../components/FaceCameraPanel'
 import { captureFaceJpeg } from '../lib/cameraCapture'
-import type { BookingMatchDto, FaceSearchMatchDto } from '../types/api'
+import type { BookingMatchDto, FaceSearchMatchDto, GroupEmployeeMatchDto, PassDto } from '../types/api'
 import { useAuthStore } from '../store/authStore'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
 
@@ -45,6 +45,8 @@ const emptyDraft = (): VisitorWizardDraft => ({
   isWalkIn: true,
   expectedVisitId: null,
   recognizedVisitorId: null,
+  groupEmployeeUserId: null,
+  groupEmployeeId: null,
   passNumber: '',
 })
 
@@ -73,10 +75,12 @@ export function NewVisitorWizardPage() {
   const [employees, setEmployees] = useState<EmployeeDto[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [cameraError, setCameraError] = useState<string | null>(null)
   const [faceStatus, setFaceStatus] = useState<string | null>(null)
   const [faceBusy, setFaceBusy] = useState(false)
   const [faceMatch, setFaceMatch] = useState<FaceSearchMatchDto | null>(null)
+  const [employeeMatch, setEmployeeMatch] = useState<GroupEmployeeMatchDto | null>(null)
+  /** Earlier visitor record with the same face, kept while the desk confirms the employee match. */
+  const [employeeVisitorMatch, setEmployeeVisitorMatch] = useState<FaceSearchMatchDto | null>(null)
   const [emailTouched, setEmailTouched] = useState(false)
   const [loadingExpected, setLoadingExpected] = useState(!!expectedId)
   const [bookingMatches, setBookingMatches] = useState<BookingMatchDto[]>([])
@@ -85,6 +89,8 @@ export function NewVisitorWizardPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const formTopRef = useRef<HTMLDivElement>(null)
+  /** Sent with every attempt to register this form, so a retry after a timeout returns the saved visit. */
+  const clientRequestId = useRef(newUuid())
 
   const othersPurpose = useMemo(
     () => purposes.find((p) => p.name.trim().toLowerCase() === 'others'),
@@ -100,7 +106,7 @@ export function NewVisitorWizardPage() {
   )
 
   /** Details form only after a confirmed capture (match resolved or none). */
-  const showDetailsForm = !!draft.photoBase64 && !faceMatch && !faceBusy
+  const showDetailsForm = !!draft.photoBase64 && !faceMatch && !employeeMatch && !faceBusy
   const showFaceStage = !showDetailsForm
   const returningVisitor = !!draft.recognizedVisitorId
   const lookupPhone = sanitizePhoneDigits(draft.telephone)
@@ -299,6 +305,7 @@ export function NewVisitorWizardPage() {
   function validateAll(): string | null {
     if (!draft.photoBase64) return 'Capture the visitor face photo to continue.'
     if (faceMatch) return 'Confirm whether this is the same visitor before continuing.'
+    if (employeeMatch) return 'Confirm whether this is the group employee before continuing.'
     if (!draft.visitorName.trim()) return 'Visitor name is required.'
     if (!draft.companyName.trim()) return 'Company name is required.'
     if (draft.gender !== 1 && draft.gender !== 2) return 'Please select Mr. or Ms.'
@@ -328,11 +335,14 @@ export function NewVisitorWizardPage() {
   }
 
   function resetWizard() {
+    clientRequestId.current = newUuid()
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setDraft(emptyDraft())
     setError(null)
     setFaceMatch(null)
+    setEmployeeMatch(null)
+    setEmployeeVisitorMatch(null)
     setFaceStatus(null)
     setEmailTouched(false)
     setBookingMatches([])
@@ -341,7 +351,6 @@ export function NewVisitorWizardPage() {
   }
 
   async function startCamera() {
-    setCameraError(null)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -354,7 +363,7 @@ export function NewVisitorWizardPage() {
         await videoRef.current.play()
       }
     } catch {
-      setCameraError('Unable to access camera. You can continue without a photo.')
+      // Camera failures stay silent; Capture restarts the camera.
     }
   }
 
@@ -363,7 +372,7 @@ export function NewVisitorWizardPage() {
     if (!video || faceBusy) return
     const photoBase64 = captureFaceJpeg(video)
     if (!photoBase64) {
-      setError('Camera is not ready yet. Wait a moment and try Capture again.')
+      void startCamera()
       return
     }
 
@@ -371,6 +380,8 @@ export function NewVisitorWizardPage() {
     setError(null)
     setFaceStatus(null)
     setFaceMatch(null)
+    setEmployeeMatch(null)
+    setEmployeeVisitorMatch(null)
 
     if (!online) {
       setError('Connect to the network to validate that exactly one face is in the photo.')
@@ -394,7 +405,12 @@ export function NewVisitorWizardPage() {
     setFaceStatus('Ready to capture — checking for a previous visit…')
 
     try {
-      const match = await visitorsApi.faceSearch(photoBase64)
+      const [visitorResult, employeeResult] = await Promise.allSettled([
+        visitorsApi.faceSearch(photoBase64),
+        visitorsApi.employeeFaceSearch(photoBase64),
+      ])
+      const match = visitorResult.status === 'fulfilled' ? visitorResult.value : null
+      const employee = employeeResult.status === 'fulfilled' ? employeeResult.value : null
       if (match?.isCurrentlyInside) {
         setError(
           `${match.visitorName} is already checked in. Check them out before registering again.`,
@@ -403,17 +419,53 @@ export function NewVisitorWizardPage() {
         patch({ photoBase64: '', recognizedVisitorId: null })
         setFaceStatus(null)
         void startCamera()
+      } else if (employee) {
+        setEmployeeMatch(employee)
+        setEmployeeVisitorMatch(match)
+        setFaceStatus(null)
       } else if (match) {
         setFaceMatch(match)
         setFaceStatus(null)
+      } else if (visitorResult.status === 'rejected') {
+        setFaceStatus('Returning-visitor lookup unavailable — continue and fill the details manually.')
       } else {
         setFaceStatus('No previous visit found — continue as a new visitor.')
       }
-    } catch {
-      setFaceStatus('Returning-visitor lookup unavailable — continue and fill the details manually.')
     } finally {
       setFaceBusy(false)
     }
+  }
+
+  function acceptEmployeeMatch() {
+    if (!employeeMatch) return
+    const previous = employeeVisitorMatch
+    patch({
+      visitorName: employeeMatch.fullName,
+      companyName: employeeMatch.companyName || employeeMatch.locationName || '',
+      gender:
+        employeeMatch.gender === 1 || employeeMatch.gender === 2
+          ? employeeMatch.gender
+          : previous?.gender === 1 || previous?.gender === 2 ? previous.gender : '',
+      telephone: sanitizePhoneDigits(employeeMatch.phone || previous?.phone || ''),
+      email: (employeeMatch.email || previous?.email || '').trim(),
+      recognizedVisitorId: previous?.visitorId ?? null,
+      groupEmployeeUserId: employeeMatch.userId ?? null,
+      groupEmployeeId: employeeMatch.employeeId ?? null,
+    })
+    setFaceStatus(
+      `Group employee ${employeeMatch.fullName}${employeeMatch.locationName ? ` from ${employeeMatch.locationName}` : ''} — official visit, no visitor emails will be sent.`,
+    )
+    setEmployeeMatch(null)
+    setEmployeeVisitorMatch(null)
+    setError(null)
+  }
+
+  function declineEmployeeMatch() {
+    const previous = employeeVisitorMatch
+    setEmployeeMatch(null)
+    setEmployeeVisitorMatch(null)
+    if (previous) setFaceMatch(previous)
+    else setFaceStatus('Continue as a visitor.')
   }
 
   function acceptFaceMatch() {
@@ -441,8 +493,10 @@ export function NewVisitorWizardPage() {
   }
 
   function retakePhoto() {
-    patch({ photoBase64: '', recognizedVisitorId: null })
+    patch({ photoBase64: '', recognizedVisitorId: null, groupEmployeeUserId: null, groupEmployeeId: null })
     setFaceMatch(null)
+    setEmployeeMatch(null)
+    setEmployeeVisitorMatch(null)
     setFaceStatus(null)
     setError(null)
   }
@@ -494,23 +548,28 @@ export function NewVisitorWizardPage() {
       isWalkIn: draft.isWalkIn,
       expectedVisitId: draft.expectedVisitId,
       recognizedVisitorId: draft.recognizedVisitorId,
+      groupEmployeeUserId: draft.groupEmployeeUserId,
+      groupEmployeeId: draft.groupEmployeeId,
       skipBookingMatch: !draft.expectedVisitId && dismissedBookingIds.length > 0,
       photoBase64: draft.photoBase64 || null,
       idTypeName: draft.idTypeName.trim(),
       idNumber: draft.idNumber.trim(),
+      clientRequestId: clientRequestId.current,
     }
     try {
       const result = await visitorsApi.register(body)
       const awaitingApproval = String(result.statusLabel ?? '').toLowerCase().includes('pending')
 
       let passCode = result.passCode || null
+      let checkInPass: PassDto | null = null
       if (!awaitingApproval) {
         const [generated, checkedIn] = await Promise.allSettled([
           passApi.generate(result.visitId),
           visitorsApi.checkIn(result.visitId),
         ])
+        checkInPass = checkedIn.status === 'fulfilled' ? checkedIn.value : null
         passCode =
-          (checkedIn.status === 'fulfilled' && checkedIn.value?.passCode) ||
+          checkInPass?.passCode ||
           (generated.status === 'fulfilled' && generated.value?.passCode) ||
           passCode
       }
@@ -527,6 +586,9 @@ export function NewVisitorWizardPage() {
           visitNumber: result.visitNumber,
           visitId: result.visitId,
           passCode,
+          meetingHallName: checkInPass?.meetingHallName,
+          meetingHallIntercom: checkInPass?.meetingHallIntercom,
+          meetingHallWarning: checkInPass?.meetingHallWarning,
         },
       })
     } catch (e) {
@@ -597,15 +659,40 @@ export function NewVisitorWizardPage() {
                   </Button>
                 )}
               </div>
-              <FieldError message={cameraError} />
               <p className="mt-3 text-xs text-ink-muted">
                 Capture a photo first. The registration form opens after capture
-                {faceMatch ? ' (confirm the match below)' : ''}.
+                {faceMatch || employeeMatch ? ' (confirm the match below)' : ''}.
               </p>
             </div>
 
             <div className="space-y-3">
-              {faceStatus && !faceMatch ? <Alert tone="info">{faceStatus}</Alert> : null}
+              {faceStatus && !faceMatch && !employeeMatch ? <Alert tone="info">{faceStatus}</Alert> : null}
+
+              {employeeMatch ? (
+                <div className="rounded-2xl border-2 border-primary-deep/30 bg-mint/40 p-4">
+                  <h3 className="text-sm font-semibold text-primary-deep">Group employee recognised</h3>
+                  <div className="mt-3 min-w-0 space-y-0.5">
+                    <div className="truncate font-semibold text-ink">{employeeMatch.fullName}</div>
+                    <div className="truncate text-sm text-ink-muted">
+                      {[employeeMatch.designation, employeeMatch.departmentName].filter(Boolean).join(' · ') || employeeMatch.companyName}
+                    </div>
+                    <div className="text-xs text-ink-muted">
+                      {employeeMatch.locationName ? `Works at ${employeeMatch.locationName}` : employeeMatch.companyName}
+                      {employeeMatch.employeeCode ? ` · ${employeeMatch.employeeCode}` : ''}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button onClick={acceptEmployeeMatch}>Yes — official visit</Button>
+                    <Button variant="secondary" onClick={declineEmployeeMatch}>
+                      Not an employee
+                    </Button>
+                  </div>
+                  <p className="mt-3 text-xs text-ink-muted">
+                    Employees of the group visiting on official work are registered as usual, but no visitor
+                    emails are sent to them.
+                  </p>
+                </div>
+              ) : null}
 
               {faceMatch ? (
                 <div className="rounded-2xl border-2 border-primary-deep/30 bg-aqua-light/40 p-4">
@@ -635,7 +722,7 @@ export function NewVisitorWizardPage() {
                     photo. Registering as a different new visitor with this face is not allowed.
                   </p>
                 </div>
-              ) : (
+              ) : employeeMatch ? null : (
                 <p className="text-sm text-ink-muted">
                   Stand close so only one face fills the oval. Capture is rejected when no face or multiple faces are detected.
                 </p>

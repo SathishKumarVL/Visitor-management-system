@@ -30,10 +30,10 @@ public class LocationCrudContractTests : IClassFixture<TestApiFactory>
     public LocationCrudContractTests(TestApiFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task Put_Locations_Id_Updates_Location_For_Admin()
+    public async Task Put_Locations_Id_Updates_Location_For_SuperAdmin()
     {
         var locationId = await EnsureEditableLocationAsync();
-        var client = await LoginAsync("admin", TestSecrets.SeedPassword);
+        var client = await LoginAsync("superadmin", TestSecrets.SeedPassword);
         var suffix = Guid.NewGuid().ToString("N")[..8];
 
         var response = await client.PutAsJsonAsync($"/api/masters/locations/{locationId}", new
@@ -70,7 +70,7 @@ public class LocationCrudContractTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Put_Locations_Id_Unknown_Returns_BadRequest()
     {
-        var client = await LoginAsync("admin", TestSecrets.SeedPassword);
+        var client = await LoginAsync("superadmin", TestSecrets.SeedPassword);
         var missing = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 
         var response = await client.PutAsJsonAsync($"/api/masters/locations/{missing}", new
@@ -87,7 +87,7 @@ public class LocationCrudContractTests : IClassFixture<TestApiFactory>
     public async Task Put_Locations_Id_Empty_Name_Is_Rejected()
     {
         var locationId = await EnsureEditableLocationAsync();
-        var client = await LoginAsync("admin", TestSecrets.SeedPassword);
+        var client = await LoginAsync("superadmin", TestSecrets.SeedPassword);
 
         var response = await client.PutAsJsonAsync($"/api/masters/locations/{locationId}", new
         {
@@ -102,7 +102,7 @@ public class LocationCrudContractTests : IClassFixture<TestApiFactory>
     public async Task Put_Cannot_Update_Other_Tenant_Location()
     {
         var foreignLocationId = await EnsureTenantBLocationAsync();
-        var client = await LoginAsync("admin", TestSecrets.SeedPassword);
+        var client = await LoginAsync("superadmin", TestSecrets.SeedPassword);
 
         var response = await client.PutAsJsonAsync($"/api/masters/locations/{foreignLocationId}", new
         {
@@ -123,7 +123,7 @@ public class LocationCrudContractTests : IClassFixture<TestApiFactory>
     public async Task Put_Route_Is_Registered_Not_MethodNotAllowed()
     {
         var locationId = await EnsureEditableLocationAsync();
-        var client = await LoginAsync("admin", TestSecrets.SeedPassword);
+        var client = await LoginAsync("superadmin", TestSecrets.SeedPassword);
         var suffix = Guid.NewGuid().ToString("N")[..8];
 
         var response = await client.PutAsJsonAsync($"/api/masters/locations/{locationId}", new
@@ -134,6 +134,32 @@ public class LocationCrudContractTests : IClassFixture<TestApiFactory>
 
         Assert.NotEqual(HttpStatusCode.MethodNotAllowed, response.StatusCode);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Location_Bound_Admin_Sees_And_Edits_Only_Their_Own_Location()
+    {
+        var otherLocationId = await EnsureEditableLocationAsync();
+        Guid ownLocationId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            ownLocationId = (await users.Users.IgnoreQueryFilters().FirstAsync(u => u.UserName == "admin")).LocationId!.Value;
+        }
+        var admin = await LoginAsync("admin", TestSecrets.SeedPassword);
+
+        var list = await admin.GetFromJsonAsync<JsonElement>("/api/masters/locations?activeOnly=false", JsonOptions);
+        var ids = list.GetProperty("data").EnumerateArray().Select(l => l.GetProperty("id").GetGuid()).ToList();
+        Assert.Equal(new[] { ownLocationId }, ids);
+
+        var editOther = await admin.PutAsJsonAsync($"/api/masters/locations/{otherLocationId}", new { name = "Not Mine", isActive = true });
+        Assert.Equal(HttpStatusCode.Forbidden, editOther.StatusCode);
+
+        var create = await admin.PostAsJsonAsync("/api/masters/locations", new { name = $"Admin Made {Guid.NewGuid():N}"[..24], isActive = true });
+        Assert.Equal(HttpStatusCode.Forbidden, create.StatusCode);
+
+        var deactivate = await admin.PostAsync($"/api/masters/locations/{otherLocationId}/deactivate", null);
+        Assert.Equal(HttpStatusCode.Forbidden, deactivate.StatusCode);
     }
 
     private async Task<HttpClient> LoginAsync(string username, string password)

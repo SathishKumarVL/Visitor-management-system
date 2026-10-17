@@ -62,7 +62,7 @@ public class SingleFaceCaptureTests : IClassFixture<TestApiFactory>
 
     private async Task SetApprovalRequiredAsync(bool required)
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         var current = await admin.GetAsync("/api/settings");
         current.EnsureSuccessStatusCode();
         var dto = (await current.Content.ReadFromJsonAsync<ApiResponse<SettingsDto>>(JsonOptions))!.Data!;

@@ -29,6 +29,7 @@ appsettings.*.local.json
 ## Runtime / generated
 **/wwwroot/uploads/*
 !**/wwwroot/uploads/.gitkeep
+**/wwwroot/branding/tenants/
 **/App_Data/mail-pickup/*
 !**/App_Data/mail-pickup/.gitkeep
 **/App_Data/media/**

@@ -70,6 +70,15 @@ public class MasterImportService : IMasterImportService
                 new Column("plant", "Requires Plant Number", ColumnType.YesNo, false, "Yes or No. Default No."),
                 new Column("other", "Requires Other Text", ColumnType.YesNo, false, "Yes or No. Default No."),
             }),
+            ["meeting-halls"] = ("Meeting Halls", new[]
+            {
+                new Column("code", "Code", ColumnType.Text, true, "Unique hall code. Used to match existing halls on re-upload."),
+                new Column("name", "Name", ColumnType.Text, true, "Meeting hall name."),
+                new Column("capacity", "Seating Capacity", ColumnType.Number, true, "Whole number of seats (at least 1).", "capacity", "seats"),
+                new Column("intercom", "Intercom No", ColumnType.Text, false, "Optional intercom / extension.", "intercom"),
+                new Column("location", "Location", ColumnType.Location, true, "Location name or code (required)."),
+                new Column("active", "Active", ColumnType.YesNo, false, "Yes or No. Default Yes.", "isactive"),
+            }),
             ["feedback-questions"] = ("Feedback Questions", new[]
             {
                 new Column("prompt", "Question", ColumnType.Text, true, "Feedback question shown to the visitor.", "prompt"),
@@ -244,6 +253,7 @@ public class MasterImportService : IMasterImportService
                         "purposes" => await ImportPurposeAsync(row, locations, user),
                         "locations" => await ImportLocationAsync(row, user),
                         "feedback-questions" => await ImportFeedbackQuestionAsync(row, locations, user),
+                        "meeting-halls" => await ImportMeetingHallAsync(row, locations, user),
                         _ => throw new InvalidOperationException("Unsupported import type."),
                     };
                     if (kind.Equals("locations", StringComparison.OrdinalIgnoreCase))
@@ -431,6 +441,23 @@ public class MasterImportService : IMasterImportService
             LocationId = locationId,
             IsRequired = row.Bool("required") ?? existing?.IsRequired ?? true,
             SortOrder = row.Int("sort") ?? existing?.SortOrder ?? 0,
+            IsActive = row.Bool("active") ?? existing?.IsActive ?? true,
+        }, user);
+        return existing is null;
+    }
+
+    private async Task<bool> ImportMeetingHallAsync(RowValues row, List<LocationRef> locations, string? user)
+    {
+        var code = row.Text("code")!;
+        var existing = await _db.MeetingHalls.AsNoTracking().FirstOrDefaultAsync(h => h.Code == code);
+
+        await _masters.UpsertMeetingHallAsync(existing?.Id, new MeetingHallUpsertRequest
+        {
+            Code = code,
+            Name = row.Text("name")!,
+            SeatingCapacity = row.Int("capacity") ?? 0,
+            IntercomNo = row.Text("intercom") ?? existing?.IntercomNo,
+            LocationId = ResolveLocation(row.Text("location"), locations, required: true),
             IsActive = row.Bool("active") ?? existing?.IsActive ?? true,
         }, user);
         return existing is null;

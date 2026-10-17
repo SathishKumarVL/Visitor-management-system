@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { apiErrorMessage, isConflictError, passApi, visitorsApi } from '../lib/api'
+import { apiErrorMessage, isConflictError, visitorsApi } from '../lib/api'
 import type { VisitorDetailDto } from '../types/api'
 import { Alert, Badge, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
-import { FieldLabel } from '../components/ui/Field'
 import { formatDate, formatDateTime, formatDuration, statusBadgeClass, cn } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
@@ -25,12 +24,10 @@ export function VisitorDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [mom, setMom] = useState('')
   const [savingMom, setSavingMom] = useState(false)
 
   const [checkInOpen, setCheckInOpen] = useState(false)
   const [photoBase64, setPhotoBase64] = useState<string | null>(null)
-  const [cameraError, setCameraError] = useState<string | null>(null)
   const [faceBusy, setFaceBusy] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -48,7 +45,6 @@ export function VisitorDetailPage() {
     try {
       const v = await visitorsApi.get(id)
       setVisitor(v)
-      setMom(v.meetingMinutes || '')
     } catch (e) {
       setError(apiErrorMessage(e))
     } finally {
@@ -69,7 +65,6 @@ export function VisitorDetailPage() {
   }, [])
 
   async function startCamera() {
-    setCameraError(null)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -82,7 +77,7 @@ export function VisitorDetailPage() {
         await videoRef.current.play()
       }
     } catch {
-      setCameraError('Unable to access camera. Allow camera permission and try again.')
+      // Camera failures stay silent; Retry camera restarts it.
     }
   }
 
@@ -107,7 +102,6 @@ export function VisitorDetailPage() {
   function cancelCheckInCapture() {
     setCheckInOpen(false)
     setPhotoBase64(null)
-    setCameraError(null)
     stopCamera()
   }
 
@@ -116,7 +110,7 @@ export function VisitorDetailPage() {
     if (!video || faceBusy) return
     const captured = captureFaceJpeg(video)
     if (!captured) {
-      setError('Camera is not ready yet. Wait a moment and try Capture again.')
+      void startCamera()
       return
     }
     setFaceBusy(true)
@@ -151,6 +145,9 @@ export function VisitorDetailPage() {
           visitNumber: visitor.visitNumber,
           visitId: id,
           passCode: pass?.passCode || visitor.passCode || null,
+          meetingHallName: pass?.meetingHallName,
+          meetingHallIntercom: pass?.meetingHallIntercom,
+          meetingHallWarning: pass?.meetingHallWarning,
         },
       })
     } catch (e) {
@@ -161,66 +158,21 @@ export function VisitorDetailPage() {
     }
   }
 
-  async function printPass() {
-    if (!id) return
-    setBusy(true)
-    try {
-      await passApi.generate(id)
-      navigate(`/passes/${id}/print`)
-    } catch (e) {
-      setError(apiErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function saveMom() {
-    if (!id) return
-    setSavingMom(true)
-    setError(null)
-    setMessage(null)
-    try {
-      const wasPending = !visitor?.hasMeetingMinutes && !visitor?.momNotRequired
-      const checkedOut = String(visitor?.statusLabel ?? '').toLowerCase().includes('checkedout')
-      const updated = await visitorsApi.saveMeetingMinutes(id, mom)
-      setVisitor(updated)
-      setMom(updated.meetingMinutes || '')
-      setMessage(
-        checkedOut && wasPending
-          ? 'Meeting minutes saved. The check-out email has been sent to the visitor and host.'
-          : checkedOut
-            ? 'Meeting minutes updated.'
-            : 'Meeting minutes saved. They will be included in the check-out email.',
-      )
-    } catch (e) {
-      setError(apiErrorMessage(e))
-    } finally {
-      setSavingMom(false)
-    }
-  }
-
   async function toggleMomNotRequired(notRequired: boolean) {
     if (!id || !visitor) return
     if (
       notRequired &&
-      !window.confirm(
-        `Mark minutes of meeting as not required for ${visitor.visitorName}? The check-out email will be sent without minutes.`,
-      )
+      !window.confirm(`Mark minutes of meeting as not required for ${visitor.visitorName}? No MOM email will be sent.`)
     )
       return
     setSavingMom(true)
     setError(null)
     setMessage(null)
     try {
-      const checkedOut = String(visitor.statusLabel ?? '').toLowerCase().includes('checkedout')
       const updated = await visitorsApi.setMomNotRequired(id, notRequired)
       setVisitor(updated)
       setMessage(
-        !notRequired
-          ? 'Minutes of meeting are required again.'
-          : checkedOut
-            ? 'Minutes of meeting marked as not required. The check-out email has been sent to the visitor and host.'
-            : 'Minutes of meeting marked as not required. The check-out email will be sent at check-out.',
+        notRequired ? 'Minutes of meeting marked as not required.' : 'Minutes of meeting are required again.',
       )
     } catch (e) {
       setError(apiErrorMessage(e))
@@ -236,8 +188,8 @@ export function VisitorDetailPage() {
   const status = String(visitor.statusLabel).toLowerCase()
   const isInside = status.includes('inside')
   const isCheckedOut = status.includes('checkedout')
-  const showMomEditor = canEditMom && (isInside || isCheckedOut)
-  const checkOutMailPending = isCheckedOut && !visitor.hasMeetingMinutes && !visitor.momNotRequired
+  const canRecordMom = canEditMom && (isInside || isCheckedOut) && !visitor.momEmailSentAt
+  const momActions = visitor.momActionItems ?? []
   const canWaiveMom = (canGate || canEditMom) && !visitor.hasMeetingMinutes && (isInside || isCheckedOut)
   const canCheckIn = canGate && (status.includes('approved') || status.includes('expected'))
 
@@ -258,9 +210,6 @@ export function VisitorDetailPage() {
                 <Button variant="secondary">Go to Check Out</Button>
               </Link>
             ) : null}
-            {canGate ? (
-              <Button variant="amber" disabled={busy} onClick={() => void printPass()}>Print pass</Button>
-            ) : null}
           </div>
         }
       />
@@ -275,13 +224,12 @@ export function VisitorDetailPage() {
           <p className="mb-3 text-sm text-ink-muted">
             This visitor has no photo on file. Capture a single face before completing check-in.
           </p>
-          {cameraError ? <div className="mb-3"><Alert tone="error">{cameraError}</Alert></div> : null}
           <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
             <FaceCameraPanel videoRef={videoRef} photoUrl={photoBase64} alt={visitor.visitorName} />
             <div className="flex flex-wrap gap-2">
               {!photoBase64 ? (
                 <>
-                  <Button type="button" disabled={faceBusy || !!cameraError} onClick={() => void capturePhoto()}>
+                  <Button type="button" disabled={faceBusy} onClick={() => void capturePhoto()}>
                     Capture face
                   </Button>
                   <Button type="button" variant="secondary" onClick={() => void startCamera()}>
@@ -317,44 +265,40 @@ export function VisitorDetailPage() {
         </Panel>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
-        <Panel className="text-center">
-          {visitor.photoUrl ? (
-            <SecureImage
-              src={visitor.photoUrl}
-              alt={visitor.visitorName}
-              className="mx-auto h-48 w-48 rounded-lg object-cover"
-            />
-          ) : (
-            <div className="mx-auto flex h-48 w-48 items-center justify-center rounded-lg bg-gray-100 text-gray-400">No photo</div>
-          )}
-          <div className="mt-3">
-            <Badge className={statusBadgeClass(visitor.statusLabel)}>{visitor.statusLabel}</Badge>
-          </div>
-          {visitor.isLongStay ? <div className="mt-2 text-sm font-semibold text-danger">Long stay</div> : null}
-          {isInside || isCheckedOut ? (
-            <div className="mt-2 text-sm">
-              {visitor.hasMeetingMinutes ? (
-                <Badge className="bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200">MoM saved</Badge>
-              ) : visitor.momNotRequired ? (
-                <Badge className="bg-slate-100 text-slate-700 ring-1 ring-slate-200">MoM not required</Badge>
-              ) : (
-                <Badge className="bg-amber-100 text-amber-900 ring-1 ring-amber-200">MoM pending</Badge>
-              )}
-            </div>
-          ) : null}
-        </Panel>
-
         <div className="space-y-4">
           <Panel>
-            <h2 className="mb-3 font-semibold text-steel">Visit details</h2>
-            <dl className="grid gap-2 text-sm sm:grid-cols-2">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <h2 className="mr-1 font-semibold text-steel">Visit details</h2>
+              <Badge className={statusBadgeClass(visitor.statusLabel)}>{visitor.statusLabel}</Badge>
+              {visitor.isLongStay ? (
+                <Badge className="bg-red-100 text-danger ring-1 ring-red-200">Long stay</Badge>
+              ) : null}
+              {visitor.isGroupEmployee ? (
+                <Badge className="bg-violet-50 text-violet-800 ring-1 ring-violet-200" title="Official visit; no visitor emails are sent">
+                  Group employee
+                </Badge>
+              ) : null}
+              {isInside || isCheckedOut ? (
+                visitor.momEmailSentAt ? (
+                  <Badge className="bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200">MoM sent</Badge>
+                ) : visitor.hasMeetingMinutes ? (
+                  <Badge className="bg-sky-50 text-sky-800 ring-1 ring-sky-200">MoM saved, not sent</Badge>
+                ) : visitor.momNotRequired ? (
+                  <Badge className="bg-slate-100 text-slate-700 ring-1 ring-slate-200">MoM not required</Badge>
+                ) : (
+                  <Badge className="bg-amber-100 text-amber-900 ring-1 ring-amber-200">MoM pending</Badge>
+                )
+              ) : null}
+            </div>
+            <div className="flex flex-col-reverse gap-4 sm:flex-row sm:items-start">
+            <dl className="grid flex-1 gap-2 text-sm sm:grid-cols-2">
               <Item label="Visitor #" value={visitor.visitorNumber} />
               <Item label="Visit #" value={visitor.visitNumber} />
               <Item label="Pass No." value={visitor.passCode || '—'} />
               <Item label="Visit date" value={formatDate(visitor.visitDate)} />
               <Item label="Person to meet" value={visitor.hostName} />
               <Item label="Department" value={visitor.departmentName} />
+              <Item label="Meeting hall" value={visitor.meetingHallName || '—'} />
               <Item label="Phone" value={visitor.phone || '—'} />
               <Item label="Email" value={visitor.email || '—'} />
               <Item label="Intercom" value={visitor.intercom || '—'} />
@@ -366,68 +310,104 @@ export function VisitorDetailPage() {
                 <Item label="Other purpose detail" value={visitor.purposeNotes} />
               ) : null}
               <Item label="Locations" value={visitor.locations.join(', ') || '—'} />
-              <Item label="Plant" value={visitor.plantNumber || '—'} />
-              <Item label="Other location" value={visitor.otherLocationText || '—'} />
-              <Item label="ID" value={`${visitor.idTypeName || '—'} ${visitor.idNumberMasked || ''}`} />
+              <Item
+                label="ID"
+                value={
+                  visitor.idNumberMasked
+                    ? [visitor.idTypeName, visitor.idNumberMasked].filter(Boolean).join(' ')
+                    : '—'
+                }
+              />
               <Item label="Notes" value={visitor.notes || '—'} />
             </dl>
+            {visitor.photoUrl ? (
+              <SecureImage
+                src={visitor.photoUrl}
+                alt={visitor.visitorName}
+                className="h-40 w-40 shrink-0 self-center rounded-xl object-cover ring-1 ring-border sm:self-start"
+              />
+            ) : (
+              <div className="flex h-40 w-40 shrink-0 items-center justify-center self-center rounded-xl bg-gray-100 text-sm text-gray-400 sm:self-start">
+                No photo
+              </div>
+            )}
+            </div>
           </Panel>
 
           <Panel>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-semibold text-steel">Minutes of meeting</h2>
-              {canWaiveMom && !visitor.momNotRequired ? (
-                <Button size="sm" variant="secondary" disabled={savingMom} onClick={() => void toggleMomNotRequired(true)}>
-                  MoM not required
-                </Button>
-              ) : null}
-              {canWaiveMom && visitor.momNotRequired && isInside ? (
-                <Button size="sm" variant="secondary" disabled={savingMom} onClick={() => void toggleMomNotRequired(false)}>
-                  MoM required
-                </Button>
-              ) : null}
+              <div className="flex flex-wrap gap-2">
+                {canWaiveMom && !visitor.momNotRequired ? (
+                  <Button size="sm" variant="secondary" disabled={savingMom} onClick={() => void toggleMomNotRequired(true)}>
+                    MoM not required
+                  </Button>
+                ) : null}
+                {canWaiveMom && visitor.momNotRequired ? (
+                  <Button size="sm" variant="secondary" disabled={savingMom} onClick={() => void toggleMomNotRequired(false)}>
+                    MoM required
+                  </Button>
+                ) : null}
+                {canRecordMom ? (
+                  <Link to={`/visitors/${visitor.visitId}/minutes`}>
+                    <Button size="sm">{visitor.hasMeetingMinutes ? 'Edit minutes' : 'Record minutes'}</Button>
+                  </Link>
+                ) : null}
+                {visitor.momEmailSentAt ? (
+                  <Badge className="bg-slate-100 text-slate-700 ring-1 ring-slate-200">Read-only · MOM email sent</Badge>
+                ) : null}
+              </div>
             </div>
             {visitor.momNotRequired && !visitor.hasMeetingMinutes ? (
               <div className="mb-3">
                 <Alert tone="info">
                   Marked as not required{visitor.momNotRequiredBy ? ` by ${visitor.momNotRequiredBy}` : ''}
-                  {visitor.momNotRequiredAt ? ` on ${formatDateTime(visitor.momNotRequiredAt)}` : ''}. The check-out email
-                  {isCheckedOut ? ' was sent' : ' will be sent'} without minutes.
+                  {visitor.momNotRequiredAt ? ` on ${formatDateTime(visitor.momNotRequiredAt)}` : ''}. No MOM email will be
+                  sent.
                 </Alert>
               </div>
             ) : null}
-            {showMomEditor ? (
-              <div className="space-y-3">
-                {checkOutMailPending ? (
-                  <Alert tone="warning">
-                    The visitor has checked out. The check-out email will be sent to the visitor and host as soon as
-                    these minutes are saved.
-                  </Alert>
-                ) : (
-                  <p className="text-sm text-ink-muted">
-                    Enter MoM after the meeting. The check-out email to the visitor and host includes this text and is
-                    only sent once minutes are saved.
-                  </p>
-                )}
-                <div>
-                  <FieldLabel htmlFor="meetingMinutes">Minutes of meeting *</FieldLabel>
-                  <textarea
-                    id="meetingMinutes"
-                    rows={6}
-                    maxLength={4000}
-                    className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm shadow-sm focus:border-steel focus:outline-none focus:ring-1 focus:ring-steel"
-                    value={mom}
-                    onChange={(e) => setMom(e.target.value)}
-                  />
+            {visitor.meetingMinutes ? (
+              <div className="space-y-4 text-sm">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">Discussion points</h3>
+                    <p className="whitespace-pre-wrap text-gray-900">{visitor.meetingMinutes}</p>
+                  </div>
+                  <div>
+                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">Decisions</h3>
+                    <p className="whitespace-pre-wrap text-gray-900">{visitor.momDecisions || '—'}</p>
+                  </div>
                 </div>
-                <Button disabled={savingMom || !mom.trim()} onClick={() => void saveMom()}>
-                  {savingMom ? 'Saving…' : 'Save meeting minutes'}
-                </Button>
+                {momActions.length ? (
+                  <div>
+                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">Action items</h3>
+                    <ol className="space-y-1">
+                      {momActions.map((a, i) => (
+                        <li key={i} className="rounded-md bg-gray-50 px-3 py-2">
+                          <span className="font-medium text-gray-900">{i + 1}. {a.task}</span>
+                          <span className="text-ink-muted">
+                            {a.owner ? ` · ${a.owner}` : ''}
+                            {a.dueDate ? ` · due ${formatDate(a.dueDate)}` : ''}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
+                <p className="text-ink-muted">
+                  {visitor.momNextMeetingDate ? `Next meeting ${formatDate(visitor.momNextMeetingDate)} · ` : ''}
+                  {visitor.momEmailSentAt
+                    ? `MOM email sent ${formatDateTime(visitor.momEmailSentAt)}`
+                    : 'MOM email not sent yet'}
+                  {visitor.momRecordedBy ? ` · Recorded by ${visitor.momRecordedBy}` : ''}
+                </p>
               </div>
-            ) : visitor.meetingMinutes ? (
-              <p className="whitespace-pre-wrap text-sm text-gray-900">{visitor.meetingMinutes}</p>
             ) : (
-              <p className="text-sm text-gray-500">No meeting minutes recorded yet.</p>
+              <p className="text-sm text-gray-500">
+                No minutes of meeting recorded yet.
+                {canRecordMom ? ' Record them after the meeting; the MOM email is sent separately from the check-out email.' : ''}
+              </p>
             )}
           </Panel>
 
@@ -461,24 +441,7 @@ export function VisitorDetailPage() {
               <p className="text-sm text-gray-500">No checkout feedback for this visit yet.</p>
             )}
           </Panel>
-
-          <Panel>
-            <h2 className="mb-3 font-semibold text-steel">Approval history</h2>
-            {visitor.approvalHistory?.length ? (
-              <ul className="space-y-2 text-sm">
-                {visitor.approvalHistory.map((a) => (
-                  <li key={a.id} className="rounded-md bg-gray-50 px-3 py-2">
-                    {String(a.status)} · {a.actionBy || '—'} · {formatDateTime(a.actionAt || a.createdAt)}
-                    {a.rejectionReason ? <div className="text-danger">{a.rejectionReason}</div> : null}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-gray-500">No approval history.</p>
-            )}
-          </Panel>
         </div>
-      </div>
     </div>
   )
 }

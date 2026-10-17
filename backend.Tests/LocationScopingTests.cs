@@ -26,6 +26,7 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
     private const string NorthUser = "scoping-north-reception";
     private const string SouthUser = "scoping-south-reception";
     private const string RoamingUser = "scoping-roaming-admin";
+    private const string UnassignedAdmin = "scoping-unassigned-admin";
     private const string Password = "LocationScoping_Pass1!";
 
     private const string NorthVisitorName = "North Location Visitor";
@@ -65,7 +66,8 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
 
         await EnsureUserAsync(users, NorthUser, tenantId, north, AppRoles.Reception, dept.Id);
         await EnsureUserAsync(users, SouthUser, tenantId, south, AppRoles.Reception, dept.Id);
-        await EnsureUserAsync(users, RoamingUser, tenantId, null, AppRoles.Admin, dept.Id);
+        await EnsureUserAsync(users, RoamingUser, tenantId, null, AppRoles.SuperAdmin, dept.Id);
+        await EnsureUserAsync(users, UnassignedAdmin, tenantId, null, AppRoles.Admin, dept.Id);
 
         return new Fixture(tenantId, north, south, northVisitId, southVisitId);
     }
@@ -256,7 +258,7 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Unassigned_User_Sees_Every_Location()
+    public async Task SuperAdmin_Sees_Every_Location()
     {
         await EnsureFixtureAsync();
         var client = await LoginAsync(RoamingUser);
@@ -265,6 +267,76 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
 
         Assert.Contains(NorthVisitorName, body);
         Assert.Contains(SouthVisitorName, body);
+    }
+
+    [Fact]
+    public async Task SuperAdmin_With_A_Location_Still_Sees_Every_Location()
+    {
+        var fixture = await EnsureFixtureAsync();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            await EnsureUserAsync(users, RoamingUser, fixture.TenantId, fixture.NorthLocationId, AppRoles.SuperAdmin,
+                (await users.Users.IgnoreQueryFilters().FirstAsync(u => u.UserName == RoamingUser)).DepartmentId!.Value);
+        }
+        try
+        {
+            var body = await BodyAsync(await (await LoginAsync(RoamingUser)).GetAsync(FixtureQuery));
+            Assert.Contains(NorthVisitorName, body);
+            Assert.Contains(SouthVisitorName, body);
+        }
+        finally
+        {
+            await EnsureFixtureAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Admin_Without_A_Location_Cannot_Sign_In()
+    {
+        await EnsureFixtureAsync();
+        var response = await _factory.CreateClient().PostAsJsonAsync("/api/auth/login",
+            new { username = UnassignedAdmin, password = Password, rememberMe = false });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("no active location", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Location_Bound_Admin_Only_Manages_Users_At_Their_Location()
+    {
+        var fixture = await EnsureFixtureAsync();
+        const string northAdmin = "scoping-north-admin";
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var deptId = (await users.Users.IgnoreQueryFilters().FirstAsync(u => u.UserName == NorthUser)).DepartmentId!.Value;
+            await EnsureUserAsync(users, northAdmin, fixture.TenantId, fixture.NorthLocationId, AppRoles.Admin, deptId);
+        }
+        var admin = await LoginAsync(northAdmin);
+
+        var list = await BodyAsync(await admin.GetAsync("/api/users"));
+        Assert.Contains(NorthUser, list);
+        Assert.DoesNotContain(SouthUser, list);
+        Assert.DoesNotContain(RoamingUser, list);
+
+        var southEmployee = await TestUsers.CreateEmployeeAsync(_factory.Services, fixture.TenantId, fixture.SouthLocationId);
+        var elsewhere = await admin.PostAsJsonAsync($"/api/users/from-employee/{southEmployee}", new
+        {
+            username = $"wrong{Guid.NewGuid():N}"[..18],
+            role = AppRoles.Reception,
+            password = Password
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, elsewhere.StatusCode);
+
+        var northEmployee = await TestUsers.CreateEmployeeAsync(_factory.Services, fixture.TenantId, fixture.NorthLocationId);
+        var superAdmin = await admin.PostAsJsonAsync($"/api/users/from-employee/{northEmployee}", new
+        {
+            username = $"esc{Guid.NewGuid():N}"[..18],
+            role = AppRoles.SuperAdmin,
+            password = Password
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, superAdmin.StatusCode);
     }
 
     [Fact]
@@ -342,7 +414,8 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
         {
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var host = await db.Employees.IgnoreQueryFilters()
-                .Where(e => e.IsActive && e.TenantId == fixture.TenantId)
+                .Where(e => e.IsActive && e.TenantId == fixture.TenantId
+                    && (e.LocationId == null || e.LocationId == fixture.NorthLocationId))
                 .OrderBy(e => e.FullName)
                 .FirstAsync();
             deptId = host.DepartmentId;

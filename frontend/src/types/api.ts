@@ -32,6 +32,8 @@ export interface UserDto {
   isActive: boolean
   /** Faces registered for face sign-in (admin user list only). */
   faceLoginCount?: number
+  /** Employee record this login belongs to; null for shared desk and system accounts (admin user list only). */
+  employeeId?: string | null
 }
 
 export interface LoginResponse {
@@ -61,6 +63,7 @@ export interface PublicBrandingDto {
   logoPath: string
   themePreset?: string
   fontPreset?: string
+  fontSize?: string
 }
 
 export interface MasterItemDto {
@@ -79,6 +82,7 @@ export interface MasterItemDto {
 
 export interface EmployeeDto {
   id: string
+  title?: EmployeeTitle | null
   fullName: string
   code?: string | null
   email?: string | null
@@ -93,12 +97,76 @@ export interface EmployeeDto {
   /** Login username of the linked Host account. */
   userName?: string | null
   isActive: boolean
+  /** ISO date (yyyy-MM-dd). */
+  dateOfBirth?: string | null
+  gender?: EmployeeGender | null
+  /** True when a face is enrolled on the employee record. */
+  hasFace?: boolean
+  photoUrl?: string | null
 }
 
+/** 1 = Male, 2 = Female, 3 = Other. */
+export type EmployeeGender = 1 | 2 | 3
+
+export type EmployeeTitle = 'Mr' | 'Ms'
+
+/** Employee menu entry: every field and the face are required (the face only when adding). */
+export interface EmployeeProfileRequest {
+  title: EmployeeTitle | null
+  fullName: string
+  code: string
+  dateOfBirth: string
+  gender: EmployeeGender | null
+  phone: string
+  email: string
+  designation?: string | null
+  intercom?: string | null
+  departmentId: string
+  locationId?: string | null
+  isActive: boolean
+  facePhotoBase64?: string | null
+}
+
+/** Every login is made from an Employee master record and signs in with the face captured there. */
 export interface CreateEmployeeLoginRequest {
   username: string
   email?: string | null
   password: string
+  /** Defaults to Employee (Host) when omitted. */
+  role?: string | null
+  allowedMenuKeys?: string[] | null
+}
+
+/** A group employee recognised from the face registered on their login, at any location. */
+export interface GroupEmployeeMatchDto {
+  /** Their login, when they have one. */
+  userId?: string | null
+  /** Their Employees master record, when one is linked. */
+  employeeId?: string | null
+  fullName: string
+  gender?: EmployeeGender | null
+  email?: string | null
+  phone?: string | null
+  employeeCode?: string | null
+  designation?: string | null
+  departmentName?: string | null
+  locationName?: string | null
+  companyName: string
+  similarity: number
+}
+
+export interface MyDetailsDto {
+  username: string
+  fullName: string
+  email: string
+  roles: string[]
+  employeeCode?: string | null
+  designation?: string | null
+  departmentName?: string | null
+  locationName?: string | null
+  phone?: string | null
+  intercom?: string | null
+  faceLoginCount: number
 }
 
 export type IntegrationScope = 'reports' | 'employees'
@@ -148,11 +216,18 @@ export interface VisitorListItemDto {
   passCode?: string | null
   numberOfPersons?: number
   hasMeetingMinutes?: boolean
-  /** Minutes of meeting waived; the check-out email does not wait for them. */
+  /** True once the MOM email has been sent. */
+  momEmailSent?: boolean
+  /** Minutes of meeting waived for this visit. */
   momNotRequired?: boolean
   momNotRequiredBy?: string | null
   momNotRequiredAt?: string | null
   isManualCheckOut?: boolean
+  /** User who checked the visitor out; empty for a face check-out at the desk or the automatic check-out. */
+  checkedOutBy?: string | null
+  meetingHallName?: string | null
+  /** A group employee on official work; visitor emails are not sent. */
+  isGroupEmployee?: boolean
 }
 
 export interface ApprovalHistoryDto {
@@ -168,7 +243,15 @@ export interface VisitorDetailDto extends VisitorListItemDto {
   intercom?: string | null
   purposeNotes?: string | null
   notes?: string | null
+  /** Minutes of meeting: discussion points. */
   meetingMinutes?: string | null
+  momDecisions?: string | null
+  momActionItems?: MomActionItemDto[]
+  /** yyyy-MM-dd */
+  momNextMeetingDate?: string | null
+  momRecordedBy?: string | null
+  momRecordedAt?: string | null
+  momEmailSentAt?: string | null
   plantNumber?: string | null
   otherLocationText?: string | null
   idTypeName?: string | null
@@ -176,9 +259,24 @@ export interface VisitorDetailDto extends VisitorListItemDto {
   idNumberFull?: string | null
   idVerificationStatus: number | string
   checkedInBy?: string | null
-  checkedOutBy?: string | null
   approvalHistory: ApprovalHistoryDto[]
   feedback?: VisitFeedbackDto | null
+}
+
+export interface MomActionItemDto {
+  task: string
+  owner?: string | null
+  /** yyyy-MM-dd */
+  dueDate?: string | null
+}
+
+export interface SaveMeetingMinutesRequest {
+  /** Discussion points. */
+  meetingMinutes: string
+  decisions?: string | null
+  actionItems: MomActionItemDto[]
+  nextMeetingDate?: string | null
+  sendEmail: boolean
 }
 
 export interface OpenBookingDto {
@@ -252,8 +350,14 @@ export interface RegisterVisitorRequest {
   idTypeName?: string | null
   idTypeId?: string | null
   idNumber?: string | null
+  /** One per filled-in form; resubmitting it returns the visit already saved instead of a duplicate. */
+  clientRequestId?: string | null
   expectedVisitId?: string | null
   recognizedVisitorId?: string | null
+  /** Group employee confirmed from the face match: an official visit with no visitor emails. */
+  groupEmployeeUserId?: string | null
+  /** Employees record of the confirmed group employee (set even when they have no login). */
+  groupEmployeeId?: string | null
   /** Set when the desk said a matching booking was not this visitor. */
   skipBookingMatch?: boolean
   numberOfPersons?: number
@@ -377,12 +481,24 @@ export interface DashboardDto {
   currentlyInsideItems: VisitorListItemDto[]
   /** Numbers are limited to the signed-in host's own visitors. */
   isHostView?: boolean
-  /** Checked-out visits still waiting for minutes of meeting. */
+  /** Checked-out visits whose MOM email has not been sent (not recorded, or saved but not sent). */
   momPendingCount?: number
   momPendingItems?: VisitorListItemDto[]
-  /** SuperAdmin only: checked-out visits with no minutes (pending or marked not required). */
+  /** SuperAdmin only: checked-out visits with no MOM email sent, including those marked not required. */
   checkedOutWithoutMomCount?: number
   checkedOutWithoutMomItems?: VisitorListItemDto[]
+  /** SuperAdmin only: MOM emails not sent, grouped by employee. */
+  momNotSentByEmployee?: MomNotSentByEmployeeDto[]
+}
+
+export interface MomNotSentByEmployeeDto {
+  employeeId: string
+  employeeName: string
+  departmentName?: string | null
+  notRecorded: number
+  notSent: number
+  notRequired: number
+  oldestCheckOutAt?: string | null
 }
 
 export interface SettingsDto {
@@ -390,6 +506,7 @@ export interface SettingsDto {
   logoPath: string
   themePreset: string
   fontPreset: string
+  fontSize: string
   visitorIdPrefix: string
   visitorPassValidityHours: number
   approvalRequired: boolean
@@ -427,9 +544,41 @@ export interface PassDto {
   status: string
   brandCompanyName?: string
   brandLogoPath?: string
+  meetingHallName?: string | null
+  meetingHallIntercom?: string | null
+  /** Check-in response only: the location has halls but none could take this visit. */
+  meetingHallWarning?: string | null
 }
 
-export type MasterImportKind = 'departments' | 'employees' | 'purposes' | 'locations' | 'feedback-questions'
+export interface MeetingHallDto {
+  id: string
+  code: string
+  name: string
+  seatingCapacity: number
+  intercomNo?: string | null
+  locationId: string
+  locationName: string
+  isActive: boolean
+  occupiedByVisitNumber?: string | null
+  occupiedByVisitorName?: string | null
+}
+
+export interface MeetingHallUpsertRequest {
+  code: string
+  name: string
+  seatingCapacity: number
+  intercomNo?: string | null
+  locationId: string | null
+  isActive: boolean
+}
+
+export type MasterImportKind =
+  | 'departments'
+  | 'employees'
+  | 'purposes'
+  | 'locations'
+  | 'feedback-questions'
+  | 'meeting-halls'
 
 export interface MasterImportResultDto {
   totalRows: number
@@ -437,18 +586,6 @@ export interface MasterImportResultDto {
   updated: number
   failed: number
   errors: { row: number; message: string }[]
-}
-
-export interface CreateUserRequest {
-  fullName: string
-  username: string
-  email: string
-  role: string
-  departmentId?: string | null
-  /** Null grants tenant-wide visibility; a value locks the user to that one location. */
-  locationId?: string | null
-  allowedMenuKeys?: string[]
-  password: string
 }
 
 export interface UpdateUserRequest {
@@ -459,19 +596,6 @@ export interface UpdateUserRequest {
   /** Null grants tenant-wide visibility; a value locks the user to that one location. */
   locationId?: string | null
   allowedMenuKeys?: string[]
-  isActive: boolean
-}
-
-export interface CreateEmployeeRequest {
-  fullName: string
-  code?: string | null
-  email?: string | null
-  phone?: string | null
-  intercom?: string | null
-  designation?: string | null
-  departmentId: string
-  locationId?: string | null
-  userId?: string | null
   isActive: boolean
 }
 
@@ -552,6 +676,8 @@ export interface VisitorWizardDraft {
   isWalkIn: boolean
   expectedVisitId: string | null
   recognizedVisitorId: string | null
+  groupEmployeeUserId: string | null
+  groupEmployeeId: string | null
   /** Display-only after server assigns a pass; not sent on register. */
   passNumber: string
 }

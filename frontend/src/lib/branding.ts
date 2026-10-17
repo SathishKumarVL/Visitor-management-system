@@ -1,7 +1,22 @@
 /** Theme and font presets applied via CSS variables on :root. */
 
 export type ThemePresetId = 'tiaano' | 'ocean' | 'forest' | 'slate' | 'sunrise'
-export type FontPresetId = 'inter' | 'sourceSans' | 'ibmPlex' | 'nunito'
+export type FontPresetId =
+  | 'inter'
+  | 'sourceSans'
+  | 'ibmPlex'
+  | 'nunito'
+  | 'poppins'
+  | 'roboto'
+  | 'openSans'
+  | 'lato'
+  | 'montserrat'
+  | 'raleway'
+  | 'workSans'
+  | 'dmSans'
+  | 'manrope'
+  | 'plusJakarta'
+  | 'outfit'
 
 export interface ThemePreset {
   id: ThemePresetId
@@ -15,6 +30,14 @@ export interface FontPreset {
   id: FontPresetId
   label: string
   stack: string
+}
+
+export type FontSizeId = 'small' | 'medium' | 'large'
+
+export interface FontSizePreset {
+  id: FontSizeId
+  label: string
+  rootSize: string
 }
 
 export const THEME_PRESETS: ThemePreset[] = [
@@ -146,21 +169,89 @@ export const FONT_PRESETS: FontPreset[] = [
     label: 'Nunito Sans',
     stack: '"Nunito Sans", "Segoe UI", system-ui, sans-serif',
   },
+  {
+    id: 'poppins',
+    label: 'Poppins',
+    stack: '"Poppins", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'roboto',
+    label: 'Roboto',
+    stack: '"Roboto", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'openSans',
+    label: 'Open Sans',
+    stack: '"Open Sans", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'lato',
+    label: 'Lato',
+    stack: '"Lato", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'montserrat',
+    label: 'Montserrat',
+    stack: '"Montserrat", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'raleway',
+    label: 'Raleway',
+    stack: '"Raleway", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'workSans',
+    label: 'Work Sans',
+    stack: '"Work Sans", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'dmSans',
+    label: 'DM Sans',
+    stack: '"DM Sans", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'manrope',
+    label: 'Manrope',
+    stack: '"Manrope", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'plusJakarta',
+    label: 'Plus Jakarta Sans',
+    stack: '"Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    id: 'outfit',
+    label: 'Outfit',
+    stack: '"Outfit", "Segoe UI", system-ui, sans-serif',
+  },
 ]
 
-export function applyBranding(themePreset?: string | null, fontPreset?: string | null) {
+/** Root font size; Tailwind sizes are in rem, so text and spacing scale together. */
+export const FONT_SIZES: FontSizePreset[] = [
+  { id: 'small', label: 'Small', rootSize: '87.5%' },
+  { id: 'medium', label: 'Medium', rootSize: '100%' },
+  { id: 'large', label: 'Large', rootSize: '112.5%' },
+]
+
+export function applyBranding(
+  themePreset?: string | null,
+  fontPreset?: string | null,
+  fontSize?: string | null,
+) {
   if (typeof document === 'undefined') return
   const root = document.documentElement
   const theme =
     THEME_PRESETS.find((t) => t.id === themePreset) ?? THEME_PRESETS[0]
   const font =
     FONT_PRESETS.find((f) => f.id === fontPreset) ?? FONT_PRESETS[0]
+  const size = FONT_SIZES.find((s) => s.id === fontSize) ?? FONT_SIZES[1]
 
   for (const [key, value] of Object.entries(theme.vars)) {
     root.style.setProperty(key, value)
   }
   root.style.setProperty('--font-sans', font.stack)
   document.body.style.fontFamily = font.stack
+  root.style.fontSize = size.rootSize
 
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.setAttribute('content', theme.vars['--primary'] ?? '#008f95')

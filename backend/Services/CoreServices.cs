@@ -45,7 +45,14 @@ public class SettingsService : ISettingsService
 
     private static readonly HashSet<string> AllowedFonts = new(StringComparer.OrdinalIgnoreCase)
     {
-        "inter", "sourceSans", "ibmPlex", "nunito"
+        "inter", "sourceSans", "ibmPlex", "nunito", "poppins",
+        "roboto", "openSans", "lato", "montserrat", "raleway",
+        "workSans", "dmSans", "manrope", "plusJakarta", "outfit"
+    };
+
+    private static readonly HashSet<string> AllowedFontSizes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "small", "medium", "large"
     };
 
     private readonly ApplicationDbContext _db;
@@ -172,6 +179,7 @@ public class SettingsService : ISettingsService
         await Upsert(Bk("LogoPath"), string.IsNullOrWhiteSpace(dto.LogoPath) ? "/branding/tiaano-logo.png" : dto.LogoPath.Trim());
         await Upsert(Bk("ThemePreset"), NormalizeTheme(dto.ThemePreset));
         await Upsert(Bk("FontPreset"), NormalizeFont(dto.FontPreset));
+        await Upsert(Bk("FontSize"), NormalizeFontSize(dto.FontSize));
 
         if (smtpLocationId is null)
         {
@@ -335,6 +343,8 @@ public class SettingsService : ISettingsService
                 dto.ThemePreset = NormalizeTheme(row.Value);
             else if (suffix.Equals("FontPreset", StringComparison.OrdinalIgnoreCase))
                 dto.FontPreset = NormalizeFont(row.Value);
+            else if (suffix.Equals("FontSize", StringComparison.OrdinalIgnoreCase))
+                dto.FontSize = NormalizeFontSize(row.Value);
         }
     }
 
@@ -423,6 +433,7 @@ public class SettingsService : ISettingsService
         LogoPath = s.LogoPath,
         ThemePreset = s.ThemePreset,
         FontPreset = s.FontPreset,
+        FontSize = s.FontSize,
         VisitorIdPrefix = s.VisitorIdPrefix,
         VisitorPassValidityHours = s.VisitorPassValidityHours,
         ApprovalRequired = s.ApprovalRequired,
@@ -455,12 +466,19 @@ public class SettingsService : ISettingsService
         return AllowedFonts.Contains(key) ? AllowedFonts.First(x => x.Equals(key, StringComparison.OrdinalIgnoreCase)) : "inter";
     }
 
+    private static string NormalizeFontSize(string? value)
+    {
+        var key = string.IsNullOrWhiteSpace(value) ? "medium" : value.Trim().ToLowerInvariant();
+        return AllowedFontSizes.Contains(key) ? key : "medium";
+    }
+
     private static SettingsDto Map(Dictionary<string, string> map) => new()
     {
         CompanyName = map.GetValueOrDefault("CompanyName", "TIAANO"),
         LogoPath = map.GetValueOrDefault("LogoPath", "/branding/tiaano-logo.png"),
         ThemePreset = NormalizeTheme(map.GetValueOrDefault("ThemePreset", "tiaano")),
         FontPreset = NormalizeFont(map.GetValueOrDefault("FontPreset", "inter")),
+        FontSize = NormalizeFontSize(map.GetValueOrDefault("FontSize", "medium")),
         VisitorIdPrefix = map.GetValueOrDefault("VisitorIdPrefix", "TIA"),
         VisitorPassValidityHours = int.TryParse(map.GetValueOrDefault("VisitorPassValidityHours"), out var h) ? h : 12,
         ApprovalRequired = bool.TryParse(map.GetValueOrDefault("ApprovalRequired", "false"), out var ar) && ar,

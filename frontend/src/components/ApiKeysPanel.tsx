@@ -232,6 +232,7 @@ export function ApiKeysPanel() {
         title={createdKey ? 'API key created' : 'New API key'}
         subtitle={createdKey ? undefined : 'Give the key a name that identifies the application using it.'}
         onClose={() => setFormOpen(false)}
+        size="lg"
       >
         {createdKey ? (
           <div className="space-y-4 text-sm">
@@ -278,8 +279,8 @@ export function ApiKeysPanel() {
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
-            <fieldset className="space-y-2">
-              <legend className="text-sm font-medium text-ink">Permissions *</legend>
+            <fieldset className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+              <legend className="mb-2 text-sm font-medium text-ink">Permissions *</legend>
               {SCOPES.map((s) => (
                 <label key={s.id} className="flex items-start gap-2 text-sm">
                   <input

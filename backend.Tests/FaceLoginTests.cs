@@ -105,7 +105,7 @@ public class FaceLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
     }
 
     [Fact]
-    public async Task One_Face_Cannot_Be_Registered_For_Two_Logins()
+    public async Task One_Face_Is_Registered_Only_Once_Across_All_Logins()
     {
         var admin = await LoginAsync("admin");
         var first = await CreateUserAsync(admin, AppRoles.Security);
@@ -116,6 +116,12 @@ public class FaceLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         var clash = await admin.PostAsJsonAsync($"/api/users/{second.Id}/faces", new { personName = "Same person", photoBase64 = photo });
         Assert.Equal(HttpStatusCode.BadRequest, clash.StatusCode);
         Assert.Contains(first.Username, await clash.Content.ReadAsStringAsync());
+
+        var again = await admin.PostAsJsonAsync($"/api/users/{first.Id}/faces", new { personName = "Renamed", photoBase64 = photo });
+        Assert.Equal(HttpStatusCode.BadRequest, again.StatusCode);
+        Assert.Contains("already registered for this login (as Same person)", await again.Content.ReadAsStringAsync());
+        var faces = await admin.GetFromJsonAsync<ApiResponse<List<UserFaceLoginDto>>>($"/api/users/{first.Id}/faces", JsonOptions);
+        Assert.Single(faces!.Data!);
 
         var missingName = await admin.PostAsJsonAsync($"/api/users/{second.Id}/faces",
             new { personName = "  ", photoBase64 = TestPhotos.Base64($"x-{Guid.NewGuid():N}") });
@@ -169,12 +175,15 @@ public class FaceLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         var suffix = Guid.NewGuid().ToString("N")[..10];
         using var scope = _factory.Services.CreateScope();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var adminLocationId = await users.Users.IgnoreQueryFilters()
+            .Where(u => u.UserName == "admin").Select(u => u.LocationId).FirstAsync();
         var user = new ApplicationUser
         {
             UserName = $"face{suffix}",
             Email = $"face.{suffix}@example.test",
             FullName = $"Face Login {suffix}",
             TenantId = WellKnownTenants.TiaanoId,
+            LocationId = adminLocationId,
             IsActive = true,
             MustChangePassword = false,
             EmailConfirmed = true

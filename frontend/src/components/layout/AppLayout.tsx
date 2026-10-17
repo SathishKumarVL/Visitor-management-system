@@ -4,11 +4,12 @@ import { BrandLogo } from '../BrandLogo'
 import { OfflineBanner } from './OfflineBanner'
 import { Button } from '../ui/Button'
 import { useAuthStore } from '../../store/authStore'
-import { visibleMenu } from '../../lib/roles'
+import { roleLabel, visibleMenu, type MenuItem } from '../../lib/roles'
 import { cn, primaryRole } from '../../lib/utils'
 import { LanguageSwitcher, useI18n } from '../../i18n'
 
 const TABLET_MQ = '(max-width: 1023px)'
+const MASTERS_OPEN_KEY = 'nav.mastersOpen'
 
 function isMenuItemActive(pathname: string, itemPath: string, allPaths: string[]): boolean {
   const matches = allPaths.filter((p) => pathname === p || pathname.startsWith(`${p}/`))
@@ -31,8 +32,11 @@ const MENU_ICONS: Record<string, string> = {
   locations: '⌖',
   feedback: '☆',
   mailcontent: '✉',
-  users: '☰',
+  users: '☺',
+  meetinghalls: '▢',
   settings: '⚙',
+  mydetails: '☺',
+  employeemaster: '☻',
 }
 
 export function AppLayout() {
@@ -78,6 +82,61 @@ export function AppLayout() {
     if (isTablet) setOpen(false)
   }, [location.pathname, isTablet])
 
+  const reachedViaOther = (i: MenuItem) => !!i.reachedFrom && items.some((x) => x.key === i.reachedFrom)
+  const navItems = items.filter((i) => !reachedViaOther(i))
+  const masterItems = navItems.filter((i) => i.group === 'masters')
+  const mastersActive = masterItems.some((i) => isMenuItemActive(location.pathname, i.path, allPaths))
+  const [mastersOpen, setMastersOpen] = useState(() => localStorage.getItem(MASTERS_OPEN_KEY) !== '0')
+
+  useEffect(() => {
+    if (mastersActive) setMastersOpen(true)
+  }, [mastersActive])
+
+  function toggleMasters() {
+    setMastersOpen((v) => {
+      localStorage.setItem(MASTERS_OPEN_KEY, v ? '0' : '1')
+      return !v
+    })
+  }
+
+  function renderLink(item: MenuItem, nested: boolean) {
+    const active =
+      isMenuItemActive(location.pathname, item.path, allPaths) ||
+      items.some(
+        (i) => i.reachedFrom === item.key && reachedViaOther(i) && isMenuItemActive(location.pathname, i.path, allPaths),
+      )
+    return (
+      <NavLink
+        key={item.key}
+        to={item.path}
+        end={item.path === '/visitors'}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => {
+          if (isTablet) setOpen(false)
+        }}
+        className={cn(
+          'flex items-center gap-3 rounded-xl px-3 text-sm font-medium transition duration-200',
+          nested ? 'min-h-10 py-1.5' : 'min-h-12 py-2.5',
+          active
+            ? 'bg-brand-gradient text-white shadow-md'
+            : 'text-ink-muted hover:bg-aqua-light/70 hover:text-ink',
+        )}
+      >
+        <span
+          className={cn(
+            'inline-flex shrink-0 items-center justify-center rounded-xl leading-none',
+            nested ? 'h-8 w-8 text-base' : 'h-10 w-10 text-lg',
+            active ? 'bg-white/20 text-white' : 'bg-mint text-ink',
+          )}
+          aria-hidden
+        >
+          {MENU_ICONS[item.key] ?? '•'}
+        </span>
+        <span className="truncate">{t(`nav.${item.key}`)}</span>
+      </NavLink>
+    )
+  }
+
   return (
     <div className="min-h-screen">
       <OfflineBanner />
@@ -109,35 +168,39 @@ export function AppLayout() {
             </p>
           </div>
           <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3" aria-label="Main">
-            {items.map((item) => {
-              const active = isMenuItemActive(location.pathname, item.path, allPaths)
+            {navItems.map((item) => {
+              if (item.group !== 'masters') return renderLink(item, false)
+              if (item !== masterItems[0]) return null
               return (
-                <NavLink
-                  key={item.key}
-                  to={item.path}
-                  end={item.path === '/visitors'}
-                  aria-current={active ? 'page' : undefined}
-                  onClick={() => {
-                    if (isTablet) setOpen(false)
-                  }}
-                  className={cn(
-                    'flex min-h-12 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition duration-200',
-                    active
-                      ? 'bg-brand-gradient text-white shadow-md'
-                      : 'text-ink-muted hover:bg-aqua-light/70 hover:text-ink',
-                  )}
-                >
-                  <span
+                <div key="group-masters" className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleMasters()}
+                    aria-expanded={mastersOpen}
                     className={cn(
-                      'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg leading-none',
-                      active ? 'bg-white/20 text-white' : 'bg-mint text-ink',
+                      'flex min-h-12 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition duration-200',
+                      mastersActive && !mastersOpen
+                        ? 'bg-aqua-light text-ink'
+                        : 'text-ink-muted hover:bg-aqua-light/70 hover:text-ink',
                     )}
-                    aria-hidden
                   >
-                    {MENU_ICONS[item.key] ?? '•'}
-                  </span>
-                  <span className="truncate">{t(`nav.${item.key}`)}</span>
-                </NavLink>
+                    <span
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-mint text-lg leading-none text-ink"
+                      aria-hidden
+                    >
+                      ▦
+                    </span>
+                    <span className="flex-1 truncate">{t('nav.masters')}</span>
+                    <span className={cn('text-xs transition-transform', mastersOpen ? 'rotate-90' : '')} aria-hidden>
+                      ▶
+                    </span>
+                  </button>
+                  {mastersOpen ? (
+                    <div className="ml-4 flex flex-col gap-1 border-l border-border/80 pl-2">
+                      {masterItems.map((child) => renderLink(child, true))}
+                    </div>
+                  ) : null}
+                </div>
               )
             })}
           </nav>
@@ -165,12 +228,9 @@ export function AppLayout() {
               </div>
               <div className="ml-auto flex items-center gap-2 sm:gap-3">
                 <LanguageSwitcher className="hidden sm:flex" />
-                <div className="hidden rounded-full bg-aqua-light px-3 py-1 text-xs font-medium text-primary sm:inline-flex">
-                  {t('nav.live')}
-                </div>
                 <div className="hidden text-right sm:block">
                   <div className="text-sm font-semibold text-ink">{user?.fullName}</div>
-                  <div className="text-xs text-ink-muted">{user?.roles.join(', ')}</div>
+                  <div className="text-xs text-ink-muted">{user?.roles.map(roleLabel).join(', ')}</div>
                 </div>
                 <div
                   className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-gradient text-sm font-semibold text-white"

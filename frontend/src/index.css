@@ -190,6 +190,11 @@ textarea {
 }
 
 @media print {
+  /* Printed passes keep their layout regardless of the Font size setting. */
+  html {
+    font-size: 100% !important;
+  }
+
   .no-print {
     display: none !important;
   }

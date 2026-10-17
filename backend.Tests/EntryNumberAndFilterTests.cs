@@ -24,7 +24,7 @@ public class EntryNumberAndFilterTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Returning_Visitor_Gets_Todays_Date_In_Visitor_Number()
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         await DisableApprovalsAsync(admin);
         var today = AppTime.Today.ToString("yyyyMMdd");
 
@@ -59,7 +59,7 @@ public class EntryNumberAndFilterTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Manual_Checkout_Quick_Filter_Lists_Todays_Manual_Checkouts()
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         await DisableApprovalsAsync(admin);
         var superadmin = await LoginAsync("superadmin");
 
@@ -82,7 +82,7 @@ public class EntryNumberAndFilterTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Report_And_Visitor_List_Sort_Across_All_Rows()
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         await DisableApprovalsAsync(admin);
         await RegisterAsync(admin, $"Aaa Sort {Guid.NewGuid():N}"[..24], recognizedVisitorId: null);
         await RegisterAsync(admin, $"Zzz Sort {Guid.NewGuid():N}"[..24], recognizedVisitorId: null);

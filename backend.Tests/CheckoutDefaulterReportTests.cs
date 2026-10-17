@@ -29,7 +29,7 @@ public class CheckoutDefaulterReportTests : IClassFixture<TestApiFactory>
         await SeedVisitAsync($"Late {tag}", VisitStatus.CheckedOut, now.AddDays(-2), now.AddDays(-1), manual: false);
         await SeedVisitAsync($"OnTime {tag}", VisitStatus.CheckedOut, now.AddMinutes(-60), now.AddMinutes(-30), manual: false);
 
-        var client = await LoginAsync("admin");
+        var client = await LoginAsync("superadmin");
         var url = $"/api/reports/visitors?format=json&reportType=defaulters" +
                   $"&dateFrom={DateTime.Today.AddDays(-1):yyyy-MM-dd}&dateTo={DateTime.Today.AddDays(1):yyyy-MM-dd}";
         var response = await client.GetAsync(url);
@@ -50,7 +50,7 @@ public class CheckoutDefaulterReportTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Defaulter_Report_Exports_Excel()
     {
-        var client = await LoginAsync("admin");
+        var client = await LoginAsync("superadmin");
         var response = await client.GetAsync(
             $"/api/reports/visitors?format=excel&reportType=defaulters&dateFrom={DateTime.Today.AddDays(-7):yyyy-MM-dd}&dateTo={DateTime.Today:yyyy-MM-dd}");
         Assert.True(response.IsSuccessStatusCode);
@@ -66,7 +66,7 @@ public class CheckoutDefaulterReportTests : IClassFixture<TestApiFactory>
         for (var i = 0; i < 3; i++)
             await SeedVisitAsync($"Paged{i} {tag}", VisitStatus.CheckedOut, now.AddMinutes(-60), now.AddMinutes(-30), manual: false);
 
-        var client = await LoginAsync("admin");
+        var client = await LoginAsync("superadmin");
         var baseUrl = $"/api/reports/visitors?format=json&reportType=range&company=Defaulter%20Co" +
                       $"&dateFrom={DateTime.Today.AddDays(-1):yyyy-MM-dd}&dateTo={DateTime.Today.AddDays(1):yyyy-MM-dd}";
 
@@ -91,7 +91,7 @@ public class CheckoutDefaulterReportTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Feedback_Responses_Paged_Endpoint_Returns_Paged_Result()
     {
-        var client = await LoginAsync("admin");
+        var client = await LoginAsync("superadmin");
         var response = await client.GetAsync("/api/masters/feedback-responses/paged?page=1&pageSize=5");
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.IsSuccessStatusCode, body);

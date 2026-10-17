@@ -36,12 +36,6 @@ export function CurrentlyInsidePage() {
   const [sort, setSort] = useState<SortKey>('longest')
   const [checkingOutId, setCheckingOutId] = useState<string | null>(null)
   const [momFlagId, setMomFlagId] = useState<string | null>(null)
-
-  const [momVisit, setMomVisit] = useState<VisitorListItemDto | null>(null)
-  const [momText, setMomText] = useState('')
-  const [momLoading, setMomLoading] = useState(false)
-  const [momSaving, setMomSaving] = useState(false)
-  const [momError, setMomError] = useState<string | null>(null)
   const noticeRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -98,53 +92,6 @@ export function CurrentlyInsidePage() {
 
   const { pageItems, pagination } = usePagination(filtered, 10, `${query}|${sort}`)
 
-  async function openMom(v: VisitorListItemDto) {
-    setMomVisit(v)
-    setMomText('')
-    setMomError(null)
-    setMomLoading(true)
-    try {
-      const detail = await visitorsApi.get(v.visitId)
-      setMomText(detail.meetingMinutes || '')
-    } catch (e) {
-      setMomError(apiErrorMessage(e, t('inside.momLoadError')))
-    } finally {
-      setMomLoading(false)
-    }
-  }
-
-  function closeMom() {
-    if (momSaving) return
-    setMomVisit(null)
-    setMomText('')
-    setMomError(null)
-  }
-
-  async function saveMom() {
-    if (!momVisit) return
-    const text = momText.trim()
-    if (!text) {
-      setMomError(t('inside.momRequired'))
-      return
-    }
-    setMomSaving(true)
-    setMomError(null)
-    setError(null)
-    setMessage(null)
-    try {
-      await visitorsApi.saveMeetingMinutes(momVisit.visitId, text)
-      const name = momVisit.visitorName
-      setMomVisit(null)
-      setMomText('')
-      setMessage(t('inside.momSavedOk').replace('{name}', name))
-      await load()
-    } catch (e) {
-      setMomError(apiErrorMessage(e, t('inside.momSaveError')))
-    } finally {
-      setMomSaving(false)
-    }
-  }
-
   async function setMomNotRequired(v: VisitorListItemDto, notRequired: boolean) {
     if (notRequired && !window.confirm(t('inside.momNotRequiredConfirm').replace('{name}', v.visitorName))) return
     setMomFlagId(v.visitId)
@@ -185,9 +132,7 @@ export function CurrentlyInsidePage() {
 
   return (
     <div>
-      {momSaving || checkingOutId ? (
-        <LoadingMask label={checkingOutId ? t('inside.checkingOut') : t('inside.momSaving')} />
-      ) : null}
+      {checkingOutId ? <LoadingMask label={t('inside.checkingOut')} /> : null}
       <PageHeader
         eyebrow={t('inside.eyebrow')}
         title={t('inside.title')}
@@ -255,8 +200,10 @@ export function CurrentlyInsidePage() {
                   </Link>
                   <Badge className={statusBadgeClass(v.statusLabel)}>{v.statusLabel}</Badge>
                   {v.isLongStay ? <Badge className="bg-red-100 text-danger ring-1 ring-red-200">Long stay</Badge> : null}
-                  {v.hasMeetingMinutes ? (
-                    <Badge className="bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200">MoM saved</Badge>
+                  {v.momEmailSent ? (
+                    <Badge className="bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200">MoM sent</Badge>
+                  ) : v.hasMeetingMinutes ? (
+                    <Badge className="bg-sky-50 text-sky-800 ring-1 ring-sky-200">MoM saved, not sent</Badge>
                   ) : v.momNotRequired ? (
                     <Badge className="bg-slate-100 text-slate-700 ring-1 ring-slate-200">{t('inside.momNotRequired')}</Badge>
                   ) : (
@@ -266,16 +213,19 @@ export function CurrentlyInsidePage() {
                 <p className="mt-1 text-sm text-ink-muted">
                   {v.companyName} · Person to meet {v.hostName}
                   {v.locations.length ? ` · ${v.locations.join(', ')}` : ''}
+                  {v.meetingHallName ? ` · Hall ${v.meetingHallName}` : ''}
                 </p>
                 <p className="mt-0.5 text-sm text-ink-muted">
                   {v.visitNumber} · In since {formatDateTime(v.checkInAt)} · {formatDuration(v.durationMinutes)}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {canEditMom ? (
-                  <Button variant="secondary" onClick={() => void openMom(v)}>
-                    {v.hasMeetingMinutes ? t('inside.editMom') : t('inside.addMom')}
-                  </Button>
+                {canEditMom && !v.momEmailSent ? (
+                  <Link to={`/visitors/${v.visitId}/minutes`}>
+                    <Button variant="secondary">
+                      {v.hasMeetingMinutes ? t('inside.editMom') : t('inside.addMom')}
+                    </Button>
+                  </Link>
                 ) : null}
                 {!v.hasMeetingMinutes ? (
                   <Button
@@ -312,63 +262,6 @@ export function CurrentlyInsidePage() {
         <Panel className="mt-3 p-0">
           <Pagination {...pagination} bordered={false} />
         </Panel>
-      ) : null}
-
-      {momVisit ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-[1px]"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="mom-dialog-title"
-          onClick={closeMom}
-        >
-          <div className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-            <Panel className="shadow-xl">
-              <h2 id="mom-dialog-title" className="text-lg font-semibold text-ink">
-                {momVisit.hasMeetingMinutes ? t('inside.editMom') : t('inside.addMom')}
-              </h2>
-              <p className="mt-1 text-sm text-ink-muted">
-                {momVisit.visitorName} · {momVisit.visitNumber}
-              </p>
-              <p className="mt-2 text-sm text-ink-muted">{t('inside.momHint')}</p>
-
-              {momError ? (
-                <div className="mt-3">
-                  <Alert tone="error">{momError}</Alert>
-                </div>
-              ) : null}
-
-              {momLoading ? (
-                <div className="mt-4">
-                  <Spinner label={t('inside.momLoading')} />
-                </div>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  <div>
-                    <FieldLabel htmlFor="insideMeetingMinutes">{t('inside.momLabel')}</FieldLabel>
-                    <textarea
-                      id="insideMeetingMinutes"
-                      rows={6}
-                      maxLength={4000}
-                      className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm shadow-sm focus:border-steel focus:outline-none focus:ring-1 focus:ring-steel"
-                      value={momText}
-                      onChange={(e) => setMomText(e.target.value)}
-                      autoFocus
-                    />
-                  </div>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button variant="secondary" disabled={momSaving} onClick={closeMom}>
-                      {t('common.cancel')}
-                    </Button>
-                    <Button disabled={momSaving || !momText.trim()} onClick={() => void saveMom()}>
-                      {momSaving ? t('inside.momSaving') : t('inside.momSave')}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </Panel>
-          </div>
-        </div>
       ) : null}
     </div>
   )

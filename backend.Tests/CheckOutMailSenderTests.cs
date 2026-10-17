@@ -48,7 +48,7 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
         MomentLocal: DateTime.Now);
 
     private async Task<List<(string Recipient, MailSender? Sender, string Subject, string Body)>> SendAsync(
-        bool sendAsHost, bool appointment = false)
+        bool sendAsHost, bool appointment = false, VisitMailContext? minutes = null)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -57,11 +57,62 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Mail:CheckOutSendAsHost"] = sendAsHost.ToString() })
             .Build();
         var service = new VisitMailService(db, notifications, NullLogger<VisitMailService>.Instance, config);
-        if (appointment)
+        if (minutes is not null)
+            await service.SendMeetingMinutesAsync(minutes);
+        else if (appointment)
             await service.SendAppointmentAsync(Context());
         else
             await service.SendCheckOutAsync(Context());
         return notifications.Sent;
+    }
+
+    [Fact]
+    public async Task CheckOut_Mail_Carries_No_Minutes_Of_Meeting()
+    {
+        var sent = await SendAsync(sendAsHost: false);
+
+        var visitorCopy = Assert.Single(sent, s => s.Recipient == "asha@example.test");
+        Assert.DoesNotContain("Minutes of meeting", visitorCopy.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("{{", visitorCopy.Body);
+    }
+
+    [Fact]
+    public async Task Minutes_Mail_Goes_To_Visitor_From_Host_And_To_Host_With_Every_Section()
+    {
+        var ctx = Context() with
+        {
+            MeetingMinutes = "Reviewed the delivery schedule.",
+            MomDecisions = "Ship batch 2 on Monday.",
+            MomActionItems = "1. Send revised quote (Owner: Suresh) (Due: 20 Oct 2026)",
+            MomNextMeetingDate = "27 Oct 2026",
+            MomSendKey = Guid.NewGuid().ToString("N"),
+        };
+
+        var sent = await SendAsync(sendAsHost: false, minutes: ctx);
+
+        var visitorCopy = Assert.Single(sent, s => s.Recipient == "asha@example.test");
+        Assert.Equal("suresh.baskar@example.test", visitorCopy.Sender!.ReplyTo);
+        Assert.Contains("Minutes of meeting", visitorCopy.Subject);
+        Assert.Contains("Dear Ms. Asha", visitorCopy.Body);
+        Assert.Contains("Reviewed the delivery schedule.", visitorCopy.Body);
+        Assert.Contains("Ship batch 2 on Monday.", visitorCopy.Body);
+        Assert.Contains("1. Send revised quote (Owner: Suresh) (Due: 20 Oct 2026)", visitorCopy.Body);
+        Assert.Contains("Next meeting: 27 Oct 2026", visitorCopy.Body);
+        Assert.DoesNotContain("{{", visitorCopy.Body);
+
+        var hostCopy = Assert.Single(sent, s => s.Recipient == "suresh.baskar@example.test");
+        Assert.Null(hostCopy.Sender);
+        Assert.Equal(visitorCopy.Body, hostCopy.Body);
+    }
+
+    [Theory]
+    [InlineData("Check-out: {{Date}}\n\nMinutes of meeting:\n{{MeetingMinutes}}\n\nRegards,\nTiaano", "Check-out: {{Date}}\n\nRegards,\nTiaano")]
+    [InlineData("Check-out: {{Date}}\nMinutes of meeting: {{MeetingMinutes}}\nRegards", "Check-out: {{Date}}\nRegards")]
+    [InlineData("Check-out: {{Date}}\r\n\r\nMinutes of meeting:\r\n{{MeetingMinutes}}\r\n", "Check-out: {{Date}}\r\n")]
+    [InlineData("Thanks!\n\nRegards", "Thanks!\n\nRegards")]
+    public void Saved_CheckOut_Template_Loses_The_Minutes_Section(string body, string expected)
+    {
+        Assert.Equal(expected, VisitMailService.RemoveMeetingMinutesSection(body));
     }
 
     [Fact]

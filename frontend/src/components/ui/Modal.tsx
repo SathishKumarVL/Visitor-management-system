@@ -18,7 +18,7 @@ export function Modal({
   subtitle?: ReactNode
   onClose: () => void
   children: ReactNode
-  size?: 'md' | 'lg'
+  size?: 'md' | 'lg' | 'xl'
 }) {
   useEffect(() => {
     if (!open) return
@@ -40,8 +40,8 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
       <div
         className={cn(
-          'flex max-h-[90vh] w-full flex-col rounded-2xl bg-white shadow-xl',
-          size === 'lg' ? 'max-w-2xl' : 'max-w-lg',
+          'flex max-h-[94vh] w-full flex-col rounded-2xl bg-white shadow-xl',
+          size === 'xl' ? 'max-w-5xl' : size === 'lg' ? 'max-w-3xl' : 'max-w-lg',
         )}
       >
         <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">

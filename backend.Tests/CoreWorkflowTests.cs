@@ -63,7 +63,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
     /// <summary>Flips tenant approval configuration through the real settings endpoint so the cache is invalidated.</summary>
     private async Task SetApprovalRequiredAsync(bool required)
     {
-        var admin = await LoginAsync("admin");
+        var admin = await LoginAsync("superadmin");
         var current = await admin.GetAsync("/api/settings");
         current.EnsureSuccessStatusCode();
         var dto = (await current.Content.ReadFromJsonAsync<ApiResponse<SettingsDto>>(JsonOptions))!.Data!;
@@ -257,7 +257,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             var reception = await LoginAsync("reception");
             var visitId = VisitId(await RegisterAsync(reception, "To Be Approved Visitor"));
 
-            var admin = await LoginAsync("admin");
+            var admin = await LoginAsync("superadmin");
             var approve = await admin.PostAsJsonAsync($"/api/approvals/{visitId}/approve", new { });
             Assert.True(approve.IsSuccessStatusCode, await approve.Content.ReadAsStringAsync());
             Assert.Equal(VisitStatus.Approved, await StatusOfAsync(visitId));
@@ -281,7 +281,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             var reception = await LoginAsync("reception");
             var visitId = VisitId(await RegisterAsync(reception, "Rejected Visitor"));
 
-            var admin = await LoginAsync("admin");
+            var admin = await LoginAsync("superadmin");
             var reject = await admin.PostAsJsonAsync($"/api/approvals/{visitId}/reject", new { reason = "Not expected today" });
             Assert.True(reject.IsSuccessStatusCode, await reject.Content.ReadAsStringAsync());
             Assert.Equal(VisitStatus.Rejected, await StatusOfAsync(visitId));
@@ -306,7 +306,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             var reception = await LoginAsync("reception");
             var visitId = VisitId(await RegisterAsync(reception, "Reasonless Rejection Visitor"));
 
-            var admin = await LoginAsync("admin");
+            var admin = await LoginAsync("superadmin");
             var reject = await admin.PostAsJsonAsync($"/api/approvals/{visitId}/reject", new { reason = "" });
 
             Assert.Equal(HttpStatusCode.BadRequest, reject.StatusCode);
@@ -327,7 +327,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             var reception = await LoginAsync("reception");
             var visitId = VisitId(await RegisterAsync(reception, "Audited Approval Visitor"));
 
-            var admin = await LoginAsync("admin");
+            var admin = await LoginAsync("superadmin");
             (await admin.PostAsJsonAsync($"/api/approvals/{visitId}/reject", new { reason = "Site closed" })).EnsureSuccessStatusCode();
 
             using var scope = _factory.Services.CreateScope();

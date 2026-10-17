@@ -141,6 +141,8 @@ builder.Services.AddScoped<IVisitMailService, VisitMailService>();
 builder.Services.AddScoped<IPassNumberService, PassNumberService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserFaceLoginService, UserFaceLoginService>();
+builder.Services.AddScoped<IEmployeeMasterService, EmployeeMasterService>();
+builder.Services.AddScoped<IMeetingHallAllocator, MeetingHallAllocator>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();

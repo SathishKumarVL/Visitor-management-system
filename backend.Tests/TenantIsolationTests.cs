@@ -145,7 +145,7 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
             };
             var create = await users.CreateAsync(user, TenantBPassword);
             Assert.True(create.Succeeded, string.Join("; ", create.Errors.Select(e => e.Description)));
-            await users.AddToRoleAsync(user, AppRoles.Admin);
+            await users.AddToRoleAsync(user, AppRoles.SuperAdmin);
         }
         else
         {
@@ -155,6 +155,13 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
             user.IsActive = true;
             user.TenantId = TenantBId;
             await users.UpdateAsync(user);
+            // Tenant-wide visibility belongs to Super Admins only; an unassigned Admin can no longer sign in.
+            var roles = await users.GetRolesAsync(user);
+            if (!roles.SequenceEqual([AppRoles.SuperAdmin]))
+            {
+                await users.RemoveFromRolesAsync(user, roles);
+                await users.AddToRoleAsync(user, AppRoles.SuperAdmin);
+            }
         }
 
         // Ensure Tenant B has at least one visit for IDOR tests

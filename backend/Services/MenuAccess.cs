@@ -11,8 +11,9 @@ public static class MenuAccess
 {
     public static readonly string[] AllKeys =
     [
-        "dashboard", "reception", "visitors", "inside", "expected",
-        "reports", "departments", "employees", "purposes", "locations", "feedback", "mailcontent", "users", "settings"
+        "dashboard", "reception", "visitors", "inside", "expected", "employeemaster",
+        "reports", "departments", "employees", "purposes", "locations", "feedback", "mailcontent", "users",
+        "meetinghalls", "settings"
     ];
 
     private static readonly HashSet<string> Known = new(AllKeys, StringComparer.OrdinalIgnoreCase);
@@ -23,8 +24,8 @@ public static class MenuAccess
         // Employees master is SuperAdmin-only; Admin keeps the rest of the catalog.
         [AppRoles.Admin] =
         [
-            "dashboard", "reception", "visitors", "inside", "expected",
-            "reports", "departments", "purposes", "locations", "feedback", "mailcontent", "users", "settings"
+            "dashboard", "reception", "visitors", "inside", "expected", "employeemaster",
+            "reports", "departments", "purposes", "locations", "feedback", "mailcontent", "users", "meetinghalls", "settings"
         ],
         [AppRoles.Reception] = ["dashboard", "reception", "visitors", "inside", "expected", "reports"],
         [AppRoles.Security] = ["dashboard", "visitors", "inside", "expected"],

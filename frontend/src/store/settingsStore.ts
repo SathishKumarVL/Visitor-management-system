@@ -9,6 +9,7 @@ const defaults: SettingsDto = {
   logoPath: '/branding/tiaano-logo.png',
   themePreset: 'tiaano',
   fontPreset: 'inter',
+  fontSize: 'medium',
   visitorIdPrefix: 'TIA',
   visitorPassValidityHours: 12,
   approvalRequired: true,
@@ -43,7 +44,7 @@ interface SettingsState {
 }
 
 function applyFromSettings(settings: SettingsDto) {
-  applyBranding(settings.themePreset, settings.fontPreset)
+  applyBranding(settings.themePreset, settings.fontPreset, settings.fontSize)
 }
 
 function displayFrom(b: { companyName: string; logoPath: string }) {
@@ -62,6 +63,7 @@ async function loadBrandingFallback(
       logoPath: branding.logoPath,
       themePreset: branding.themePreset || current.themePreset,
       fontPreset: branding.fontPreset || current.fontPreset,
+      fontSize: branding.fontSize || current.fontSize,
     }
     applyFromSettings(settings)
     set({
@@ -101,7 +103,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (!getStoredToken()) return
     try {
       const branding = await settingsApi.getCurrentBranding()
-      applyBranding(branding.themePreset, branding.fontPreset)
+      applyBranding(branding.themePreset, branding.fontPreset, branding.fontSize)
       set(displayFrom(branding))
     } catch {
       // Keep tenant branding already shown.

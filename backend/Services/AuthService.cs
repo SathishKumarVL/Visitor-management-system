@@ -9,6 +9,7 @@ using Tiaano.Vms.Api.Configuration;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Models.Enums;
 
 namespace Tiaano.Vms.Api.Services;
 
@@ -18,6 +19,7 @@ public interface IAuthService
     /// <summary>Signs in as the login whose registered face matches; null when no face matches.</summary>
     Task<LoginResponse?> FaceLoginAsync(FaceLoginRequest request, string? ipAddress);
     Task<UserDto?> GetCurrentUserAsync(ClaimsPrincipal principal);
+    Task<MyDetailsDto?> GetMyDetailsAsync(ClaimsPrincipal principal);
     Task<LoginResponse?> RefreshAsync(string refreshToken, string? ipAddress);
     Task LogoutAsync(ClaimsPrincipal principal, string? refreshToken);
     Task<LoginResponse> ChangePasswordAsync(ClaimsPrincipal principal, ChangePasswordRequest request, string? ipAddress);
@@ -230,6 +232,44 @@ public class AuthService : IAuthService
         return MapUser(user, roles);
     }
 
+    public async Task<MyDetailsDto?> GetMyDetailsAsync(ClaimsPrincipal principal)
+    {
+        var id = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (id is null) return null;
+        var user = await _userManager.Users.AsNoTracking()
+            .Include(u => u.Department).Include(u => u.Location)
+            .FirstOrDefaultAsync(u => u.Id == id);
+        if (user is null || !user.IsActive) return null;
+        var roles = await _userManager.GetRolesAsync(user);
+        var employee = await _db.Employees.AsNoTracking()
+            .Where(e => e.UserId == id)
+            .Select(e => new
+            {
+                e.Code,
+                e.Designation,
+                e.Phone,
+                e.Intercom,
+                DepartmentName = e.Department.Name,
+                LocationName = e.Location != null ? e.Location.Name : null
+            })
+            .FirstOrDefaultAsync();
+
+        return new MyDetailsDto
+        {
+            Username = user.UserName ?? "",
+            FullName = user.FullName,
+            Email = user.Email ?? "",
+            Roles = roles.ToList(),
+            EmployeeCode = employee?.Code,
+            Designation = employee?.Designation,
+            DepartmentName = employee?.DepartmentName ?? user.Department?.Name,
+            LocationName = employee?.LocationName ?? (roles.Contains(AppRoles.SuperAdmin) ? null : user.Location?.Name),
+            Phone = employee?.Phone,
+            Intercom = employee?.Intercom,
+            FaceLoginCount = await _db.UserFaceLogins.CountAsync(f => f.UserId == id)
+        };
+    }
+
     public async Task<LoginResponse?> RefreshAsync(string refreshToken, string? ipAddress)
     {
         if (string.IsNullOrWhiteSpace(refreshToken)) return null;
@@ -310,6 +350,7 @@ public class AuthService : IAuthService
         string? ipAddress,
         RefreshToken? replaced = null)
     {
+        await EnsureLocationAssignedAsync(user, roles);
         var accessMinutes = int.TryParse(_config["Jwt:AccessTokenMinutes"], out var m) ? m : 30;
         var refreshDays = rememberMe ? 14 : 7;
         var expires = DateTime.UtcNow.AddMinutes(accessMinutes);
@@ -339,6 +380,19 @@ public class AuthService : IAuthService
         };
     }
 
+    /// <summary>
+    /// Without a location an Admin would fall back to tenant-wide visibility, which only a Super Admin may have.
+    /// </summary>
+    private async Task EnsureLocationAssignedAsync(ApplicationUser user, IList<string> roles)
+    {
+        if (roles.Contains(AppRoles.SuperAdmin) || !roles.Contains(AppRoles.Admin)) return;
+        var hasActiveLocation = user.LocationId is Guid lid && await _db.Locations.IgnoreQueryFilters()
+            .AnyAsync(l => l.Id == lid && l.TenantId == user.TenantId && l.IsActive);
+        if (!hasActiveLocation)
+            throw new InvalidOperationException(
+                "This admin login has no active location assigned. Ask a Super Admin to assign a location under Users.");
+    }
+
     private string GenerateJwt(ApplicationUser user, IList<string> roles, DateTime expires)
     {
         var signingKey = SecretConfiguration.GetRequiredJwtSigningKey(_config, _env);
@@ -357,7 +411,7 @@ public class AuthService : IAuthService
             claims.Add(new Claim("departmentId", user.DepartmentId.Value.ToString()));
         // Tenant claim is mandatory for authenticated API access (middleware fails closed without it).
         claims.Add(new Claim("tenantId", user.TenantId.ToString()));
-        if (user.LocationId.HasValue)
+        if (user.LocationId.HasValue && !roles.Contains(AppRoles.SuperAdmin))
             claims.Add(new Claim("locationId", user.LocationId.Value.ToString()));
 
         var token = new JwtSecurityToken(
@@ -379,6 +433,7 @@ public class AuthService : IAuthService
     private static UserDto MapUser(ApplicationUser user, IList<string> roles)
     {
         var primaryRole = roles.FirstOrDefault() ?? string.Empty;
+        var isSuperAdmin = roles.Contains(AppRoles.SuperAdmin);
         return new()
         {
             Id = user.Id,
@@ -388,8 +443,8 @@ public class AuthService : IAuthService
             Roles = roles.ToList(),
             DepartmentId = user.DepartmentId,
             DepartmentName = user.Department?.Name,
-            LocationId = user.LocationId,
-            LocationName = user.Location?.Name,
+            LocationId = isSuperAdmin ? null : user.LocationId,
+            LocationName = isSuperAdmin ? null : user.Location?.Name,
             AllowedMenuKeys = MenuAccess.Deserialize(user.AllowedMenuKeysJson, primaryRole),
             MustChangePassword = user.MustChangePassword,
             IsActive = user.IsActive

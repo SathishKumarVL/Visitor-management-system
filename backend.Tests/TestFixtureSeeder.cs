@@ -34,6 +34,7 @@ internal static class TestFixtureSeeder
 {
     public const string DepartmentCode = "TESTDEPT";
     public const string HostEmail = "test.host@example.test";
+    public const string AdminLocationName = "Test Admin Location";
 
     public static async Task EnsureAsync(IServiceProvider services)
     {
@@ -83,6 +84,27 @@ internal static class TestFixtureSeeder
                 CreatedBy = "test"
             });
             await db.SaveChangesAsync();
+        }
+
+        // Only Super Admins span every location, so the seeded Admin is bound to one.
+        var adminLocation = await db.Locations.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.Name == AdminLocationName);
+        if (adminLocation is null)
+        {
+            adminLocation = new Location { TenantId = tenantId, Name = AdminLocationName, IsActive = true, CreatedBy = "test" };
+            db.Locations.Add(adminLocation);
+            await db.SaveChangesAsync();
+        }
+        else if (!adminLocation.IsActive)
+        {
+            adminLocation.IsActive = true;
+            await db.SaveChangesAsync();
+        }
+        var admin = await users.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.UserName == "admin");
+        if (admin is not null && admin.LocationId != adminLocation.Id)
+        {
+            admin.LocationId = adminLocation.Id;
+            await users.UpdateAsync(admin);
         }
 
         await EnsureUserAsync(users, tenantId, "reception", "Reception Desk", AppRoles.Reception, department.Id);

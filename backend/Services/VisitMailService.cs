@@ -20,14 +20,20 @@ public record VisitMailContext(
     string Department,
     string Purpose,
     string MeetingMinutes,
-    DateTime MomentLocal);
+    DateTime MomentLocal,
+    string MeetingHall = "",
+    string MomDecisions = "",
+    string MomActionItems = "",
+    string MomNextMeetingDate = "",
+    string MomSendKey = "");
 
-/// <summary>Renders Mail Content templates and queues check-in / check-out / appointment emails.</summary>
+/// <summary>Renders Mail Content templates and queues check-in / check-out / appointment / minutes emails.</summary>
 public interface IVisitMailService
 {
     Task SendCheckInAsync(VisitMailContext ctx);
     Task SendCheckOutAsync(VisitMailContext ctx);
     Task SendAppointmentAsync(VisitMailContext ctx);
+    Task SendMeetingMinutesAsync(VisitMailContext ctx);
 }
 
 public class VisitMailService : IVisitMailService
@@ -100,6 +106,35 @@ public class VisitMailService : IVisitMailService
         }
     }
 
+    /// <summary>
+    /// Minutes of meeting go to the visitor (from the host, like check-out) and to the host. Each send is a new
+    /// email, so <see cref="VisitMailContext.MomSendKey"/> must differ between sends.
+    /// </summary>
+    public async Task SendMeetingMinutesAsync(VisitMailContext ctx)
+    {
+        var (subject, body) = await RenderAsync(MailContentKind.MeetingMinutes, ctx);
+
+        if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
+        {
+            await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+                $"mom-visitor:{ctx.MomSendKey}", ctx.LocationId, HostSender(ctx));
+        }
+        else
+        {
+            _logger.LogWarning("Minutes of meeting visitor email skipped — {Name} has no email.", ctx.VisitorName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail))
+        {
+            await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
+                $"mom-host:{ctx.MomSendKey}", ctx.LocationId);
+        }
+        else
+        {
+            _logger.LogWarning("Minutes of meeting host email skipped — {Host} has no email.", ctx.VisitingPerson);
+        }
+    }
+
     public async Task SendAppointmentAsync(VisitMailContext ctx)
     {
         // The employee and the visitor get different wording, so each has its own Mail Content template.
@@ -153,8 +188,79 @@ public class VisitMailService : IVisitMailService
 
         if (kind is MailContentKind.Appointment or MailContentKind.AppointmentVisitor)
             body = EnsurePurposeLine(body);
+        if (kind is MailContentKind.CheckIn && !string.IsNullOrWhiteSpace(ctx.MeetingHall))
+            body = EnsureMeetingHallLine(body);
+        if (kind is MailContentKind.CheckOut)
+            body = RemoveMeetingMinutesSection(body);
 
         return (Apply(subject, ctx), Apply(body, ctx));
+    }
+
+    /// <summary>
+    /// Minutes have their own email, so check-out templates saved when they carried the minutes lose the
+    /// placeholder line and a "Minutes of meeting:" heading directly above it.
+    /// </summary>
+    public static string RemoveMeetingMinutesSection(string body)
+    {
+        if (!body.Contains("{{MeetingMinutes}}", StringComparison.Ordinal)) return body;
+
+        var newline = body.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = body.Split(newline).ToList();
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            if (!lines[i].Contains("{{MeetingMinutes}}", StringComparison.Ordinal)) continue;
+
+            var remainder = lines[i].Replace("{{MeetingMinutes}}", "", StringComparison.Ordinal).Trim();
+            var isLabelOnly = remainder.Length == 0 || remainder.EndsWith(':');
+            if (!isLabelOnly)
+            {
+                lines[i] = lines[i].Replace("{{MeetingMinutes}}", "", StringComparison.Ordinal);
+                continue;
+            }
+
+            lines.RemoveAt(i);
+            if (remainder.Length == 0 && i > 0 && lines[i - 1].Trim().EndsWith(':')
+                && lines[i - 1].Contains("minute", StringComparison.OrdinalIgnoreCase))
+            {
+                lines.RemoveAt(i - 1);
+                i--;
+            }
+            if (i > 0 && i < lines.Count && lines[i - 1].Trim().Length == 0 && lines[i].Trim().Length == 0)
+                lines.RemoveAt(i);
+        }
+
+        return string.Join(newline, lines);
+    }
+
+    /// <summary>
+    /// The host's check-in mail names the hall allocated at check-in: after the "Purpose:" or "Department:" line,
+    /// or before the sign-off.
+    /// </summary>
+    public static string EnsureMeetingHallLine(string body)
+    {
+        if (body.Contains("{{MeetingHall}}", StringComparison.Ordinal)) return body;
+
+        var newline = body.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = body.Split(newline).ToList();
+        var anchor = lines.FindIndex(l => l.TrimStart().StartsWith("Purpose:", StringComparison.OrdinalIgnoreCase));
+        if (anchor < 0)
+            anchor = lines.FindIndex(l => l.TrimStart().StartsWith("Department:", StringComparison.OrdinalIgnoreCase));
+        if (anchor >= 0)
+        {
+            var indent = lines[anchor][..(lines[anchor].Length - lines[anchor].TrimStart().Length)];
+            lines.Insert(anchor + 1, $"{indent}Meeting hall: {{{{MeetingHall}}}}");
+            return string.Join(newline, lines);
+        }
+
+        var signOff = lines.FindIndex(l => l.TrimStart().StartsWith("Regards", StringComparison.OrdinalIgnoreCase));
+        if (signOff >= 0)
+        {
+            lines.Insert(signOff, "");
+            lines.Insert(signOff, "Meeting hall: {{MeetingHall}}");
+            return string.Join(newline, lines);
+        }
+
+        return body.TrimEnd() + newline + newline + "Meeting hall: {{MeetingHall}}" + newline;
     }
 
     /// <summary>
@@ -198,7 +304,13 @@ public class VisitMailService : IVisitMailService
         sb.Replace("{{Location}}", ctx.Location);
         sb.Replace("{{Department}}", ctx.Department);
         sb.Replace("{{Purpose}}", ctx.Purpose);
-        sb.Replace("{{MeetingMinutes}}", string.IsNullOrWhiteSpace(ctx.MeetingMinutes) ? "—" : ctx.MeetingMinutes);
+        sb.Replace("{{MeetingHall}}", string.IsNullOrWhiteSpace(ctx.MeetingHall) ? "—" : ctx.MeetingHall);
+        var discussion = string.IsNullOrWhiteSpace(ctx.MeetingMinutes) ? "—" : ctx.MeetingMinutes;
+        sb.Replace("{{MeetingMinutes}}", discussion);
+        sb.Replace("{{Discussion}}", discussion);
+        sb.Replace("{{Decisions}}", string.IsNullOrWhiteSpace(ctx.MomDecisions) ? "—" : ctx.MomDecisions);
+        sb.Replace("{{ActionItems}}", string.IsNullOrWhiteSpace(ctx.MomActionItems) ? "—" : ctx.MomActionItems);
+        sb.Replace("{{NextMeetingDate}}", string.IsNullOrWhiteSpace(ctx.MomNextMeetingDate) ? "—" : ctx.MomNextMeetingDate);
         sb.Replace("{{Date}}", ctx.MomentLocal.ToString("dd MMM yyyy"));
         sb.Replace("{{Time}}", ctx.MomentLocal.ToString("hh:mm tt"));
         return sb.ToString();

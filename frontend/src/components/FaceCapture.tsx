@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FaceCameraPanel } from './FaceCameraPanel'
 import { Button } from './ui/Button'
-import { Alert } from './ui/Panel'
 import { captureFaceJpeg } from '../lib/cameraCapture'
 
 type Props = {
@@ -10,7 +9,6 @@ type Props = {
   photoUrl?: string | null
   busy?: boolean
   captureLabel?: string
-  cameraErrorText?: string
 }
 
 /** Front camera with the face oval and a Capture button. Releases the camera when hidden or unmounted. */
@@ -19,38 +17,47 @@ export function FaceCapture({
   photoUrl = null,
   busy = false,
   captureLabel = 'Capture',
-  cameraErrorText = 'Unable to access the camera. Allow camera permission and try again.',
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  /** Only the latest start may update state; an earlier one interrupted by a restart fails harmlessly. */
+  const attemptRef = useRef(0)
   const [ready, setReady] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
 
   const stop = useCallback(() => {
+    attemptRef.current++
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setReady(false)
   }, [])
 
   const start = useCallback(async () => {
-    setError(null)
+    const attempt = ++attemptRef.current
+    setFailed(false)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false,
       })
+      if (attempt !== attemptRef.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
+      if (attempt !== attemptRef.current) return
       setReady(true)
     } catch {
-      setError(cameraErrorText)
+      if (attempt !== attemptRef.current) return
+      setFailed(true)
       setReady(false)
     }
-  }, [cameraErrorText])
+  }, [])
 
   useEffect(() => {
     if (photoUrl) {
@@ -71,15 +78,12 @@ export function FaceCapture({
   return (
     <div className="space-y-3">
       <FaceCameraPanel videoRef={videoRef} photoUrl={photoUrl} />
-      {error ? (
-        <div className="space-y-2">
-          <Alert tone="error">{error}</Alert>
-          <Button type="button" variant="secondary" className="w-full" onClick={() => void start()}>
-            Start camera
-          </Button>
-        </div>
+      {!photoUrl && failed ? (
+        <Button type="button" variant="secondary" className="w-full" onClick={() => void start()}>
+          Start camera
+        </Button>
       ) : null}
-      {!photoUrl && !error ? (
+      {!photoUrl && !failed ? (
         <Button
           type="button"
           variant="primary"

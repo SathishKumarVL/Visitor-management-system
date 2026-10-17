@@ -49,6 +49,8 @@ export function FaceCheckoutPage() {
   const userLocationId = useAuthStore((s) => s.user?.locationId ?? null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  /** Only the latest camera start may update state; an earlier one interrupted by a restart fails harmlessly. */
+  const cameraAttemptRef = useRef(0)
 
   const [step, setStep] = useState<Step>('feedback')
   const [loading, setLoading] = useState(true)
@@ -66,12 +68,14 @@ export function FaceCheckoutPage() {
   const [feedbackReady, setFeedbackReady] = useState(false)
 
   const stopCamera = useCallback(() => {
+    cameraAttemptRef.current++
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setCameraReady(false)
   }, [])
 
   const startCamera = useCallback(async () => {
+    const attempt = ++cameraAttemptRef.current
     setError(null)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -79,15 +83,20 @@ export function FaceCheckoutPage() {
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false,
       })
+      if (attempt !== cameraAttemptRef.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
+      if (attempt !== cameraAttemptRef.current) return
       setCameraReady(true)
       setStatusText('Position the face in frame, then press Capture')
     } catch {
-      setError('Unable to access camera. Allow camera permission and try Start camera again.')
+      if (attempt !== cameraAttemptRef.current) return
       setCameraReady(false)
     }
   }, [])
@@ -188,7 +197,7 @@ export function FaceCheckoutPage() {
     }
 
     if (video.readyState < 2) {
-      setError('Camera is not ready yet. Wait a moment and try Capture again.')
+      void startCamera()
       return
     }
 
@@ -197,7 +206,7 @@ export function FaceCheckoutPage() {
     try {
       const photoBase64 = captureFaceJpeg(video)
       if (!photoBase64) {
-        setError('Could not read the camera frame. Try again.')
+        void startCamera()
         return
       }
 

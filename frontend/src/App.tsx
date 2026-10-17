@@ -14,6 +14,7 @@ import { HostModePage } from './pages/HostModePage'
 import { NewVisitorWizardPage } from './pages/NewVisitorWizardPage'
 import { VisitorsPage } from './pages/VisitorsPage'
 import { VisitorDetailPage } from './pages/VisitorDetailPage'
+import { MeetingMinutesPage } from './pages/MeetingMinutesPage'
 import { CurrentlyInsidePage } from './pages/CurrentlyInsidePage'
 import { ExpectedVisitorsPage } from './pages/ExpectedVisitorsPage'
 import { VisitorPassesPage } from './pages/VisitorPassesPage'
@@ -24,10 +25,13 @@ import { ReportsPage } from './pages/ReportsPage'
 import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
 import { FeedbackQuestionsPage } from './pages/FeedbackQuestionsPage'
 import { MailContentPage } from './pages/MailContentPage'
-import { EmployeesPage } from './pages/HostsPage'
-import { UsersPage } from './pages/UsersPage'
+import { MeetingHallsPage } from './pages/MeetingHallsPage'
+import { EmployeeMasterPage } from './pages/EmployeeMasterPage'
+import { ManualCheckoutsPage } from './pages/ManualCheckoutsPage'
+import { MomPendingPage } from './pages/MomPendingPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
+import { MyDetailsPage } from './pages/MyDetailsPage'
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordResetPages'
 import { VisitorWelcomePage } from './pages/VisitorWelcomePage'
 import { VisitorThankYouPage } from './pages/VisitorThankYouPage'
@@ -56,6 +60,7 @@ export default function App() {
           <Route element={<AppLayout />}>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/change-password" element={<ChangePasswordPage />} />
+            <Route path="/my-details" element={<MyDetailsPage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Reception', 'Security', 'Host']} />}>
@@ -63,6 +68,15 @@ export default function App() {
               <Route path="/visitors" element={<VisitorsPage />} />
               <Route path="/visitors/inside" element={<CurrentlyInsidePage />} />
               <Route path="/visitors/:id" element={<VisitorDetailPage />} />
+            </Route>
+
+            <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin']} />}>
+              <Route path="/employee-master" element={<EmployeeMasterPage />} />
+              <Route path="/visitors/manual-checkouts" element={<ManualCheckoutsPage />} />
+            </Route>
+
+            <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Host']} />}>
+              <Route path="/visitors/mom-pending" element={<MomPendingPage />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Reception']} />}>
@@ -79,6 +93,7 @@ export default function App() {
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Host']} />}>
               <Route path="/host" element={<HostModePage />} />
+              <Route path="/visitors/:id/minutes" element={<MeetingMinutesPage />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin', 'Reception', 'Host', 'Security']} />}>
@@ -94,18 +109,16 @@ export default function App() {
               <Route path="/visitors/thank-you" element={<VisitorThankYouPage />} />
             </Route>
 
-            <Route element={<ProtectedRoute roles={['SuperAdmin']} />}>
-              <Route path="/masters/employees" element={<EmployeesPage />} />
-            </Route>
-
             <Route element={<ProtectedRoute roles={['SuperAdmin', 'Admin']} />}>
+              <Route path="/masters/employees" element={<Navigate to="/employee-master" replace />} />
+              <Route path="/masters/hosts" element={<Navigate to="/employee-master" replace />} />
               <Route path="/masters/departments" element={<DepartmentsPage />} />
-              <Route path="/masters/hosts" element={<EmployeesPage />} />
               <Route path="/masters/purposes" element={<PurposesPage />} />
               <Route path="/masters/locations" element={<LocationsPage />} />
               <Route path="/masters/feedback" element={<FeedbackQuestionsPage />} />
               <Route path="/masters/mail-content" element={<MailContentPage />} />
-              <Route path="/users" element={<UsersPage />} />
+              <Route path="/masters/meeting-halls" element={<MeetingHallsPage />} />
+              <Route path="/users" element={<Navigate to="/employee-master" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>

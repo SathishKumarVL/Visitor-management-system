@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Identity;
+using Tiaano.Vms.Api.Models.Enums;
 
 namespace Tiaano.Vms.Api.Models;
 
@@ -106,6 +107,10 @@ public class Employee
     public Guid TenantId { get; set; }
     public Tenant? Tenant { get; set; }
 
+    /// <summary>Name prefix chosen in the Employee menu: one of <see cref="EmployeeTitles.All"/>.</summary>
+    [MaxLength(10)]
+    public string? Title { get; set; }
+
     [Required, MaxLength(150)]
     public string FullName { get; set; } = string.Empty;
 
@@ -132,6 +137,23 @@ public class Employee
 
     public string? UserId { get; set; }
     public ApplicationUser? User { get; set; }
+
+    public DateOnly? DateOfBirth { get; set; }
+
+    public EmployeeGender? Gender { get; set; }
+
+    /// <summary>Stored file name of the enrolment photo in the tenant's private media folder.</summary>
+    [MaxLength(260)]
+    public string? PhotoPath { get; set; }
+
+    /// <summary>Little-endian float32 vector, same format as login face templates.</summary>
+    [MaxLength(4096)]
+    public byte[]? FaceDescriptor { get; set; }
+
+    public int? FaceDimensions { get; set; }
+
+    [MaxLength(50)]
+    public string? FaceModel { get; set; }
 
     public bool IsActive { get; set; } = true;
 
@@ -184,6 +206,39 @@ public class Location
     public bool RequiresOtherText { get; set; }
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? UpdatedBy { get; set; }
+}
+
+/// <summary>
+/// A room at a location. Allocated automatically at check-in to the smallest free hall that seats the party;
+/// a hall is busy while a visit holding it is still inside.
+/// </summary>
+public class MeetingHall
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    [Required, MaxLength(50)]
+    public string Code { get; set; } = string.Empty;
+
+    [Required, MaxLength(150)]
+    public string Name { get; set; } = string.Empty;
+
+    public int SeatingCapacity { get; set; }
+
+    [MaxLength(50)]
+    public string? IntercomNo { get; set; }
+
+    public Guid LocationId { get; set; }
+    public Location Location { get; set; } = null!;
+
+    public bool IsActive { get; set; } = true;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }

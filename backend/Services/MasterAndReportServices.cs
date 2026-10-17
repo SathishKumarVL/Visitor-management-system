@@ -27,6 +27,8 @@ public interface IMasterDataService
     Task DeactivateMasterAsync(string type, Guid id, string? user);
     Task<IReadOnlyList<MailContentTemplateDto>> GetMailContentsAsync(Guid? locationId = null);
     Task<MailContentTemplateDto> UpsertMailContentAsync(MailContentUpsertRequest request, string? user);
+    Task<IReadOnlyList<MeetingHallDto>> GetMeetingHallsAsync(bool activeOnly = true, Guid? locationId = null);
+    Task<MeetingHallDto> UpsertMeetingHallAsync(Guid? id, MeetingHallUpsertRequest request, string? user);
 }
 
 public class MasterDataService : IMasterDataService
@@ -152,7 +154,10 @@ public class MasterDataService : IMasterDataService
             LocationName = e.Location != null ? e.Location.Name : null,
             UserId = e.UserId,
             UserName = _db.Users.Where(u => u.Id == e.UserId).Select(u => u.UserName).FirstOrDefault(),
-            IsActive = e.IsActive
+            IsActive = e.IsActive,
+            DateOfBirth = e.DateOfBirth,
+            Gender = e.Gender,
+            HasFace = e.FaceDescriptor != null
         }).ToListAsync();
     }
 
@@ -241,6 +246,7 @@ public class MasterDataService : IMasterDataService
     public async Task<IReadOnlyList<MasterItemDto>> GetPurposesAsync(bool activeOnly = true, Guid? locationId = null)
     {
         await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, CurrentTenantId);
+        if (!TryScopeLocation(ref locationId)) return [];
         var q = _db.VisitPurposes.AsNoTracking().AsQueryable();
         if (activeOnly) q = q.Where(x => x.IsActive);
         if (locationId.HasValue)
@@ -263,14 +269,17 @@ public class MasterDataService : IMasterDataService
         if (id.HasValue)
         {
             entity = await _db.VisitPurposes.FindAsync(id) ?? throw new InvalidOperationException("Purpose not found.");
+            EnsureInUserLocation(entity.LocationId, "purpose");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
         else { entity = new VisitPurpose { TenantId = CurrentTenantId, CreatedBy = user }; _db.VisitPurposes.Add(entity); }
+        EnsureInUserLocation(request.LocationId, "purpose");
         entity.Name = request.Name.Trim();
         entity.Code = string.IsNullOrWhiteSpace(request.Code) ? null : request.Code.Trim();
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.IsActive;
-        entity.LocationId = request.LocationId;
+        entity.LocationId = request.LocationId
+            ?? (string.Equals(entity.Name, "Others", StringComparison.OrdinalIgnoreCase) ? null : _tenant.LocationId);
         if (!entity.LocationId.HasValue
             && !string.Equals(entity.Name, "Others", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Purpose must be assigned to a location.");
@@ -293,8 +302,18 @@ public class MasterDataService : IMasterDataService
         };
     }
 
+    /// <summary>A location-bound user only reads and edits their own location's copy, never the tenant default.</summary>
+    private Guid? ScopeMailLocation(Guid? locationId)
+    {
+        if (_tenant.LocationId is not Guid scope) return locationId;
+        if (locationId.HasValue && locationId.Value != scope)
+            throw new UnauthorizedAccessException("This mail content belongs to another location.");
+        return scope;
+    }
+
     public async Task<IReadOnlyList<MailContentTemplateDto>> GetMailContentsAsync(Guid? locationId = null)
     {
+        locationId = ScopeMailLocation(locationId);
         await EnsureDefaultMailContentsAsync(null);
         if (locationId is Guid)
             await EnsureDefaultMailContentsAsync(locationId);
@@ -321,6 +340,7 @@ public class MasterDataService : IMasterDataService
 
     public async Task<MailContentTemplateDto> UpsertMailContentAsync(MailContentUpsertRequest request, string? user)
     {
+        request.LocationId = ScopeMailLocation(request.LocationId);
         if (request.LocationId is Guid locId)
         {
             var locOk = await _db.Locations.AnyAsync(l => l.Id == locId);
@@ -417,7 +437,7 @@ public class MasterDataService : IMasterDataService
         }
         await _db.SaveChangesAsync();
 
-        // Keep existing templates aware of MoM / Salutation placeholders (tenant defaults + scoped).
+        // Keep existing templates in step with the placeholders (tenant defaults + scoped).
         IQueryable<MailContentTemplate> scope = _db.MailContentTemplates;
         scope = locationId is Guid loc2
             ? scope.Where(x => x.LocationId == loc2)
@@ -427,9 +447,10 @@ public class MasterDataService : IMasterDataService
         if (checkout is not null)
         {
             var changed = false;
-            if (!checkout.Body.Contains("{{MeetingMinutes}}", StringComparison.Ordinal))
+            var withoutMinutes = VisitMailService.RemoveMeetingMinutesSection(checkout.Body);
+            if (withoutMinutes != checkout.Body)
             {
-                checkout.Body = checkout.Body.TrimEnd() + "\n\nMinutes of meeting:\n{{MeetingMinutes}}\n";
+                checkout.Body = withoutMinutes;
                 changed = true;
             }
             if (checkout.Body.Contains("Dear {{VisitorName}}", StringComparison.Ordinal)
@@ -489,11 +510,35 @@ public class MasterDataService : IMasterDataService
             Purpose: {{Purpose}}
             Check-out: {{Date}} {{Time}}
 
-            Minutes of meeting:
-            {{MeetingMinutes}}
-
             Regards,
             Tiaano VMS
+            """),
+        MailContentKind.MeetingMinutes => (
+            "Minutes of meeting: {{VisitingPerson}} and {{Salutation}} {{VisitorName}}, {{Date}}",
+            """
+            Dear {{Salutation}} {{VisitorName}},
+
+            Thank you for meeting {{VisitingPerson}} at {{Location}}. Please find the minutes of the meeting below.
+
+            Visit number: {{VisitorNumber}}
+            Meeting date: {{Date}}
+            Department: {{Department}}
+            Purpose: {{Purpose}}
+            Meeting hall: {{MeetingHall}}
+
+            Discussion points:
+            {{Discussion}}
+
+            Decisions:
+            {{Decisions}}
+
+            Action items:
+            {{ActionItems}}
+
+            Next meeting: {{NextMeetingDate}}
+
+            Regards,
+            {{VisitingPerson}}
             """),
         MailContentKind.Appointment => (
             "Appointment scheduled: {{Salutation}} {{VisitorName}}",
@@ -538,6 +583,7 @@ public class MasterDataService : IMasterDataService
     {
         var q = _db.Locations.AsNoTracking().AsQueryable();
         if (activeOnly) q = q.Where(x => x.IsActive);
+        if (_tenant.LocationId is Guid scope) q = q.Where(x => x.Id == scope);
         return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto
         {
             Id = x.Id,
@@ -553,12 +599,19 @@ public class MasterDataService : IMasterDataService
     public async Task<MasterItemDto> UpsertLocationAsync(Guid? id, MasterUpsertRequest request, string? user)
     {
         if (id is null)
+        {
+            if (_tenant.LocationId is not null)
+                throw new UnauthorizedAccessException("Only a Super Admin can add locations.");
             await _entitlements.EnsureCanCreateLocationAsync();
+        }
 
         Location entity;
         if (id.HasValue)
         {
             entity = await _db.Locations.FindAsync(id) ?? throw new InvalidOperationException("Location not found.");
+            EnsureInUserLocation(entity.Id, "location");
+            if (_tenant.LocationId is not null && !request.IsActive)
+                throw new UnauthorizedAccessException("Only a Super Admin can deactivate a location.");
             entity.UpdatedAt = DateTime.UtcNow; entity.UpdatedBy = user;
         }
         else { entity = new Location { TenantId = CurrentTenantId, CreatedBy = user }; _db.Locations.Add(entity); }
@@ -580,6 +633,87 @@ public class MasterDataService : IMasterDataService
             RequiresPlantNumber = entity.RequiresPlantNumber,
             RequiresOtherText = entity.RequiresOtherText,
         };
+    }
+
+    public async Task<IReadOnlyList<MeetingHallDto>> GetMeetingHallsAsync(bool activeOnly = true, Guid? locationId = null)
+    {
+        if (!TryScopeLocation(ref locationId)) return [];
+        var q = _db.MeetingHalls.AsNoTracking().AsQueryable();
+        if (activeOnly) q = q.Where(h => h.IsActive);
+        if (locationId.HasValue) q = q.Where(h => h.LocationId == locationId.Value);
+        var halls = await q
+            .OrderBy(h => h.Location.SortOrder).ThenBy(h => h.Location.Name)
+            .ThenBy(h => h.SeatingCapacity).ThenBy(h => h.Name)
+            .Select(h => new MeetingHallDto
+            {
+                Id = h.Id,
+                Code = h.Code,
+                Name = h.Name,
+                SeatingCapacity = h.SeatingCapacity,
+                IntercomNo = h.IntercomNo,
+                LocationId = h.LocationId,
+                LocationName = h.Location.Name,
+                IsActive = h.IsActive,
+            })
+            .ToListAsync();
+        if (halls.Count == 0) return halls;
+
+        // Visits are location-filtered for bound users; occupancy must reflect every visit in the tenant.
+        var tenantId = CurrentTenantId;
+        var hallIds = halls.Select(h => h.Id).ToList();
+        var occupied = await _db.VisitorVisits.IgnoreQueryFilters().AsNoTracking()
+            .Where(v => v.TenantId == tenantId && v.Status == VisitStatus.Inside
+                        && v.MeetingHallId != null && hallIds.Contains(v.MeetingHallId.Value))
+            .Select(v => new { HallId = v.MeetingHallId!.Value, v.VisitNumber, VisitorName = v.Visitor.FullName })
+            .ToListAsync();
+        foreach (var hall in halls)
+        {
+            var visit = occupied.FirstOrDefault(o => o.HallId == hall.Id);
+            hall.OccupiedByVisitNumber = visit?.VisitNumber;
+            hall.OccupiedByVisitorName = visit?.VisitorName;
+        }
+        return halls;
+    }
+
+    public async Task<MeetingHallDto> UpsertMeetingHallAsync(Guid? id, MeetingHallUpsertRequest request, string? user)
+    {
+        MeetingHall entity;
+        if (id.HasValue)
+        {
+            entity = await _db.MeetingHalls.FindAsync(id.Value) ?? throw new InvalidOperationException("Meeting hall not found.");
+            EnsureInUserLocation(entity.LocationId, "meeting hall");
+            entity.UpdatedAt = DateTime.UtcNow;
+            entity.UpdatedBy = user;
+        }
+        else
+        {
+            entity = new MeetingHall { TenantId = CurrentTenantId, CreatedBy = user };
+        }
+
+        var code = (request.Code ?? string.Empty).Trim();
+        var name = (request.Name ?? string.Empty).Trim();
+        if (code.Length == 0) throw new InvalidOperationException("Code is required.");
+        if (name.Length == 0) throw new InvalidOperationException("Name is required.");
+        if (request.SeatingCapacity < 1) throw new InvalidOperationException("Seating capacity must be at least 1.");
+
+        var locationId = request.LocationId ?? _tenant.LocationId
+            ?? throw new InvalidOperationException("Select a location for this meeting hall.");
+        EnsureInUserLocation(locationId, "meeting hall");
+        if (!await _db.Locations.AnyAsync(l => l.Id == locationId))
+            throw new InvalidOperationException("Selected location was not found.");
+        if (await _db.MeetingHalls.AnyAsync(h => h.Code == code && h.Id != entity.Id))
+            throw new InvalidOperationException($"Meeting hall code '{code}' is already in use.");
+
+        entity.Code = code;
+        entity.Name = name;
+        entity.SeatingCapacity = request.SeatingCapacity;
+        entity.IntercomNo = string.IsNullOrWhiteSpace(request.IntercomNo) ? null : request.IntercomNo.Trim();
+        entity.LocationId = locationId;
+        entity.IsActive = request.IsActive;
+        if (!id.HasValue) _db.MeetingHalls.Add(entity);
+        await _db.SaveChangesAsync();
+
+        return (await GetMeetingHallsAsync(activeOnly: false, locationId: entity.LocationId)).First(h => h.Id == entity.Id);
     }
 
     public Task<IReadOnlyList<MasterItemDto>> GetIdTypesAsync(bool activeOnly = true) =>
@@ -609,13 +743,20 @@ public class MasterDataService : IMasterDataService
                 d.IsActive = false; d.UpdatedAt = DateTime.UtcNow; d.UpdatedBy = user; break;
             case "purposes":
                 var p = await _db.VisitPurposes.FindAsync(id) ?? throw new InvalidOperationException("Not found");
+                EnsureInUserLocation(p.LocationId, "purpose");
                 p.IsActive = false; p.UpdatedAt = DateTime.UtcNow; p.UpdatedBy = user; break;
             case "locations":
                 var l = await _db.Locations.FindAsync(id) ?? throw new InvalidOperationException("Not found");
+                if (_tenant.LocationId is not null)
+                    throw new UnauthorizedAccessException("Only a Super Admin can deactivate a location.");
                 l.IsActive = false; l.UpdatedAt = DateTime.UtcNow; l.UpdatedBy = user; break;
             case "idtypes":
                 var i = await _db.IdTypes.FindAsync(id) ?? throw new InvalidOperationException("Not found");
                 i.IsActive = false; i.UpdatedAt = DateTime.UtcNow; i.UpdatedBy = user; break;
+            case "meeting-halls":
+                var h = await _db.MeetingHalls.FindAsync(id) ?? throw new InvalidOperationException("Not found");
+                EnsureInUserLocation(h.LocationId, "meeting hall");
+                h.IsActive = false; h.UpdatedAt = DateTime.UtcNow; h.UpdatedBy = user; break;
             default: throw new InvalidOperationException("Unknown master type");
         }
         await _db.SaveChangesAsync();
@@ -1106,20 +1247,26 @@ public class UserAdminService : IUserAdminService
 
     public async Task<IReadOnlyList<UserDto>> GetUsersAsync()
     {
-        var users = await _userManager.Users
+        var query = _userManager.Users
             .Include(u => u.Department)
             .Include(u => u.Location)
-            .OrderBy(u => u.FullName)
-            .ToListAsync();
+            .AsQueryable();
+        if (_tenant.LocationId is Guid scope)
+            query = query.Where(u => u.LocationId == scope);
+        var users = await query.OrderBy(u => u.FullName).ToListAsync();
         var faceCounts = await _db.UserFaceLogins
             .GroupBy(f => f.UserId)
             .Select(g => new { UserId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.UserId, x => x.Count);
+        var employeeByUser = new Dictionary<string, Guid>();
+        foreach (var link in await _db.Employees.Where(e => e.UserId != null).Select(e => new { e.UserId, e.Id }).ToListAsync())
+            employeeByUser.TryAdd(link.UserId!, link.Id);
         var result = new List<UserDto>();
         foreach (var u in users)
         {
             var roles = await _userManager.GetRolesAsync(u);
             var primaryRole = roles.FirstOrDefault() ?? string.Empty;
+            var allLocations = roles.Contains(AppRoles.SuperAdmin);
             result.Add(new UserDto
             {
                 Id = u.Id,
@@ -1129,12 +1276,13 @@ public class UserAdminService : IUserAdminService
                 Roles = roles.ToList(),
                 DepartmentId = u.DepartmentId,
                 DepartmentName = u.Department?.Name,
-                LocationId = u.LocationId,
-                LocationName = u.Location?.Name,
+                LocationId = allLocations ? null : u.LocationId,
+                LocationName = allLocations ? null : u.Location?.Name,
                 AllowedMenuKeys = MenuAccess.Deserialize(u.AllowedMenuKeysJson, primaryRole),
                 MustChangePassword = u.MustChangePassword,
                 IsActive = u.IsActive,
-                FaceLoginCount = faceCounts.GetValueOrDefault(u.Id)
+                FaceLoginCount = faceCounts.GetValueOrDefault(u.Id),
+                EmployeeId = employeeByUser.TryGetValue(u.Id, out var employeeId) ? employeeId : null
             });
         }
         return result;
@@ -1155,11 +1303,44 @@ public class UserAdminService : IUserAdminService
         return id;
     }
 
+    /// <summary>
+    /// Super Admins span every location, so they carry none. Admin and desk roles must have one, and an
+    /// Admin (who is bound to a location) can only hand out their own location and never Super Admin.
+    /// </summary>
+    private async Task<Guid?> ResolveUserLocationAsync(string role, Guid? requestedLocationId)
+    {
+        if (_tenant.LocationId is Guid scope)
+        {
+            if (string.Equals(role, AppRoles.SuperAdmin, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Only a Super Admin can give the Super Admin role.");
+            if (requestedLocationId is Guid asked && asked != Guid.Empty && asked != scope)
+                throw new UnauthorizedAccessException("You can only manage users at your own location.");
+            requestedLocationId = scope;
+        }
+
+        if (string.Equals(role, AppRoles.SuperAdmin, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var locationId = await ValidateLocationAsync(requestedLocationId);
+        if (locationId is null && AppRoles.LocationBound.Contains(role, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Select a location. Only Super Admins can work across all locations.");
+        return locationId;
+    }
+
+    /// <summary>An Admin may only manage users at their own location, and never a Super Admin.</summary>
+    private async Task EnsureCanManageUserAsync(ApplicationUser target)
+    {
+        if (_tenant.LocationId is not Guid scope) return;
+        if (target.LocationId != scope || await _userManager.IsInRoleAsync(target, AppRoles.SuperAdmin))
+            throw new UnauthorizedAccessException("You can only manage users at your own location.");
+    }
+
     public async Task<UserDto> CreateAsync(CreateUserRequest request, string? actor)
     {
-        await _entitlements.EnsureCanCreateUserAsync();
         if (!AppRoles.All.Contains(request.Role))
             throw new InvalidOperationException("Invalid role.");
+        var locationId = await ResolveUserLocationAsync(request.Role, request.LocationId);
+        await _entitlements.EnsureCanCreateUserAsync();
         var tenantId = _tenant.TenantId is Guid tid && tid != Guid.Empty
             ? tid
             : throw new UnauthorizedAccessException("Tenant context is required.");
@@ -1171,7 +1352,7 @@ public class UserAdminService : IUserAdminService
             FullName = request.FullName.Trim(),
             TenantId = tenantId,
             DepartmentId = request.DepartmentId,
-            LocationId = await ValidateLocationAsync(request.LocationId),
+            LocationId = locationId,
             AllowedMenuKeysJson = MenuAccess.Serialize(menus),
             IsActive = true,
             MustChangePassword = true,
@@ -1189,10 +1370,14 @@ public class UserAdminService : IUserAdminService
     {
         var user = await _userManager.Users.Include(u => u.Department).FirstOrDefaultAsync(u => u.Id == id)
             ?? throw new InvalidOperationException("User not found.");
+        if (!AppRoles.All.Contains(request.Role))
+            throw new InvalidOperationException("Invalid role.");
+        await EnsureCanManageUserAsync(user);
+        var locationId = await ResolveUserLocationAsync(request.Role, request.LocationId);
         user.FullName = request.FullName.Trim();
         user.Email = request.Email.Trim();
         user.DepartmentId = request.DepartmentId;
-        user.LocationId = await ValidateLocationAsync(request.LocationId);
+        user.LocationId = locationId;
         user.AllowedMenuKeysJson = MenuAccess.Serialize(
             MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys));
         user.IsActive = request.IsActive;
@@ -1211,6 +1396,7 @@ public class UserAdminService : IUserAdminService
             ?? throw new InvalidOperationException("User not found.");
         if (!actorIsSuperAdmin && await _userManager.IsInRoleAsync(user, AppRoles.SuperAdmin))
             throw new UnauthorizedAccessException("Only a Super Admin can reset a Super Admin's password.");
+        await EnsureCanManageUserAsync(user);
 
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
         var result = await _userManager.ResetPasswordAsync(user, token, request.NewPassword);
@@ -1236,6 +1422,8 @@ public class UserAdminService : IUserAdminService
             .Include(e => e.Location)
             .FirstOrDefaultAsync(e => e.Id == employeeId)
             ?? throw new InvalidOperationException("Employee not found.");
+        if (_tenant.LocationId is Guid scope && employee.LocationId != scope)
+            throw new UnauthorizedAccessException("You can only create logins for employees at your own location.");
         if (!employee.IsActive)
             throw new InvalidOperationException("Activate the employee before creating a login.");
         if (!string.IsNullOrWhiteSpace(employee.UserId)
@@ -1246,14 +1434,21 @@ public class UserAdminService : IUserAdminService
         if (string.IsNullOrWhiteSpace(email))
             throw new InvalidOperationException("Email is required. Add it to the employee or enter it for the login.");
 
+        var role = AppRoles.All.FirstOrDefault(r => string.Equals(r, request.Role?.Trim(), StringComparison.OrdinalIgnoreCase))
+            ?? (string.IsNullOrWhiteSpace(request.Role) ? AppRoles.Host : throw new InvalidOperationException("Invalid role."));
+        if (employee.LocationId is null && AppRoles.LocationBound.Contains(role, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"{employee.FullName} has no location. Set their location in Masters → Employees first; {role} logins work at one location.");
+
         var created = await CreateAsync(new CreateUserRequest
         {
             FullName = employee.FullName,
             Username = request.Username,
             Email = email,
-            Role = AppRoles.Host,
+            Role = role,
             DepartmentId = employee.DepartmentId,
             LocationId = employee.LocationId,
+            AllowedMenuKeys = request.AllowedMenuKeys,
             Password = request.Password
         }, actor);
 

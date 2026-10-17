@@ -8,7 +8,7 @@ import { TextInput, FieldLabel, PasswordInput, TextSelect } from '../components/
 import { useSettingsStore } from '../store/settingsStore'
 import { BrandLogo } from '../components/BrandLogo'
 import { assetUrl, cn, hasAnyRole } from '../lib/utils'
-import { FONT_PRESETS, THEME_PRESETS, applyBranding } from '../lib/branding'
+import { FONT_PRESETS, FONT_SIZES, THEME_PRESETS, applyBranding } from '../lib/branding'
 import { useI18n } from '../i18n'
 import { useAuthStore } from '../store/authStore'
 import { ApiKeysPanel } from '../components/ApiKeysPanel'
@@ -23,17 +23,26 @@ const SECTIONS = [
   { id: 'apiKeys', labelKey: 'settings.apiKeys', superAdminOnly: true },
 ] as const
 
+/** Stored once for the whole company, so only a Super Admin can change them. */
+const COMPANY_WIDE_SECTIONS: readonly string[] = ['general', 'visitor', 'security']
+
 export function SettingsPage() {
   const { t } = useI18n()
   const isSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
-  const visibleSections = SECTIONS.filter((s) => !('superAdminOnly' in s) || isSuperAdmin)
+  const userLocationId = useAuthStore((s) => s.user?.locationId) ?? ''
+  const locationBound = !isSuperAdmin && !!userLocationId
+  const visibleSections = SECTIONS.filter(
+    (s) =>
+      (!('superAdminOnly' in s) || isSuperAdmin) &&
+      (!locationBound || !COMPANY_WIDE_SECTIONS.includes(s.id)),
+  )
   const { settings, load, update, uploadLogo, loaded } = useSettingsStore()
   const [form, setForm] = useState<SettingsDto>(settings)
   const [smtpPassword, setSmtpPassword] = useState('')
   const [testEmailTo, setTestEmailTo] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
-  const [smtpLocationId, setSmtpLocationId] = useState('')
-  const [passLocationId, setPassLocationId] = useState('')
+  const [smtpLocationId, setSmtpLocationId] = useState(locationBound ? userLocationId : '')
+  const [passLocationId, setPassLocationId] = useState(locationBound ? userLocationId : '')
   const [locations, setLocations] = useState<MasterItemDto[]>([])
   const [loadingSmtp, setLoadingSmtp] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -83,6 +92,7 @@ export function SettingsPage() {
           logoPath: locSettings.logoPath,
           themePreset: locSettings.themePreset,
           fontPreset: locSettings.fontPreset,
+          fontSize: locSettings.fontSize,
           smtpEnabled: locSettings.smtpEnabled,
           smtpHost: locSettings.smtpHost,
           smtpPort: locSettings.smtpPort,
@@ -93,7 +103,7 @@ export function SettingsPage() {
           smtpIgnoreSslErrors: locSettings.smtpIgnoreSslErrors,
           smtpPasswordConfigured: locSettings.smtpPasswordConfigured,
         }))
-        applyBranding(locSettings.themePreset, locSettings.fontPreset)
+        applyBranding(locSettings.themePreset, locSettings.fontPreset, locSettings.fontSize)
         setSmtpPassword('')
       } catch (err) {
         if (!cancelled) setError(apiErrorMessage(err, 'Unable to load location settings.'))
@@ -140,8 +150,12 @@ export function SettingsPage() {
   function patchForm(partial: Partial<SettingsDto>) {
     const next = { ...form, ...partial }
     setForm(next)
-    if (partial.themePreset !== undefined || partial.fontPreset !== undefined) {
-      applyBranding(next.themePreset, next.fontPreset)
+    if (
+      partial.themePreset !== undefined ||
+      partial.fontPreset !== undefined ||
+      partial.fontSize !== undefined
+    ) {
+      applyBranding(next.themePreset, next.fontPreset, next.fontSize)
     }
   }
 
@@ -189,6 +203,7 @@ export function SettingsPage() {
         companyName: next.companyName,
         themePreset: next.themePreset,
         fontPreset: next.fontPreset,
+        fontSize: next.fontSize,
       }))
       setMessage('Logo updated.')
     } catch (err) {
@@ -339,7 +354,7 @@ export function SettingsPage() {
                     onChange={(e) => setSmtpLocationId(e.target.value)}
                     disabled={loadingSmtp}
                   >
-                    <option value="">{t('settings.smtpLocationDefault')}</option>
+                    {locationBound ? null : <option value="">{t('settings.smtpLocationDefault')}</option>}
                     {locations.map((loc) => (
                       <option key={loc.id} value={loc.id}>
                         {loc.name}
@@ -391,6 +406,23 @@ export function SettingsPage() {
                     }}
                   >
                     The quick brown fox jumps over the lazy dog — 0123456789
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel htmlFor="fontSize">Font size</FieldLabel>
+                  <TextSelect
+                    id="fontSize"
+                    value={form.fontSize}
+                    onChange={(e) => patchForm({ fontSize: e.target.value })}
+                  >
+                    {FONT_SIZES.map((size) => (
+                      <option key={size.id} value={size.id}>
+                        {size.label}
+                      </option>
+                    ))}
+                  </TextSelect>
+                  <p className="mt-1 text-xs text-ink-muted">
+                    Scales text and spacing across the whole app.
                   </p>
                 </div>
               </>
@@ -447,7 +479,7 @@ export function SettingsPage() {
                     value={passLocationId}
                     onChange={(e) => setPassLocationId(e.target.value)}
                   >
-                    <option value="">{t('settings.smtpLocationDefault')}</option>
+                    {locationBound ? null : <option value="">{t('settings.smtpLocationDefault')}</option>}
                     {locations.map((loc) => (
                       <option key={loc.id} value={loc.id}>
                         {loc.name}
@@ -552,7 +584,7 @@ export function SettingsPage() {
                     value={smtpLocationId}
                     onChange={(e) => setSmtpLocationId(e.target.value)}
                   >
-                    <option value="">{t('settings.smtpLocationDefault')}</option>
+                    {locationBound ? null : <option value="">{t('settings.smtpLocationDefault')}</option>}
                     {locations.map((l) => (
                       <option key={l.id} value={l.id}>{l.name}</option>
                     ))}
@@ -742,7 +774,8 @@ export function SettingsPage() {
           />
           <p className="mt-2 text-xs text-ink-muted">
             {THEME_PRESETS.find((th) => th.id === form.themePreset)?.label ?? 'Theme'} ·{' '}
-            {FONT_PRESETS.find((f) => f.id === form.fontPreset)?.label ?? 'Font'}
+            {FONT_PRESETS.find((f) => f.id === form.fontPreset)?.label ?? 'Font'} ·{' '}
+            {FONT_SIZES.find((s) => s.id === form.fontSize)?.label ?? 'Medium'}
           </p>
           <button
             type="button"

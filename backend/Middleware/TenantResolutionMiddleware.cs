@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.Models;
+using Tiaano.Vms.Api.Models.Enums;
 using Tiaano.Vms.Api.Services;
 
 namespace Tiaano.Vms.Api.Middleware;
@@ -37,13 +38,30 @@ public class TenantResolutionMiddleware
                 return;
             }
 
+            // Only a Super Admin spans every location. Anyone else whose location is missing or no longer
+            // active must not fall back to tenant-wide visibility.
             Guid? locationId = null;
-            var locationRaw = context.User.FindFirstValue(TenantClaims.LocationIdClaim);
-            if (Guid.TryParse(locationRaw, out var lid) && lid != Guid.Empty)
+            if (!context.User.IsInRole(AppRoles.SuperAdmin))
             {
-                var locationOk = await db.Locations.IgnoreQueryFilters().AsNoTracking()
-                    .AnyAsync(l => l.Id == lid && l.TenantId == tenantId && l.IsActive);
-                if (locationOk) locationId = lid;
+                var locationRaw = context.User.FindFirstValue(TenantClaims.LocationIdClaim);
+                if (Guid.TryParse(locationRaw, out var lid) && lid != Guid.Empty)
+                {
+                    var locationOk = await db.Locations.IgnoreQueryFilters().AsNoTracking()
+                        .AnyAsync(l => l.Id == lid && l.TenantId == tenantId && l.IsActive);
+                    if (!locationOk)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                        await context.Response.WriteAsJsonAsync(new { success = false, message = "Your location is inactive or no longer exists. Ask a Super Admin to assign another location." });
+                        return;
+                    }
+                    locationId = lid;
+                }
+                else if (context.User.IsInRole(AppRoles.Admin))
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    await context.Response.WriteAsJsonAsync(new { success = false, message = "No location is assigned to your login. Ask a Super Admin to assign one." });
+                    return;
+                }
             }
 
             tenantContext.Set(tenantId, locationId);
