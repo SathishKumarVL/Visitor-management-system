@@ -72,7 +72,7 @@ public class ChangePasswordRequest
     [Required]
     public string CurrentPassword { get; set; } = string.Empty;
 
-    [Required, MinLength(10)]
+    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number and a special character.")]
     public string NewPassword { get; set; } = string.Empty;
 }
 
@@ -90,13 +90,13 @@ public class ResetPasswordRequest
     [Required]
     public string Token { get; set; } = string.Empty;
 
-    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters.")]
+    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number and a special character.")]
     public string NewPassword { get; set; } = string.Empty;
 }
 
 public class AdminResetPasswordRequest
 {
-    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters.")]
+    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number and a special character.")]
     public string NewPassword { get; set; } = string.Empty;
 
     /// <summary>Force the user to choose their own password at next sign-in.</summary>
@@ -161,7 +161,7 @@ public class CreateUserRequest
     /// <summary>Sidebar menus this user may see. Restricted to menus allowed for <see cref="Role"/>.</summary>
     public List<string>? AllowedMenuKeys { get; set; }
 
-    [Required, MinLength(10)]
+    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number and a special character.")]
     public string Password { get; set; } = string.Empty;
 }
 
@@ -197,9 +197,185 @@ public class MasterItemDto
     public string? Intercom { get; set; }
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
+    /// <summary>Locations only: whether visits here need minutes of meeting.</summary>
+    public bool? MomRequired { get; set; }
     public bool IsDefault { get; set; }
     public Guid? LocationId { get; set; }
     public string? LocationName { get; set; }
+    /// <summary>Purposes only: extra text fields asked at walk-in registration.</summary>
+    public List<PurposeFieldDto>? Fields { get; set; }
+}
+
+public class PurposeFieldDto
+{
+    /// <summary>Empty for a field added in this edit.</summary>
+    public Guid? Id { get; set; }
+    [MaxLength(100)]
+    public string Label { get; set; } = string.Empty;
+    public bool IsRequired { get; set; }
+    /// <summary>"text" (default) or "lookup".</summary>
+    public string? Type { get; set; }
+    public Guid? LookupSourceId { get; set; }
+}
+
+public class PurposeFieldValueRequest
+{
+    public Guid FieldId { get; set; }
+    [MaxLength(500)]
+    public string? Value { get; set; }
+    /// <summary>Token from a lookup search result; absent when the value was typed by hand.</summary>
+    [MaxLength(12000)]
+    public string? LookupToken { get; set; }
+}
+
+public class PurposeFieldValueDto
+{
+    public string Purpose { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    public bool? Verified { get; set; }
+    public string? Source { get; set; }
+    public string? RecordId { get; set; }
+    public List<LookupDetailDto>? Details { get; set; }
+    public string? MatchAgainst { get; set; }
+    public bool? Matched { get; set; }
+}
+
+public class LookupDetailDto
+{
+    public string Label { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+}
+
+public class LookupSavedFieldDto
+{
+    [MaxLength(200)]
+    public string Path { get; set; } = string.Empty;
+    [MaxLength(100)]
+    public string Label { get; set; } = string.Empty;
+}
+
+public class LookupSourceDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string SearchUrl { get; set; } = string.Empty;
+    public string HttpMethod { get; set; } = "GET";
+    public string? BodyTemplate { get; set; }
+    public string? ApiKeyHeader { get; set; }
+    public bool HasApiKey { get; set; }
+    public string? ResultsPath { get; set; }
+    public string IdPath { get; set; } = string.Empty;
+    public string DisplayTemplate { get; set; } = string.Empty;
+    public List<LookupSavedFieldDto> SavedFields { get; set; } = new();
+    public string? MatchPath { get; set; }
+    public string? MatchAgainst { get; set; }
+    public bool BlockOnMismatch { get; set; }
+    public int MinChars { get; set; }
+    public int TimeoutSeconds { get; set; }
+    public bool IsActive { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+}
+
+public class LookupSourceUpsertRequest
+{
+    [Required, MaxLength(100)]
+    public string Name { get; set; } = string.Empty;
+    [Required, MaxLength(1000)]
+    public string SearchUrl { get; set; } = string.Empty;
+    [MaxLength(10)]
+    public string? HttpMethod { get; set; }
+    [MaxLength(4000)]
+    public string? BodyTemplate { get; set; }
+    [MaxLength(100)]
+    public string? ApiKeyHeader { get; set; }
+    /// <summary>Blank keeps the saved key.</summary>
+    [MaxLength(2000)]
+    public string? ApiKey { get; set; }
+    public bool ClearApiKey { get; set; }
+    [MaxLength(200)]
+    public string? ResultsPath { get; set; }
+    [Required, MaxLength(200)]
+    public string IdPath { get; set; } = string.Empty;
+    [Required, MaxLength(300)]
+    public string DisplayTemplate { get; set; } = string.Empty;
+    public List<LookupSavedFieldDto>? SavedFields { get; set; }
+    [MaxLength(200)]
+    public string? MatchPath { get; set; }
+    [MaxLength(20)]
+    public string? MatchAgainst { get; set; }
+    public bool BlockOnMismatch { get; set; }
+    public int MinChars { get; set; } = 3;
+    public int TimeoutSeconds { get; set; } = 5;
+    public bool IsActive { get; set; } = true;
+}
+
+public class LookupTestRequest
+{
+    /// <summary>Saved source whose API key is used when <see cref="Source"/> leaves the key blank.</summary>
+    public Guid? Id { get; set; }
+    [Required]
+    public LookupSourceUpsertRequest Source { get; set; } = new();
+    [Required, MaxLength(100)]
+    public string Query { get; set; } = string.Empty;
+    /// <summary>Values for <c>{field:Label}</c> placeholders.</summary>
+    public Dictionary<string, string>? Context { get; set; }
+}
+
+public class LookupSearchRequest
+{
+    [MaxLength(100)]
+    public string? Query { get; set; }
+    /// <summary>The purpose's other extra fields as typed so far, by label, for <c>{field:Label}</c> placeholders.</summary>
+    public Dictionary<string, string>? Context { get; set; }
+}
+
+public class LookupTestResultDto
+{
+    public bool Ok { get; set; }
+    public string? Error { get; set; }
+    public int? StatusCode { get; set; }
+    public int RecordCount { get; set; }
+    public List<LookupMatchDto> Matches { get; set; } = new();
+    /// <summary>Start of the raw response, to help pick the JSON paths.</summary>
+    public string? RawSample { get; set; }
+}
+
+public class LookupMatchDto
+{
+    public string Token { get; set; } = string.Empty;
+    public string RecordId { get; set; } = string.Empty;
+    public string Display { get; set; } = string.Empty;
+    public List<LookupDetailDto> Details { get; set; } = new();
+    public bool HasMatchCheck { get; set; }
+    /// <summary>Only filled by the SuperAdmin test, never in staff search results.</summary>
+    public List<string>? MatchValues { get; set; }
+}
+
+public class LookupSourceOptionDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int MinChars { get; set; }
+    public bool IsActive { get; set; }
+}
+
+public class LookupCheckRequest
+{
+    [Required, MaxLength(12000)]
+    public string Token { get; set; } = string.Empty;
+    [MaxLength(20)]
+    public string? Telephone { get; set; }
+    [MaxLength(150)]
+    public string? Email { get; set; }
+}
+
+public class LookupCheckResultDto
+{
+    public string? MatchAgainst { get; set; }
+    /// <summary>Null when the source has no check or the visitor's mobile/email is not entered yet.</summary>
+    public bool? Matched { get; set; }
+    public bool BlockOnMismatch { get; set; }
 }
 
 public class EmployeeDto
@@ -278,7 +454,7 @@ public class CreateEmployeeLoginRequest
     [EmailAddress]
     public string? Email { get; set; }
 
-    [Required, MinLength(10)]
+    [Required, MinLength(10, ErrorMessage = "Password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number and a special character.")]
     public string Password { get; set; } = string.Empty;
 
     /// <summary>Role of the new login; defaults to Host (shown as "Employee").</summary>
@@ -361,6 +537,8 @@ public class RegisterVisitorRequest
     public string? PlantNumber { get; set; }
     public string? OtherLocationText { get; set; }
     public string? PurposeNotes { get; set; }
+    /// <summary>Answers to the extra fields of the selected purposes.</summary>
+    public List<PurposeFieldValueRequest>? PurposeFields { get; set; }
     public string? Notes { get; set; }
     public bool IsWalkIn { get; set; } = true;
     public int NumberOfPersons { get; set; } = 1;
@@ -440,6 +618,58 @@ public class RegisterDevicePushTokenRequest
 
     [MaxLength(40)]
     public string Platform { get; set; } = "unknown";
+}
+
+/// <summary>A browser PushSubscription (subscription.toJSON()).</summary>
+public class WebPushSubscribeRequest
+{
+    [Required, MaxLength(500)]
+    public string Endpoint { get; set; } = string.Empty;
+
+    [Required, MaxLength(200)]
+    public string P256dh { get; set; } = string.Empty;
+
+    [Required, MaxLength(100)]
+    public string Auth { get; set; } = string.Empty;
+}
+
+public class WebPushUnsubscribeRequest
+{
+    [Required, MaxLength(500)]
+    public string Endpoint { get; set; } = string.Empty;
+}
+
+public class WebPushStatusDto
+{
+    public string PublicKey { get; set; } = string.Empty;
+    /// <summary>Browsers / phones where this user turned on notifications.</summary>
+    public int Devices { get; set; }
+}
+
+public class NotificationItemDto
+{
+    public Guid VisitId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? Subtitle { get; set; }
+    /// <summary>Appointment time ("HH:mm") for today's appointments.</summary>
+    public string? Time { get; set; }
+    /// <summary>UTC moment: check-out for pending minutes, request time for approvals.</summary>
+    public DateTime? At { get; set; }
+    public string Link { get; set; } = string.Empty;
+}
+
+/// <summary>What the header bell shows for the signed-in user.</summary>
+public class NotificationSummaryDto
+{
+    public int Total { get; set; }
+    /// <summary>False when the list is every expected visitor today (desk roles), not only the user's own.</summary>
+    public bool AppointmentsAreMine { get; set; }
+    public int AppointmentsTodayCount { get; set; }
+    public List<NotificationItemDto> AppointmentsToday { get; set; } = new();
+    public int MomPendingCount { get; set; }
+    public List<NotificationItemDto> MomPending { get; set; } = new();
+    public int ApprovalsCount { get; set; }
+    public List<NotificationItemDto> Approvals { get; set; } = new();
 }
 
 public class FaceSearchRequest
@@ -604,8 +834,13 @@ public class VisitorListItemDto
 
 public class VisitorDetailDto : VisitorListItemDto
 {
+    public Guid HostEmployeeId { get; set; }
+    public Guid DepartmentId { get; set; }
+    public IReadOnlyList<Guid> PurposeIds { get; set; } = Array.Empty<Guid>();
+    public IReadOnlyList<Guid> LocationIds { get; set; } = Array.Empty<Guid>();
     public string? Intercom { get; set; }
     public string? PurposeNotes { get; set; }
+    public IReadOnlyList<PurposeFieldValueDto> PurposeFields { get; set; } = Array.Empty<PurposeFieldValueDto>();
     public string? Notes { get; set; }
     /// <summary>Minutes of meeting: discussion points.</summary>
     public string? MeetingMinutes { get; set; }
@@ -850,6 +1085,7 @@ public class PassDto
     public string HostName { get; set; } = string.Empty;
     public string DepartmentName { get; set; } = string.Empty;
     public IReadOnlyList<string> Purposes { get; set; } = Array.Empty<string>();
+    public IReadOnlyList<PurposeFieldValueDto> PurposeFields { get; set; } = Array.Empty<PurposeFieldValueDto>();
     public IReadOnlyList<string> Locations { get; set; } = Array.Empty<string>();
     public string VisitNumber { get; set; } = string.Empty;
     public DateTime? CheckInAt { get; set; }
@@ -944,8 +1180,12 @@ public class MasterUpsertRequest
     public bool IsActive { get; set; } = true;
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
+    /// <summary>Locations only. Null keeps the current setting (new locations default to required).</summary>
+    public bool? MomRequired { get; set; }
     public bool IsDefault { get; set; }
     public Guid? LocationId { get; set; }
+    /// <summary>Purposes only. Null keeps the current fields (older clients); an empty list removes them.</summary>
+    public List<PurposeFieldDto>? Fields { get; set; }
 }
 
 public class MeetingHallDto

@@ -22,9 +22,8 @@ import { PassPrintPage } from './pages/PassPrintPage'
 import { VerifyVisitorPage } from './pages/VerifyVisitorPage'
 import { FaceCheckoutPage } from './pages/FaceCheckoutPage'
 import { ReportsPage } from './pages/ReportsPage'
-import { DepartmentsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
+import { DepartmentsPage, DesignationsPage, LocationsPage, PurposesPage } from './pages/MastersPages'
 import { FeedbackQuestionsPage } from './pages/FeedbackQuestionsPage'
-import { MailContentPage } from './pages/MailContentPage'
 import { MeetingHallsPage } from './pages/MeetingHallsPage'
 import { EmployeeMasterPage } from './pages/EmployeeMasterPage'
 import { ManualCheckoutsPage } from './pages/ManualCheckoutsPage'
@@ -113,10 +112,11 @@ export default function App() {
               <Route path="/masters/employees" element={<Navigate to="/employee-master" replace />} />
               <Route path="/masters/hosts" element={<Navigate to="/employee-master" replace />} />
               <Route path="/masters/departments" element={<DepartmentsPage />} />
+              <Route path="/masters/designations" element={<DesignationsPage />} />
               <Route path="/masters/purposes" element={<PurposesPage />} />
               <Route path="/masters/locations" element={<LocationsPage />} />
               <Route path="/masters/feedback" element={<FeedbackQuestionsPage />} />
-              <Route path="/masters/mail-content" element={<MailContentPage />} />
+              <Route path="/masters/mail-content" element={<Navigate to="/settings?tab=mailContent" replace />} />
               <Route path="/masters/meeting-halls" element={<MeetingHallsPage />} />
               <Route path="/users" element={<Navigate to="/employee-master" replace />} />
               <Route path="/settings" element={<SettingsPage />} />

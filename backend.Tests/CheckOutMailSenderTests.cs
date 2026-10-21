@@ -19,13 +19,13 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
         public List<(string Recipient, MailSender? Sender, string Subject, string Body)> Sent { get; } = [];
 
         public Task NotifyAsync(string channel, string recipient, string subject, string body,
-            string? idempotencyKey = null, Guid? locationId = null, MailSender? sender = null)
+            string? idempotencyKey = null, Guid? locationId = null, MailSender? sender = null, string? link = null)
         {
             Sent.Add((recipient, sender, subject, body));
             return Task.CompletedTask;
         }
 
-        public Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null) =>
+        public Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null, MailSender? sender = null) =>
             Task.FromResult((true, ""));
 
         public Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20) => Task.FromResult((0, 0));
@@ -48,22 +48,48 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
         MomentLocal: DateTime.Now);
 
     private async Task<List<(string Recipient, MailSender? Sender, string Subject, string Body)>> SendAsync(
-        bool sendAsHost, bool appointment = false, VisitMailContext? minutes = null)
+        bool sendAsHost, bool appointment = false, VisitMailContext? minutes = null,
+        bool hostOnly = false, VisitMailContext? context = null)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var notifications = new CapturingNotifications();
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Mail:CheckOutSendAsHost"] = sendAsHost.ToString() })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Mail:CheckOutSendAsHost"] = sendAsHost.ToString(),
+                ["Mail:SendAsHostOnly"] = hostOnly.ToString(),
+            })
             .Build();
         var service = new VisitMailService(db, notifications, NullLogger<VisitMailService>.Instance, config);
         if (minutes is not null)
             await service.SendMeetingMinutesAsync(minutes);
         else if (appointment)
-            await service.SendAppointmentAsync(Context());
+            await service.SendAppointmentAsync(context ?? Context());
         else
-            await service.SendCheckOutAsync(Context());
+            await service.SendCheckOutAsync(context ?? Context());
         return notifications.Sent;
+    }
+
+    [Fact]
+    public async Task Host_Only_Mode_Sends_Visitor_Mails_From_The_Host_Address()
+    {
+        var sent = await SendAsync(sendAsHost: false, appointment: true, hostOnly: true);
+
+        var visitorCopy = Assert.Single(sent, s => s.Recipient == "asha@example.test");
+        Assert.Equal("suresh.baskar@example.test", visitorCopy.Sender!.FromAddress);
+    }
+
+    [Fact]
+    public async Task Host_Only_Mode_Skips_Visitor_Mail_When_Host_Has_No_Email()
+    {
+        var noHostEmail = Context() with { VisitingPersonEmail = null };
+
+        var checkOut = await SendAsync(sendAsHost: true, hostOnly: true, context: noHostEmail);
+        var appointment = await SendAsync(sendAsHost: true, appointment: true, hostOnly: true, context: noHostEmail);
+
+        Assert.Empty(checkOut);
+        Assert.Empty(appointment);
     }
 
     [Fact]

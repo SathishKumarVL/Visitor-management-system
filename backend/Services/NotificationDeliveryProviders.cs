@@ -11,7 +11,10 @@ public interface INotificationDeliveryProvider
 /// <summary>Email provider that can optionally skip Development mail-pickup fallback (used by SMTP test).</summary>
 public interface IEmailNotificationProvider : INotificationDeliveryProvider
 {
-    /// <summary>Send via real SMTP only — never write a local .eml pickup file.</summary>
+    /// <summary>
+    /// Send via real SMTP only — never write a local .eml pickup file, and never fall back to the company mailbox
+    /// when the server refuses the row's From address.
+    /// </summary>
     Task DeliverStrictAsync(NotificationOutbox row, CancellationToken ct = default);
 }
 
@@ -20,15 +23,18 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
     private readonly ISettingsService _settings;
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<EmailNotificationProvider> _logger;
+    private readonly bool _sendAsHostOnly;
 
     public EmailNotificationProvider(
         ISettingsService settings,
         IWebHostEnvironment env,
-        ILogger<EmailNotificationProvider> logger)
+        ILogger<EmailNotificationProvider> logger,
+        IConfiguration configuration)
     {
         _settings = settings;
         _env = env;
         _logger = logger;
+        _sendAsHostOnly = configuration.GetValue<bool>("Mail:SendAsHostOnly");
     }
 
     public string Channel => "Email";
@@ -55,7 +61,7 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
             }
             else
             {
-                await SendViaSmtpAsync(row, smtp, ct);
+                await SendViaSmtpAsync(row, smtp, strictSender: _sendAsHostOnly || !allowDevPickupFallback, ct);
             }
         }
         catch (Exception ex) when (allowDevPickupFallback && _env.IsDevelopment() && smtp.FallbackToPickupOnFailure)
@@ -66,12 +72,14 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
                 "SMTP delivery failed in Development for {Recipient}; writing .eml to mail-pickup instead.",
                 row.Recipient);
             await WritePickupAsync(row, smtp, ct);
+            _logger.LogWarning("Email NOT sent to {Recipient} (saved to mail-pickup): {Subject}", row.Recipient, row.Subject);
+            return;
         }
 
         _logger.LogInformation("Email delivered to {Recipient}: {Subject}", row.Recipient, row.Subject);
     }
 
-    private async Task SendViaSmtpAsync(NotificationOutbox row, SmtpRuntimeOptions smtp, CancellationToken ct)
+    private async Task SendViaSmtpAsync(NotificationOutbox row, SmtpRuntimeOptions smtp, bool strictSender, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(smtp.Host))
             throw new InvalidOperationException("Smtp host is required for SMTP delivery.");
@@ -98,6 +106,13 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
             !string.IsNullOrWhiteSpace(row.FromAddress)
             && ex.ErrorCode is MailKit.Net.Smtp.SmtpErrorCode.SenderNotAccepted or MailKit.Net.Smtp.SmtpErrorCode.MessageNotAccepted)
         {
+            if (strictSender)
+            {
+                throw new InvalidOperationException(
+                    $"The mail server refused to send as {row.FromAddress.Trim()}. Give the SMTP login " +
+                    $"'{smtp.Username}' Send As permission on that mailbox. Server said: {ex.Message}", ex);
+            }
+
             // The mailbox is not allowed to send as the host (no "Send As" right): still deliver, from the
             // company mailbox with the host's name and Reply-To, rather than losing the mail.
             _logger.LogWarning(ex,
@@ -148,9 +163,12 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
         if (ignoreSsl)
             client.ServerCertificateValidationCallback = static (_, _, _, _) => true;
 
-        var socketOptions = smtp.EnableSsl
-            ? MailKit.Security.SecureSocketOptions.StartTls
-            : MailKit.Security.SecureSocketOptions.None;
+        // Port 465 is TLS from the first byte; STARTTLS there just hangs until the timeout.
+        var socketOptions = smtp.Port == 465
+            ? MailKit.Security.SecureSocketOptions.SslOnConnect
+            : smtp.EnableSsl
+                ? MailKit.Security.SecureSocketOptions.StartTls
+                : MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable;
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(smtp.TimeoutSeconds));
@@ -193,21 +211,28 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
     }
 }
 
-/// <summary>Stub push delivery — logs and marks the outbox row as handled by the caller.</summary>
+/// <summary>Push delivery to the browsers / phones where the recipient (a user id) turned on notifications.</summary>
 public sealed class PushNotificationProvider : INotificationDeliveryProvider
 {
+    private readonly IWebPushService _push;
     private readonly ILogger<PushNotificationProvider> _logger;
 
-    public PushNotificationProvider(ILogger<PushNotificationProvider> logger) => _logger = logger;
+    public PushNotificationProvider(IWebPushService push, ILogger<PushNotificationProvider> logger)
+    {
+        _push = push;
+        _logger = logger;
+    }
 
     public string Channel => "Push";
 
-    public Task DeliverAsync(NotificationOutbox row, CancellationToken ct = default)
+    public async Task DeliverAsync(NotificationOutbox row, CancellationToken ct = default)
     {
-        _logger.LogInformation(
-            "Push stub delivery to user/token {Recipient}: {Subject}",
-            row.Recipient,
-            row.Subject);
-        return Task.CompletedTask;
+        if (row.TenantId is not Guid tenantId || tenantId == Guid.Empty)
+            throw new InvalidOperationException("Push notification has no tenant.");
+
+        var delivered = await _push.SendToUserAsync(tenantId, row.Recipient,
+            new PushMessage(row.Subject, row.Body, row.Link, row.IdempotencyKey), ct);
+        if (delivered == 0)
+            _logger.LogDebug("No push devices for user {Recipient}: {Subject}", row.Recipient, row.Subject);
     }
 }

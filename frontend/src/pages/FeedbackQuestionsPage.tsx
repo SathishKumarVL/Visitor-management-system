@@ -17,7 +17,8 @@ import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
 import { useSort } from '../lib/useSort'
 import { SortHeader } from '../components/ui/SortHeader'
-import { formatDateTime, cn } from '../lib/utils'
+import { formatDateTime, cn, hasAnyRole } from '../lib/utils'
+import { useAuthStore } from '../store/authStore'
 
 const blank = (locationId: string | null = null): FeedbackQuestionUpsertRequest => ({
   prompt: '',
@@ -62,6 +63,7 @@ export function FeedbackQuestionsPage() {
   )
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const isSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
   const [message, setMessage] = useState<string | null>(null)
   const [editing, setEditing] = useState<FeedbackQuestionDto | null>(null)
   const [form, setForm] = useState<FeedbackQuestionUpsertRequest>(blank())
@@ -159,6 +161,19 @@ export function FeedbackQuestionsPage() {
     try {
       await mastersApi.deactivateFeedbackQuestion(id)
       setMessage('Deactivated.')
+      await loadQuestions()
+    } catch (e) {
+      setError(apiErrorMessage(e))
+    }
+  }
+
+  async function remove(item: FeedbackQuestionDto) {
+    if (!window.confirm(`Delete the question "${item.prompt}" permanently? Past ratings keep the question text.`)) return
+    setError(null)
+    setMessage(null)
+    try {
+      await mastersApi.remove('feedback-questions', item.id)
+      setMessage('Question deleted.')
       await loadQuestions()
     } catch (e) {
       setError(apiErrorMessage(e))
@@ -321,6 +336,11 @@ export function FeedbackQuestionsPage() {
                           {item.isActive ? (
                             <Button size="sm" variant="danger" onClick={() => void deactivate(item.id)}>
                               Deactivate
+                            </Button>
+                          ) : null}
+                          {isSuperAdmin ? (
+                            <Button size="sm" variant="danger" onClick={() => void remove(item)}>
+                              Delete
                             </Button>
                           ) : null}
                         </div>

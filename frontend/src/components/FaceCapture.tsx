@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FaceCameraPanel } from './FaceCameraPanel'
 import { Button } from './ui/Button'
-import { captureFaceJpeg } from '../lib/cameraCapture'
+import { captureFaceJpeg, openFaceCamera, toggleCameraFacing } from '../lib/cameraCapture'
 
 type Props = {
   onCapture: (photoBase64: string) => void
@@ -37,10 +37,7 @@ export function FaceCapture({
     setFailed(false)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      })
+      const stream = await openFaceCamera()
       if (attempt !== attemptRef.current) {
         stream.getTracks().forEach((t) => t.stop())
         return
@@ -77,7 +74,14 @@ export function FaceCapture({
 
   return (
     <div className="space-y-3">
-      <FaceCameraPanel videoRef={videoRef} photoUrl={photoUrl} />
+      <FaceCameraPanel
+        videoRef={videoRef}
+        photoUrl={photoUrl}
+        onSwitchCamera={() => {
+          toggleCameraFacing()
+          void start()
+        }}
+      />
       {!photoUrl && failed ? (
         <Button type="button" variant="secondary" className="w-full" onClick={() => void start()}>
           Start camera

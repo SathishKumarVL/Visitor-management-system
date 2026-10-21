@@ -7,11 +7,13 @@
     <RootNamespace>Tiaano.Vms.Api</RootNamespace>
     <AssemblyName>Tiaano.Vms.Api</AssemblyName>
     <UserSecretsId>tiaano-vms-api-dev-secrets</UserSecretsId>
+    <!-- Old publish outputs and local runtime data sit inside the project folder; keep them out of builds and releases. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);publish-*\**;App_Data\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.104.2" />
-    <PackageReference Include="MailKit" Version="4.15.1" />
+    <PackageReference Include="MailKit" Version="4.16.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.4" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.4" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.4" />
@@ -27,6 +29,12 @@
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.3.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.6.1" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
+  </ItemGroup>
+
+  <!-- Runtime uploads from this machine (visitor photos, tenant logos) must never ship in a release. -->
+  <ItemGroup>
+    <Content Update="wwwroot\uploads\**;wwwroot\branding\tenants\**;appsettings.Development.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
 </Project>

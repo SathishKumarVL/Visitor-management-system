@@ -25,6 +25,9 @@ public interface IMasterDataService
     Task<IReadOnlyList<MasterItemDto>> GetIdTypesAsync(bool activeOnly = true);
     Task<MasterItemDto> UpsertIdTypeAsync(Guid? id, MasterUpsertRequest request, string? user);
     Task DeactivateMasterAsync(string type, Guid id, string? user);
+    Task DeleteMasterAsync(string type, Guid id);
+    Task<IReadOnlyList<MasterItemDto>> GetDesignationsAsync(bool activeOnly = true);
+    Task<MasterItemDto> UpsertDesignationAsync(Guid? id, MasterUpsertRequest request, string? user);
     Task<IReadOnlyList<MailContentTemplateDto>> GetMailContentsAsync(Guid? locationId = null);
     Task<MailContentTemplateDto> UpsertMailContentAsync(MailContentUpsertRequest request, string? user);
     Task<IReadOnlyList<MeetingHallDto>> GetMeetingHallsAsync(bool activeOnly = true, Guid? locationId = null);
@@ -209,6 +212,7 @@ public class MasterDataService : IMasterDataService
             if (!locOk) throw new InvalidOperationException("Selected location was not found.");
         }
 
+        await DesignationMaster.EnsureAsync(_db, entity.TenantId, entity.Designation, user);
         await _db.SaveChangesAsync();
         await _db.Entry(entity).Reference(e => e.Department).LoadAsync();
         await _db.Entry(entity).Reference(e => e.Location).LoadAsync();
@@ -251,16 +255,22 @@ public class MasterDataService : IMasterDataService
         if (activeOnly) q = q.Where(x => x.IsActive);
         if (locationId.HasValue)
             q = q.Where(x => x.LocationId == null || x.LocationId == locationId.Value);
-        return await q.OrderBy(x => x.SortOrder).Select(x => new MasterItemDto
+        var rows = await q.OrderBy(x => x.SortOrder).Select(x => new
         {
-            Id = x.Id,
-            Name = x.Name,
-            Code = x.Code,
-            IsActive = x.IsActive,
-            SortOrder = x.SortOrder,
-            LocationId = x.LocationId,
-            LocationName = x.Location != null ? x.Location.Name : null,
+            Item = new MasterItemDto
+            {
+                Id = x.Id,
+                Name = x.Name,
+                Code = x.Code,
+                IsActive = x.IsActive,
+                SortOrder = x.SortOrder,
+                LocationId = x.LocationId,
+                LocationName = x.Location != null ? x.Location.Name : null,
+            },
+            x.FieldsJson,
         }).ToListAsync();
+        foreach (var row in rows) row.Item.Fields = PurposeFields.ToDtos(row.FieldsJson);
+        return rows.Select(r => r.Item).ToList();
     }
 
     public async Task<MasterItemDto> UpsertPurposeAsync(Guid? id, MasterUpsertRequest request, string? user)
@@ -278,6 +288,19 @@ public class MasterDataService : IMasterDataService
         entity.Code = string.IsNullOrWhiteSpace(request.Code) ? null : request.Code.Trim();
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.IsActive;
+        if (request.Fields is not null)
+        {
+            var fields = PurposeFields.Normalize(request.Fields);
+            var sourceIds = fields.Where(PurposeFields.IsLookup).Select(f => f.LookupSourceId!.Value).Distinct().ToList();
+            if (sourceIds.Count > 0)
+            {
+                var known = await _db.LookupSources.AsNoTracking().Where(s => sourceIds.Contains(s.Id)).Select(s => s.Id).ToListAsync();
+                var missing = fields.FirstOrDefault(f => PurposeFields.IsLookup(f) && !known.Contains(f.LookupSourceId!.Value));
+                if (missing is not null)
+                    throw new InvalidOperationException($"The lookup source for \"{missing.Label}\" no longer exists. Choose another.");
+            }
+            entity.FieldsJson = PurposeFields.Write(fields);
+        }
         entity.LocationId = request.LocationId
             ?? (string.Equals(entity.Name, "Others", StringComparison.OrdinalIgnoreCase) ? null : _tenant.LocationId);
         if (!entity.LocationId.HasValue
@@ -299,6 +322,7 @@ public class MasterDataService : IMasterDataService
             SortOrder = entity.SortOrder,
             LocationId = entity.LocationId,
             LocationName = entity.Location?.Name,
+            Fields = PurposeFields.ToDtos(entity.FieldsJson),
         };
     }
 
@@ -593,6 +617,7 @@ public class MasterDataService : IMasterDataService
             SortOrder = x.SortOrder,
             RequiresPlantNumber = x.RequiresPlantNumber,
             RequiresOtherText = x.RequiresOtherText,
+            MomRequired = x.MomRequired,
         }).ToListAsync();
     }
 
@@ -621,6 +646,8 @@ public class MasterDataService : IMasterDataService
         entity.IsActive = request.IsActive;
         entity.RequiresPlantNumber = request.RequiresPlantNumber;
         entity.RequiresOtherText = request.RequiresOtherText;
+        if (request.MomRequired is bool momRequired)
+            entity.MomRequired = momRequired;
         await _db.SaveChangesAsync();
 
         return new MasterItemDto
@@ -632,6 +659,7 @@ public class MasterDataService : IMasterDataService
             SortOrder = entity.SortOrder,
             RequiresPlantNumber = entity.RequiresPlantNumber,
             RequiresOtherText = entity.RequiresOtherText,
+            MomRequired = entity.MomRequired,
         };
     }
 
@@ -757,9 +785,147 @@ public class MasterDataService : IMasterDataService
                 var h = await _db.MeetingHalls.FindAsync(id) ?? throw new InvalidOperationException("Not found");
                 EnsureInUserLocation(h.LocationId, "meeting hall");
                 h.IsActive = false; h.UpdatedAt = DateTime.UtcNow; h.UpdatedBy = user; break;
+            case "designations":
+                var g = await _db.Designations.FindAsync(id) ?? throw new InvalidOperationException("Not found");
+                g.IsActive = false; g.UpdatedAt = DateTime.UtcNow; g.UpdatedBy = user; break;
             default: throw new InvalidOperationException("Unknown master type");
         }
         await _db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Permanently removes a master record. Records still referenced by visits or other masters are refused
+    /// with what uses them, so history is never broken; those can only be deactivated.
+    /// </summary>
+    public async Task DeleteMasterAsync(string type, Guid id)
+    {
+        var tenantId = CurrentTenantId;
+        // Visits are location-filtered for bound users; usage must count every visit in the tenant.
+        var visits = _db.VisitorVisits.IgnoreQueryFilters().Where(v => v.TenantId == tenantId);
+
+        switch (type.ToLowerInvariant())
+        {
+            case "departments":
+            {
+                var d = await _db.Departments.FindAsync(id) ?? throw new InvalidOperationException("Department not found.");
+                EnsureInUserLocation(d.LocationId, "department");
+                EnsureUnused(d.Name,
+                    ("employee", await _db.Employees.CountAsync(e => e.DepartmentId == id)),
+                    ("visit", await visits.CountAsync(v => v.DepartmentId == id)));
+                await _db.Users.Where(u => u.DepartmentId == id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(u => u.DepartmentId, (Guid?)null));
+                _db.Departments.Remove(d);
+                break;
+            }
+            case "purposes":
+            {
+                var p = await _db.VisitPurposes.FindAsync(id) ?? throw new InvalidOperationException("Purpose not found.");
+                EnsureInUserLocation(p.LocationId, "purpose");
+                if (string.Equals(p.Name, VisitPurposeDefaults.OthersName, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"'{p.Name}' is a built-in purpose and cannot be deleted.");
+                EnsureUnused(p.Name, ("visit", await _db.VisitorVisitPurposes.CountAsync(x => x.VisitPurposeId == id)));
+                _db.VisitPurposes.Remove(p);
+                break;
+            }
+            case "locations":
+            {
+                if (_tenant.LocationId is not null)
+                    throw new UnauthorizedAccessException("Only a Super Admin can delete a location.");
+                var l = await _db.Locations.FindAsync(id) ?? throw new InvalidOperationException("Location not found.");
+                EnsureUnused(l.Name,
+                    ("visit", await _db.VisitorVisitLocations.CountAsync(x => x.LocationId == id)),
+                    ("employee", await _db.Employees.CountAsync(e => e.LocationId == id)),
+                    ("login", await _db.Users.CountAsync(u => u.LocationId == id)),
+                    ("department", await _db.Departments.CountAsync(x => x.LocationId == id)),
+                    ("purpose", await _db.VisitPurposes.CountAsync(x => x.LocationId == id)),
+                    ("meeting hall", await _db.MeetingHalls.CountAsync(x => x.LocationId == id)),
+                    ("feedback question", await _db.FeedbackQuestions.CountAsync(x => x.LocationId == id)),
+                    ("pass number series", await _db.PassNumberSeries.CountAsync(x => x.LocationId == id)));
+                // Location-only configuration goes with the location.
+                _db.MailContentTemplates.RemoveRange(await _db.MailContentTemplates.Where(x => x.LocationId == id).ToListAsync());
+                var smtpPrefix = $"SmtpLoc:{id:N}:";
+                var brandPrefix = $"BrandLoc:{id:N}:";
+                _db.SystemSettings.RemoveRange(await _db.SystemSettings
+                    .Where(x => x.Key.StartsWith(smtpPrefix) || x.Key.StartsWith(brandPrefix)).ToListAsync());
+                _db.Locations.Remove(l);
+                break;
+            }
+            case "meeting-halls":
+            {
+                var h = await _db.MeetingHalls.FindAsync(id) ?? throw new InvalidOperationException("Meeting hall not found.");
+                EnsureInUserLocation(h.LocationId, "meeting hall");
+                EnsureUnused(h.Name, ("visit", await visits.CountAsync(v => v.MeetingHallId == id)));
+                _db.MeetingHalls.Remove(h);
+                break;
+            }
+            case "feedback-questions":
+            {
+                var q = await _db.FeedbackQuestions.FindAsync(id) ?? throw new InvalidOperationException("Feedback question not found.");
+                EnsureInUserLocation(q.LocationId, "feedback question");
+                // Past answers keep their own copy of the question text.
+                _db.FeedbackQuestions.Remove(q);
+                break;
+            }
+            case "designations":
+            {
+                var g = await _db.Designations.FindAsync(id) ?? throw new InvalidOperationException("Designation not found.");
+                _db.Designations.Remove(g);
+                break;
+            }
+            default: throw new InvalidOperationException("This master cannot be deleted.");
+        }
+        await _db.SaveChangesAsync();
+    }
+
+    private static void EnsureUnused(string name, params (string What, int Count)[] usages)
+    {
+        var used = usages.Where(u => u.Count > 0).Select(u => $"{u.Count} {u.What}{(u.Count == 1 ? "" : "s")}").ToList();
+        if (used.Count > 0)
+            throw new InvalidOperationException(
+                $"'{name}' cannot be deleted because it is used by {string.Join(", ", used)}. Deactivate it instead.");
+    }
+
+    public async Task<IReadOnlyList<MasterItemDto>> GetDesignationsAsync(bool activeOnly = true)
+    {
+        var q = _db.Designations.AsNoTracking().AsQueryable();
+        if (activeOnly) q = q.Where(x => x.IsActive);
+        return await q.OrderBy(x => x.SortOrder).ThenBy(x => x.Name)
+            .Select(x => new MasterItemDto { Id = x.Id, Name = x.Name, Code = x.Code, IsActive = x.IsActive, SortOrder = x.SortOrder })
+            .ToListAsync();
+    }
+
+    public async Task<MasterItemDto> UpsertDesignationAsync(Guid? id, MasterUpsertRequest request, string? user)
+    {
+        var name = (request.Name ?? string.Empty).Trim();
+        if (name.Length == 0) throw new InvalidOperationException("Name is required.");
+        if (name.Length > 100) throw new InvalidOperationException("Designation must be 100 characters or fewer.");
+        if (await _db.Designations.AnyAsync(x => x.Name == name && x.Id != (id ?? Guid.Empty)))
+            throw new InvalidOperationException($"Designation '{name}' already exists.");
+
+        Designation entity;
+        if (id.HasValue)
+        {
+            entity = await _db.Designations.FindAsync(id.Value) ?? throw new InvalidOperationException("Designation not found.");
+            if (!string.Equals(entity.Name, name, StringComparison.Ordinal))
+            {
+                var oldName = entity.Name;
+                await _db.Employees.Where(e => e.Designation == oldName)
+                    .ExecuteUpdateAsync(s => s.SetProperty(e => e.Designation, name));
+            }
+            entity.UpdatedAt = DateTime.UtcNow;
+            entity.UpdatedBy = user;
+        }
+        else
+        {
+            entity = new Designation { TenantId = CurrentTenantId, CreatedBy = user };
+            _db.Designations.Add(entity);
+        }
+        entity.Name = name;
+        entity.Code = string.IsNullOrWhiteSpace(request.Code) ? null : request.Code.Trim();
+        entity.SortOrder = request.SortOrder;
+        entity.IsActive = request.IsActive;
+        await _db.SaveChangesAsync();
+        return new MasterItemDto { Id = entity.Id, Name = entity.Name, Code = entity.Code, IsActive = entity.IsActive, SortOrder = entity.SortOrder };
     }
 
     private static async Task<IReadOnlyList<MasterItemDto>> GetSimpleAsync<T>(DbSet<T> set, bool activeOnly) where T : class
@@ -916,93 +1082,193 @@ public class ReportService : IReportService
         var defaulterCount = rows.Count(r => r.DefaulterReason.Length > 0);
         var defaulters = IsDefaulterReport(request);
         var logoBytes = TryReadLogoBytes();
+        var from = request.DateFrom ?? AppTime.Today.AddDays(-30);
+        var to = request.DateTo ?? AppTime.Today;
+        var printed = rows.Take(PdfMaxRows).ToList();
+
+        var summary = defaulters
+            ? new (string Label, string Value)[]
+            {
+                ("Period", $"{from:dd MMM yyyy} – {to:dd MMM yyyy}"),
+                ("Defaulters", rows.Count.ToString()),
+                ("Allowed visit duration", FormatDuration(allowedMinutes)),
+            }
+            : new (string Label, string Value)[]
+            {
+                ("Period", $"{from:dd MMM yyyy} – {to:dd MMM yyyy}"),
+                ("Visits", rows.Count.ToString()),
+                ("Manual check-outs", manualCount.ToString()),
+                ("Check-out defaulters", defaulterCount.ToString()),
+            };
+
+        // (header, relative width, cell value)
+        var columns = defaulters
+            ? new (string Header, float Width, Func<ReportRow, string> Value)[]
+            {
+                ("Visit #", 1.5f, r => r.VisitNumber),
+                ("Visitor", 1.8f, r => r.VisitorName),
+                ("Phone", 1.2f, r => r.Phone),
+                ("Person to meet", 1.6f, r => r.Host),
+                ("Department", 1.4f, r => r.Department),
+                ("Check-in", 1.3f, r => PdfDateTime(r.CheckInAt)),
+                ("Check-out", 1.3f, r => string.IsNullOrEmpty(r.CheckOutAt) ? "Still inside" : PdfDateTime(r.CheckOutAt)),
+                ("Duration", 0.9f, r => r.Duration),
+                ("Check-out issue", 2.8f, r => r.DefaulterReason),
+            }
+            : new (string Header, float Width, Func<ReportRow, string> Value)[]
+            {
+                ("Visit #", 11f, r => r.VisitNumber),
+                ("Visitor", 9f, r => r.VisitorName),
+                ("Company", 9.5f, r => PdfText(r.Company)),
+                ("Person to meet", 9f, r => r.Host),
+                ("Department", 7.7f, r => r.Department),
+                ("Purpose", 12.5f, r => PdfText(r.Purposes)),
+                ("Date", 7.8f, r => PdfDate(r.VisitDate)),
+                ("Check-in", 6f, r => PdfTime(r.CheckInAt, r.VisitDate)),
+                ("Check-out", 7f, r => PdfTime(r.CheckOutAt, r.VisitDate)),
+                ("Status", 8f, r => PdfStatus(r.Status)),
+                ("Manual", 6f, r => r.IsManualCheckOut ? "Yes" : "No"),
+                ("Feedback", 6.5f, r => string.IsNullOrWhiteSpace(r.FeedbackAvg) ? "—" : $"{r.FeedbackAvg} / 5"),
+            };
+
+        const string brand = "#0F766E";
+        const string rule = "#CBD5E1";
         var doc = Document.Create(container =>
         {
             container.Page(page =>
             {
-                page.Margin(30);
-                if (defaulters) page.Size(PageSizes.A4.Landscape());
-                page.Header().Row(row =>
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(24);
+                // Ligatures ("ti" in Duration) extract as stray glyphs, breaking search and copy in the PDF.
+                page.DefaultTextStyle(x => x.FontSize(8.5f).FontColor("#0F172A")
+                    .DisableFontFeature(FontFeatures.StandardLigatures));
+
+                page.Header().Column(header =>
                 {
-                    if (logoBytes is { Length: > 0 })
+                    header.Item().Row(row =>
                     {
-                        row.ConstantItem(90).Height(32).Image(logoBytes).FitArea();
-                        row.ConstantItem(12);
-                    }
-                    row.RelativeItem().AlignMiddle().Text(ReportTitle(request)).Bold().FontSize(16);
-                });
-                page.Content().Column(col =>
-                {
-                    col.Item().PaddingTop(8).Text($"Generated: {AppTime.Now:yyyy-MM-dd HH:mm} by {generatedBy}");
-                    col.Item().Text(defaulters
-                        ? $"Records: {rows.Count} | Allowed visit duration: {FormatDuration(allowedMinutes)}"
-                        : $"Report: {request.ReportType} | Records: {rows.Count} | Manual check-outs: {manualCount} | Check-out defaulters: {defaulterCount}").FontSize(10);
-                    if (defaulters)
-                    {
-                        col.Item().PaddingTop(10).Table(table =>
+                        if (logoBytes is { Length: > 0 })
                         {
-                            table.ColumnsDefinition(c =>
-                            {
-                                c.RelativeColumn(1.4f); c.RelativeColumn(2); c.RelativeColumn(1.3f);
-                                c.RelativeColumn(1.8f); c.RelativeColumn(1.5f); c.RelativeColumn(1.5f);
-                                c.RelativeColumn(1.5f); c.RelativeColumn(1); c.RelativeColumn(3);
-                            });
-                            table.Header(h =>
-                            {
-                                foreach (var title in new[] { "Visit #", "Visitor", "Phone", "Person to meet", "Department", "Check-in", "Check-out", "Duration", "Check-out issue" })
-                                    h.Cell().Text(title).Bold().FontSize(9);
-                            });
-                            foreach (var row in rows.Take(500))
-                            {
-                                table.Cell().Text(row.VisitNumber).FontSize(8);
-                                table.Cell().Text(row.VisitorName).FontSize(8);
-                                table.Cell().Text(row.Phone).FontSize(8);
-                                table.Cell().Text(row.Host).FontSize(8);
-                                table.Cell().Text(row.Department).FontSize(8);
-                                table.Cell().Text(row.CheckInAt).FontSize(8);
-                                table.Cell().Text(string.IsNullOrEmpty(row.CheckOutAt) ? "Still inside" : row.CheckOutAt).FontSize(8);
-                                table.Cell().Text(row.Duration).FontSize(8);
-                                table.Cell().Text(row.DefaulterReason).FontSize(8);
-                            }
+                            row.ConstantItem(84).Height(30).AlignMiddle().Image(logoBytes).FitArea();
+                            row.ConstantItem(12);
+                        }
+                        row.RelativeItem().AlignMiddle().Text(ReportTitle(request)).Bold().FontSize(15).FontColor(brand);
+                        row.ConstantItem(220).AlignMiddle().AlignRight().Column(meta =>
+                        {
+                            meta.Item().AlignRight().Text($"Generated {AppTime.Now:dd MMM yyyy, HH:mm}").FontSize(8).FontColor("#475569");
+                            meta.Item().AlignRight().Text($"By {generatedBy}").FontSize(8).FontColor("#475569");
                         });
+                    });
+                    header.Item().PaddingTop(6).LineHorizontal(1.2f).LineColor(brand);
+                });
+
+                page.Content().PaddingTop(10).Column(col =>
+                {
+                    col.Spacing(10);
+                    col.Item().Row(row =>
+                    {
+                        row.Spacing(8);
+                        foreach (var (label, value) in summary)
+                        {
+                            row.RelativeItem().Border(0.6f).BorderColor(rule).Background("#F8FAFC")
+                                .PaddingVertical(5).PaddingHorizontal(8).Column(box =>
+                                {
+                                    box.Item().Text(label.ToUpperInvariant()).FontSize(6.5f).SemiBold().FontColor("#64748B");
+                                    box.Item().Text(value).FontSize(11).Bold();
+                                });
+                        }
+                    });
+
+                    if (printed.Count == 0)
+                    {
+                        col.Item().Border(0.6f).BorderColor(rule).Padding(16).AlignCenter()
+                            .Text("No visits match this report.").FontColor("#64748B");
                         return;
                     }
-                    col.Item().PaddingTop(10).Table(table =>
+
+                    col.Item().Table(table =>
                     {
                         table.ColumnsDefinition(c =>
                         {
-                            c.RelativeColumn(2); c.RelativeColumn(2); c.RelativeColumn(2);
-                            c.RelativeColumn(1.5f); c.RelativeColumn(1); c.RelativeColumn(1);
-                            c.RelativeColumn(1); c.RelativeColumn(1);
+                            c.ConstantColumn(30);
+                            foreach (var column in columns) c.RelativeColumn(column.Width);
                         });
+
                         table.Header(h =>
                         {
-                            h.Cell().Text("Visitor").Bold();
-                            h.Cell().Text("Company").Bold();
-                            h.Cell().Text("Person to meet").Bold();
-                            h.Cell().Text("Department").Bold();
-                            h.Cell().Text("Date").Bold();
-                            h.Cell().Text("Status").Bold();
-                            h.Cell().Text("Manual").Bold();
-                            h.Cell().Text("Feedback").Bold();
+                            h.Cell().Element(HeaderCell).AlignRight().Text("#");
+                            foreach (var column in columns)
+                                h.Cell().Element(HeaderCell).Text(column.Header);
                         });
-                        foreach (var row in rows.Take(200))
+
+                        for (var i = 0; i < printed.Count; i++)
                         {
-                            table.Cell().Text(row.VisitorName).FontSize(9);
-                            table.Cell().Text(row.Company).FontSize(9);
-                            table.Cell().Text(row.Host).FontSize(9);
-                            table.Cell().Text(row.Department).FontSize(9);
-                            table.Cell().Text(row.VisitDate).FontSize(9);
-                            table.Cell().Text(row.Status).FontSize(9);
-                            table.Cell().Text(row.IsManualCheckOut ? "Yes" : "No").FontSize(9);
-                            table.Cell().Text(string.IsNullOrWhiteSpace(row.FeedbackAvg) ? "—" : $"{row.FeedbackAvg}★").FontSize(9);
+                            var row = printed[i];
+                            var shade = i % 2 == 1 ? "#F1F5F9" : "#FFFFFF";
+                            table.Cell().Element(c => BodyCell(c, shade)).AlignRight().Text((i + 1).ToString()).FontColor("#64748B");
+                            foreach (var column in columns)
+                                table.Cell().Element(c => BodyCell(c, shade)).Text(column.Value(row));
                         }
+                    });
+
+                    if (rows.Count > printed.Count)
+                    {
+                        col.Item().Text($"Showing the first {printed.Count} of {rows.Count} visits. Export to Excel for the full list.")
+                            .FontSize(8).Italic().FontColor("#64748B");
+                    }
+                });
+
+                page.Footer().PaddingTop(6).Row(row =>
+                {
+                    row.RelativeItem().Text("Tiaano Visitor Management").FontSize(7.5f).FontColor("#94A3B8");
+                    row.RelativeItem().AlignRight().Text(t =>
+                    {
+                        t.DefaultTextStyle(x => x.FontSize(7.5f).FontColor("#94A3B8"));
+                        t.Span("Page ");
+                        t.CurrentPageNumber();
+                        t.Span(" of ");
+                        t.TotalPages();
                     });
                 });
             });
         });
         return doc.GeneratePdf();
+
+        static IContainer HeaderCell(IContainer c) =>
+            c.Background(brand).Border(0.6f).BorderColor(brand)
+                .PaddingVertical(5).PaddingHorizontal(4)
+                .DefaultTextStyle(x => x.FontSize(8).SemiBold().FontColor(Colors.White));
+
+        static IContainer BodyCell(IContainer c, string shade) =>
+            c.ShowEntire().Background(shade).Border(0.5f).BorderColor(rule)
+                .PaddingVertical(4).PaddingHorizontal(4);
     }
+
+    private const int PdfMaxRows = 1000;
+
+    private static string PdfText(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value.Trim();
+
+    private static string PdfDate(string isoDate) =>
+        DateOnly.TryParseExact(isoDate, "yyyy-MM-dd", out var d) ? d.ToString("dd MMM yyyy") : isoDate;
+
+    private static string PdfDateTime(string local) =>
+        DateTime.TryParseExact(local, "yyyy-MM-dd HH:mm", null, System.Globalization.DateTimeStyles.None, out var dt)
+            ? dt.ToString("dd MMM, HH:mm")
+            : PdfText(local);
+
+    /// <summary>Just the time when it falls on the visit date (the Date column already shows it).</summary>
+    private static string PdfTime(string local, string isoVisitDate)
+    {
+        if (string.IsNullOrWhiteSpace(local)) return "—";
+        return local.StartsWith(isoVisitDate + " ", StringComparison.Ordinal) ? local[(isoVisitDate.Length + 1)..] : PdfDateTime(local);
+    }
+
+    private static string PdfStatus(string status) => status switch
+    {
+        nameof(VisitStatus.CheckedOut) => "Checked out",
+        nameof(VisitStatus.PendingApproval) => "Pending approval",
+        _ => System.Text.RegularExpressions.Regex.Replace(status, "(?<=[a-z])(?=[A-Z])", " "),
+    };
 
     public async Task<byte[]> ExportCsvAsync(ReportRequest request, string generatedBy)
     {
@@ -1013,13 +1279,21 @@ public class ReportService : IReportService
         sb.AppendLine("VisitNumber,Visitor,Company,Person to meet,Department,Date,Status,ManualCheckOut,Purposes,Locations,FeedbackAvg,FeedbackRatings,FeedbackComments,Phone,CheckIn,CheckOut,Duration,CheckOutIssue");
         foreach (var row in rows)
         {
-            sb.AppendLine($"\"{row.VisitNumber}\",\"{row.VisitorName}\",\"{row.Company}\",\"{row.Host}\",\"{row.Department}\",\"{row.VisitDate}\",\"{row.Status}\",\"{(row.IsManualCheckOut ? "Yes" : "No")}\",\"{row.Purposes}\",\"{row.Locations}\",\"{row.FeedbackAvg}\",\"{EscapeCsv(row.FeedbackRatings)}\",\"{EscapeCsv(row.FeedbackComments)}\",\"{row.Phone}\",\"{row.CheckInAt}\",\"{row.CheckOutAt}\",\"{row.Duration}\",\"{EscapeCsv(row.DefaulterReason)}\"");
+            sb.AppendLine($"\"{row.VisitNumber}\",\"{row.VisitorName}\",\"{row.Company}\",\"{row.Host}\",\"{row.Department}\",\"{row.VisitDate}\",\"{row.Status}\",\"{(row.IsManualCheckOut ? "Yes" : "No")}\",\"{EscapeCsv(row.Purposes)}\",\"{row.Locations}\",\"{row.FeedbackAvg}\",\"{EscapeCsv(row.FeedbackRatings)}\",\"{EscapeCsv(row.FeedbackComments)}\",\"{row.Phone}\",\"{row.CheckInAt}\",\"{row.CheckOutAt}\",\"{row.Duration}\",\"{EscapeCsv(row.DefaulterReason)}\"");
         }
         return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
     }
 
     private static string EscapeCsv(string value) =>
         (value ?? "").Replace("\"", "\"\"");
+
+    /// <summary>"Delivery (Invoice number: 123; Vehicle number: TN 01 AB 1234)" so PDF and Excel keep their columns.</summary>
+    private static string PurposeWithFields(VisitorVisit v)
+    {
+        var purposes = PurposeDisplay.Join(v.VisitPurposes.Select(p => p.VisitPurpose.Name), v.PurposeNotes, "; ");
+        var details = PurposeFields.Describe(v.PurposeFieldsJson);
+        return details.Length == 0 ? purposes : $"{purposes} ({details})";
+    }
 
     private async Task<(List<ReportRow> Rows, int AllowedMinutes)> QueryRows(ReportRequest request)
     {
@@ -1037,6 +1311,7 @@ public class ReportService : IReportService
             .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
             .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
             .AsNoTracking()
+            .AsSplitQuery()
             .Where(v => v.VisitDate >= from && v.VisitDate <= to);
 
         if (request.DepartmentId.HasValue) q = q.Where(v => v.DepartmentId == request.DepartmentId);
@@ -1097,7 +1372,7 @@ public class ReportService : IReportService
                 v.VisitDate.ToString("yyyy-MM-dd"),
                 v.Status.ToString(),
                 v.IsManualCheckOut,
-                string.Join("; ", v.VisitPurposes.Select(p => p.VisitPurpose.Name)),
+                PurposeWithFields(v),
                 string.Join("; ", v.VisitLocations.Select(l => l.Location.Name)),
                 avg,
                 ratings,
@@ -1220,7 +1495,7 @@ public interface IUserAdminService
 {
     Task<IReadOnlyList<UserDto>> GetUsersAsync();
     Task<UserDto> CreateAsync(CreateUserRequest request, string? actor);
-    Task<UserDto> UpdateAsync(string id, UpdateUserRequest request, string? actor);
+    Task<UserDto> UpdateAsync(string id, UpdateUserRequest request, string? actor, bool actorIsSuperAdmin = false);
     /// <summary>Creates a Host login for an employee and links it, so they see their own visitors and can add MoM.</summary>
     Task<EmployeeDto> CreateLoginForEmployeeAsync(Guid employeeId, CreateEmployeeLoginRequest request, string? actor);
     Task ResetPasswordAsync(string id, AdminResetPasswordRequest request, bool actorIsSuperAdmin, string? actor);
@@ -1366,7 +1641,7 @@ public class UserAdminService : IUserAdminService
         return (await GetUsersAsync()).First(u => u.Id == user.Id);
     }
 
-    public async Task<UserDto> UpdateAsync(string id, UpdateUserRequest request, string? actor)
+    public async Task<UserDto> UpdateAsync(string id, UpdateUserRequest request, string? actor, bool actorIsSuperAdmin = false)
     {
         var user = await _userManager.Users.Include(u => u.Department).FirstOrDefaultAsync(u => u.Id == id)
             ?? throw new InvalidOperationException("User not found.");
@@ -1379,15 +1654,24 @@ public class UserAdminService : IUserAdminService
         user.DepartmentId = request.DepartmentId;
         user.LocationId = locationId;
         user.AllowedMenuKeysJson = MenuAccess.Serialize(
-            MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys));
+            MenuAccess.NormalizeForRole(request.Role, request.AllowedMenuKeys, beyondRole: actorIsSuperAdmin));
         user.IsActive = request.IsActive;
         user.UpdatedAt = DateTime.UtcNow;
         user.UpdatedBy = actor;
-        await _userManager.UpdateAsync(user);
+        EnsureSucceeded(await _userManager.UpdateAsync(user));
         var roles = await _userManager.GetRolesAsync(user);
-        await _userManager.RemoveFromRolesAsync(user, roles);
-        await _userManager.AddToRoleAsync(user, request.Role);
+        if (roles.Count != 1 || !string.Equals(roles[0], request.Role, StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureSucceeded(await _userManager.RemoveFromRolesAsync(user, roles));
+            EnsureSucceeded(await _userManager.AddToRoleAsync(user, request.Role));
+        }
         return (await GetUsersAsync()).First(u => u.Id == user.Id);
+    }
+
+    private static void EnsureSucceeded(IdentityResult result)
+    {
+        if (!result.Succeeded)
+            throw new InvalidOperationException(string.Join(" ", result.Errors.Select(e => e.Description)));
     }
 
     public async Task ResetPasswordAsync(string id, AdminResetPasswordRequest request, bool actorIsSuperAdmin, string? actor)

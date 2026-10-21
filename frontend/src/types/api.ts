@@ -75,9 +75,132 @@ export interface MasterItemDto {
   intercom?: string | null
   requiresPlantNumber: boolean
   requiresOtherText: boolean
+  /** Locations only: whether visits here need minutes of meeting. */
+  momRequired?: boolean | null
   isDefault: boolean
   locationId?: string | null
   locationName?: string | null
+  /** Purposes only: extra text fields asked at walk-in registration. */
+  fields?: PurposeFieldDto[] | null
+}
+
+export interface PurposeFieldDto {
+  /** Empty for a field added in this edit. */
+  id?: string | null
+  label: string
+  isRequired: boolean
+  type?: PurposeFieldType | null
+  lookupSourceId?: string | null
+}
+
+export type PurposeFieldType = 'text' | 'lookup'
+
+export interface LookupDetailDto {
+  label: string
+  value: string
+}
+
+export interface PurposeFieldValueDto {
+  purpose: string
+  label: string
+  value: string
+  /** Null for a text field; true when picked from the lookup, false when typed by hand. */
+  verified?: boolean | null
+  source?: string | null
+  recordId?: string | null
+  details?: LookupDetailDto[] | null
+  matchAgainst?: LookupMatchTarget | null
+  matched?: boolean | null
+}
+
+export type LookupMatchTarget = 'mobile' | 'email'
+
+export interface LookupPick {
+  token: string
+  display: string
+  details: LookupDetailDto[]
+  hasMatchCheck: boolean
+}
+
+export interface LookupSavedFieldDto {
+  path: string
+  label: string
+}
+
+export interface LookupSourceDto {
+  id: string
+  name: string
+  searchUrl: string
+  httpMethod: LookupHttpMethod
+  bodyTemplate?: string | null
+  apiKeyHeader?: string | null
+  hasApiKey: boolean
+  resultsPath?: string | null
+  idPath: string
+  displayTemplate: string
+  savedFields: LookupSavedFieldDto[]
+  matchPath?: string | null
+  matchAgainst?: LookupMatchTarget | null
+  blockOnMismatch: boolean
+  minChars: number
+  timeoutSeconds: number
+  isActive: boolean
+  updatedAt?: string | null
+}
+
+export type LookupHttpMethod = 'GET' | 'POST'
+
+export interface LookupSourceUpsertRequest {
+  name: string
+  searchUrl: string
+  httpMethod: LookupHttpMethod
+  /** JSON sent with POST; {query} and {field:Label} are filled in. */
+  bodyTemplate?: string | null
+  apiKeyHeader?: string | null
+  /** Blank keeps the saved key. */
+  apiKey?: string | null
+  clearApiKey?: boolean
+  resultsPath?: string | null
+  idPath: string
+  displayTemplate: string
+  savedFields: LookupSavedFieldDto[]
+  matchPath?: string | null
+  matchAgainst?: LookupMatchTarget | null
+  blockOnMismatch: boolean
+  minChars: number
+  timeoutSeconds: number
+  isActive: boolean
+}
+
+export interface LookupMatchDto {
+  token: string
+  recordId: string
+  display: string
+  details: LookupDetailDto[]
+  hasMatchCheck: boolean
+  matchValues?: string[] | null
+}
+
+export interface LookupTestResultDto {
+  ok: boolean
+  error?: string | null
+  statusCode?: number | null
+  recordCount: number
+  matches: LookupMatchDto[]
+  rawSample?: string | null
+}
+
+export interface LookupSourceOptionDto {
+  id: string
+  name: string
+  minChars: number
+  isActive: boolean
+}
+
+export interface LookupCheckResultDto {
+  matchAgainst?: LookupMatchTarget | null
+  matched?: boolean | null
+  blockOnMismatch: boolean
 }
 
 export interface EmployeeDto {
@@ -240,8 +363,13 @@ export interface ApprovalHistoryDto {
 }
 
 export interface VisitorDetailDto extends VisitorListItemDto {
+  hostEmployeeId?: string
+  departmentId?: string
+  purposeIds?: string[]
+  locationIds?: string[]
   intercom?: string | null
   purposeNotes?: string | null
+  purposeFields?: PurposeFieldValueDto[]
   notes?: string | null
   /** Minutes of meeting: discussion points. */
   meetingMinutes?: string | null
@@ -343,6 +471,7 @@ export interface RegisterVisitorRequest {
   plantNumber?: string | null
   otherLocationText?: string | null
   purposeNotes?: string | null
+  purposeFields?: { fieldId: string; value: string; lookupToken?: string | null }[]
   notes?: string | null
   isWalkIn?: boolean
   photoBase64?: string | null
@@ -501,6 +630,34 @@ export interface MomNotSentByEmployeeDto {
   oldestCheckOutAt?: string | null
 }
 
+export interface NotificationItemDto {
+  visitId: string
+  title: string
+  subtitle?: string | null
+  /** "HH:mm" for today's appointments. */
+  time?: string | null
+  /** UTC: check-out for pending minutes, request time for approvals. */
+  at?: string | null
+  link: string
+}
+
+export interface NotificationSummaryDto {
+  total: number
+  /** False for the desk, whose list is every visitor expected today. */
+  appointmentsAreMine: boolean
+  appointmentsTodayCount: number
+  appointmentsToday: NotificationItemDto[]
+  momPendingCount: number
+  momPending: NotificationItemDto[]
+  approvalsCount: number
+  approvals: NotificationItemDto[]
+}
+
+export interface WebPushStatusDto {
+  publicKey: string
+  devices: number
+}
+
 export interface SettingsDto {
   companyName: string
   logoPath: string
@@ -537,6 +694,7 @@ export interface PassDto {
   hostName: string
   departmentName: string
   purposes: string[]
+  purposeFields?: PurposeFieldValueDto[]
   locations: string[]
   visitNumber: string
   checkInAt?: string | null
@@ -577,6 +735,7 @@ export type MasterImportKind =
   | 'employees'
   | 'purposes'
   | 'locations'
+  | 'designations'
   | 'feedback-questions'
   | 'meeting-halls'
 
@@ -607,8 +766,12 @@ export interface MasterUpsertRequest {
   isActive: boolean
   requiresPlantNumber: boolean
   requiresOtherText: boolean
+  /** Locations only. Omit to keep the current setting. */
+  momRequired?: boolean
   isDefault: boolean
   locationId?: string | null
+  /** Purposes only. Omit to keep the current fields; an empty list removes them. */
+  fields?: PurposeFieldDto[]
 }
 
 export interface MailContentTemplateDto {
@@ -669,6 +832,11 @@ export interface VisitorWizardDraft {
   plantNumber: string
   otherLocationText: string
   otherPurposeText: string
+  /** Extra purpose field answers by field id. */
+  purposeFieldValues: Record<string, string>
+  /** Record picked from a lookup field, by field id; dropped as soon as the text is edited by hand. */
+  purposeLookupPicks: Record<string, LookupPick>
+
   notes: string
   photoBase64: string
   idTypeName: string

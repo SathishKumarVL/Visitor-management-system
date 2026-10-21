@@ -12,8 +12,8 @@ public static class MenuAccess
     public static readonly string[] AllKeys =
     [
         "dashboard", "reception", "visitors", "inside", "expected", "employeemaster",
-        "reports", "departments", "employees", "purposes", "locations", "feedback", "mailcontent", "users",
-        "meetinghalls", "settings"
+        "reports", "departments", "employees", "purposes", "locations", "feedback", "users",
+        "meetinghalls", "designations", "settings"
     ];
 
     private static readonly HashSet<string> Known = new(AllKeys, StringComparer.OrdinalIgnoreCase);
@@ -25,7 +25,7 @@ public static class MenuAccess
         [AppRoles.Admin] =
         [
             "dashboard", "reception", "visitors", "inside", "expected", "employeemaster",
-            "reports", "departments", "purposes", "locations", "feedback", "mailcontent", "users", "meetinghalls", "settings"
+            "reports", "departments", "purposes", "locations", "feedback", "users", "meetinghalls", "designations", "settings"
         ],
         [AppRoles.Reception] = ["dashboard", "reception", "visitors", "inside", "expected", "reports"],
         [AppRoles.Security] = ["dashboard", "visitors", "inside", "expected"],
@@ -35,7 +35,8 @@ public static class MenuAccess
     public static IReadOnlyList<string> KeysForRole(string role) =>
         RoleMenus.TryGetValue(role, out var keys) ? keys : Array.Empty<string>();
 
-    public static IReadOnlyList<string> NormalizeForRole(string role, IEnumerable<string>? requested)
+    /// <param name="beyondRole">Set when a Super Admin saves the login: any menu may then be granted.</param>
+    public static IReadOnlyList<string> NormalizeForRole(string role, IEnumerable<string>? requested, bool beyondRole = false)
     {
         var ceiling = new HashSet<string>(KeysForRole(role), StringComparer.OrdinalIgnoreCase);
         // SuperAdmin always receives the full role catalog so newly added menus appear without
@@ -50,7 +51,7 @@ public static class MenuAccess
             .Select(k => k.Trim().ToLowerInvariant())
             // Retired hub keys (Security Desk / Emergency) — map to Currently Inside when still in role ceiling.
             .Select(k => k is "security" or "emergency" ? "inside" : k)
-            .Where(k => Known.Contains(k) && ceiling.Contains(k))
+            .Where(k => Known.Contains(k) && (beyondRole || ceiling.Contains(k)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(k => Array.IndexOf(AllKeys, k))
             .ToList();
@@ -76,7 +77,7 @@ public static class MenuAccess
         try
         {
             var parsed = JsonSerializer.Deserialize<List<string>>(json) ?? [];
-            return NormalizeForRole(role, parsed);
+            return NormalizeForRole(role, parsed, beyondRole: true);
         }
         catch (JsonException)
         {

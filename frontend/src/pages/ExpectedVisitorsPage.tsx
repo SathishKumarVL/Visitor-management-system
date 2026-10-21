@@ -11,15 +11,20 @@ import type {
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
-import { TextInput, FieldLabel, SelectChip } from '../components/ui/Field'
+import { TextInput, TextSelect, FieldLabel, SelectChip } from '../components/ui/Field'
 import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
-import { formatDate, isPastDateTime, nextBookingSlot, nowIsoTime, sanitizePhoneDigits, statusBadgeClass, todayIsoDate, validateOptionalTenDigitPhone, validateVisitorEmail } from '../lib/utils'
+import { formatDate, isPastDateTime, nextBookingSlot, sanitizePhoneDigits, statusBadgeClass, todayIsoDate, validateOptionalTenDigitPhone, validateVisitorEmail } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
-import { hasAnyRole } from '../lib/utils'
+import { cn, hasAnyRole } from '../lib/utils'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
 
 const PAST_APPOINTMENT_ERROR = 'Appointment date and time cannot be in the past.'
+
+/** Quarter-hour booking times, 00:00 to 23:45. */
+const BOOKING_SLOTS = Array.from({ length: 96 }, (_, i) =>
+  `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`,
+)
 
 const blankForm = (locationId = '') => {
   const slot = nextBookingSlot()
@@ -54,7 +59,11 @@ export function ExpectedVisitorsPage() {
   const canCreate = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Host'])
   const canArrive = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Security'])
 
-  const [date, setDate] = useState(todayIsoDate())
+  const [date, setDate] = useState(() => {
+    const fromUrl = searchParams.get('date')
+    return fromUrl && /^\d{4}-\d{2}-\d{2}$/.test(fromUrl) ? fromUrl : todayIsoDate()
+  })
+  const [savedVisitId, setSavedVisitId] = useState<string | null>(null)
   const [items, setItems] = useState<VisitorListItemDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -67,13 +76,52 @@ export function ExpectedVisitorsPage() {
   const [saving, setSaving] = useState(false)
   const [emailTouched, setEmailTouched] = useState(false)
   const [phoneLookup, setPhoneLookup] = useState<VisitorPhoneLookupDto | null>(null)
+  const [editing, setEditing] = useState<{ visitId: string; visitNumber: string; date: string; time: string } | null>(null)
 
   const { pageItems, pagination } = usePagination(items, 12, date)
 
   const lookupPhone = sanitizePhoneDigits(form.phone)
   const duplicateBooking = phoneLookup?.openBookings.find(
-    (b) => b.date === form.expectedDate && !!form.hostEmployeeId && b.hostEmployeeId === form.hostEmployeeId,
+    (b) =>
+      b.visitId !== editing?.visitId &&
+      b.date === form.expectedDate &&
+      !!form.hostEmployeeId &&
+      b.hostEmployeeId === form.hostEmployeeId,
   )
+  // An edit that keeps the booked slot may save even after that time has passed today.
+  const keepsBookedSlot = !!editing && form.expectedDate === editing.date && form.expectedTime === editing.time
+  const slotInPast = !keepsBookedSlot && isPastDateTime(form.expectedDate, form.expectedTime)
+
+  // Re-render every minute while booking so slots that have just passed become disabled.
+  const [, setMinuteTick] = useState(0)
+  useEffect(() => {
+    if (!showForm) return
+    const timer = window.setInterval(() => setMinuteTick((n) => n + 1), 60_000)
+    return () => window.clearInterval(timer)
+  }, [showForm])
+
+  // An existing booking at an odd time (e.g. 10:07) keeps its own option.
+  const timeSlots = (
+    !form.expectedTime || BOOKING_SLOTS.includes(form.expectedTime)
+      ? BOOKING_SLOTS
+      : [...BOOKING_SLOTS, form.expectedTime].sort()
+  ).map((time) => ({
+    time,
+    disabled:
+      !(editing && form.expectedDate === editing.date && time === editing.time) &&
+      isPastDateTime(form.expectedDate, time),
+  }))
+
+  /** Moving to today (or a typed past date) jumps the time to the next open slot. */
+  function changeExpectedDate(value: string) {
+    const keeps = !!editing && value === editing.date && form.expectedTime === editing.time
+    if (keeps || !isPastDateTime(value, form.expectedTime)) {
+      setForm({ ...form, expectedDate: value })
+      return
+    }
+    const slot = nextBookingSlot()
+    setForm({ ...form, expectedDate: value < slot.date ? slot.date : value, expectedTime: slot.time })
+  }
 
   useEffect(() => {
     if (lookupPhone.length !== 10) {
@@ -130,6 +178,12 @@ export function ExpectedVisitorsPage() {
   }, [load])
 
   useEffect(() => {
+    if (!savedVisitId) return
+    const timer = window.setTimeout(() => setSavedVisitId(null), 6000)
+    return () => window.clearTimeout(timer)
+  }, [savedVisitId])
+
+  useEffect(() => {
     if (!canCreate) return
     if (userLocationId) {
       setForm((f) => (f.locationId === userLocationId ? f : { ...f, locationId: userLocationId, departmentId: '', hostEmployeeId: '', hostName: '' }))
@@ -176,7 +230,7 @@ export function ExpectedVisitorsPage() {
       setError('Please select Mr. or Ms.')
       return
     }
-    if (isPastDateTime(form.expectedDate, form.expectedTime)) {
+    if (slotInPast) {
       setError(PAST_APPOINTMENT_ERROR)
       return
     }
@@ -220,14 +274,58 @@ export function ExpectedVisitorsPage() {
       locationIds: form.locationId ? [form.locationId] : [],
     }
     try {
-      await visitorsApi.createExpected(body)
+      const saved = editing
+        ? await visitorsApi.updateExpected(editing.visitId, body)
+        : await visitorsApi.createExpected(body)
       const bookedDate = form.expectedDate
-      setMessage(`Appointment booked for ${formatDate(bookedDate)}. It now appears in the expected visitors grid.`)
-      setShowForm(false)
-      setSearchParams({})
-      setForm(blankForm(userLocationId))
+      setMessage(editing ? `Appointment updated for ${formatDate(bookedDate)}.` : `Appointment booked for ${formatDate(bookedDate)}.`)
+      closeForm({ date: bookedDate })
+      setSavedVisitId(saved.visitId)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
       if (bookedDate !== date) setDate(bookedDate)
       else await load()
+    } catch (err) {
+      setError(apiErrorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function closeForm(params: Record<string, string> = { date }) {
+    setShowForm(false)
+    setEditing(null)
+    setSearchParams(params, { replace: true })
+    setForm(blankForm(userLocationId))
+    setEmailTouched(false)
+  }
+
+  async function startEdit(visitId: string) {
+    setError(null)
+    setMessage(null)
+    setSaving(true)
+    try {
+      const v = await visitorsApi.get(visitId)
+      const othersId = othersPurpose?.id
+      const time = (v.visitTime || '').slice(0, 5)
+      setEditing({ visitId: v.visitId, visitNumber: v.visitNumber, date: v.visitDate, time })
+      setForm({
+        visitorName: v.visitorName,
+        companyName: v.companyName,
+        gender: v.gender === 1 || v.gender === 2 ? v.gender : '',
+        phone: sanitizePhoneDigits(v.phone || ''),
+        email: (v.email || '').trim(),
+        expectedDate: v.visitDate,
+        expectedTime: time,
+        locationId: v.locationIds?.[0] || userLocationId,
+        departmentId: v.departmentId || '',
+        hostEmployeeId: v.hostEmployeeId || '',
+        hostName: v.hostName || '',
+        purposeIds: (v.purposeIds ?? []).filter((id) => id !== othersId),
+        othersChecked: !!v.purposeNotes?.trim() || (!!othersId && (v.purposeIds ?? []).includes(othersId)),
+        otherPurposeText: v.purposeNotes || '',
+      })
+      setShowForm(true)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err) {
       setError(apiErrorMessage(err))
     } finally {
@@ -248,17 +346,35 @@ export function ExpectedVisitorsPage() {
         subtitle="Appointments booked at reception — tap a card to check in with face capture"
         actions={
           <div className="flex flex-wrap gap-2">
-            <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
+            <TextInput
+              type="date"
+              value={date}
+              onChange={(e) => {
+                setDate(e.target.value)
+                setSearchParams(
+                  (prev) => {
+                    const next = new URLSearchParams(prev)
+                    next.set('date', e.target.value)
+                    return next
+                  },
+                  { replace: true },
+                )
+              }}
+              className="w-auto"
+            />
             {canCreate ? (
               <Button
                 variant="amber"
                 onClick={() => {
-                  setShowForm((v) => !v)
-                  if (!showForm) setSearchParams({ book: '1' })
-                  else setSearchParams({})
+                  if (showForm) {
+                    closeForm()
+                    return
+                  }
+                  setShowForm(true)
+                  setSearchParams({ book: '1', date })
                 }}
               >
-                {showForm ? 'Hide booking form' : 'Book appointment'}
+                {showForm ? (editing ? 'Cancel edit' : 'Hide booking form') : 'Book appointment'}
               </Button>
             ) : null}
           </div>
@@ -270,7 +386,9 @@ export function ExpectedVisitorsPage() {
 
       {showForm ? (
         <Panel className="mb-4">
-          <h2 className="mb-3 text-sm font-semibold text-steel">Book appointment</h2>
+          <h2 className="mb-3 text-sm font-semibold text-steel">
+            {editing ? `Edit appointment ${editing.visitNumber}` : 'Book appointment'}
+          </h2>
           <form onSubmit={createExpected} className="grid gap-3 sm:grid-cols-2">
             <div>
               <FieldLabel>Mobile *</FieldLabel>
@@ -313,7 +431,7 @@ export function ExpectedVisitorsPage() {
             ) : null}
             {duplicateBooking ? (
               <div className="sm:col-span-2">
-                <Alert tone="error">
+                <Alert tone="error" persistent>
                   {duplicateBookingMessage(
                     duplicateBooking.hostName,
                     duplicateBooking.date,
@@ -376,21 +494,39 @@ export function ExpectedVisitorsPage() {
               <TextInput
                 type="date"
                 required
-                min={todayIsoDate()}
+                min={editing && editing.date < todayIsoDate() ? editing.date : todayIsoDate()}
                 value={form.expectedDate}
-                onChange={(e) => setForm({ ...form, expectedDate: e.target.value })}
+                onChange={(e) => changeExpectedDate(e.target.value)}
               />
             </div>
             <div>
-              <FieldLabel>Time *</FieldLabel>
-              <TextInput
-                type="time"
+              <FieldLabel htmlFor="expectedTime">Time *</FieldLabel>
+              <TextSelect
+                id="expectedTime"
                 required
-                min={form.expectedDate === todayIsoDate() ? nowIsoTime() : undefined}
                 value={form.expectedTime}
                 onChange={(e) => setForm({ ...form, expectedTime: e.target.value })}
-              />
-              {isPastDateTime(form.expectedDate, form.expectedTime) ? (
+              >
+                {timeSlots.map((s) => (
+                  <option
+                    key={s.time}
+                    value={s.time}
+                    disabled={s.disabled}
+                    style={
+                      s.disabled
+                        ? { color: '#9CA3AF', backgroundColor: '#F3F4F6' }
+                        : { color: '#047857', fontWeight: 600 }
+                    }
+                  >
+                    {s.time}
+                  </option>
+                ))}
+              </TextSelect>
+              <p className="mt-1 text-xs text-ink-muted">
+                <span className="font-semibold text-emerald-700">Green</span> times are available; grey times have
+                passed.
+              </p>
+              {slotInPast ? (
                 <p className="mt-1 text-xs text-danger">{PAST_APPOINTMENT_ERROR}</p>
               ) : null}
             </div>
@@ -465,8 +601,15 @@ export function ExpectedVisitorsPage() {
                 </div>
               ) : null}
             </div>
-            <div className="sm:col-span-2">
-              <Button type="submit" disabled={saving || !!duplicateBooking}>{saving ? 'Saving…' : 'Save appointment'}</Button>
+            <div className="flex flex-wrap gap-2 sm:col-span-2">
+              <Button type="submit" disabled={saving || !!duplicateBooking || slotInPast}>
+                {saving ? 'Saving…' : editing ? 'Save changes' : 'Save appointment'}
+              </Button>
+              {editing ? (
+                <Button type="button" variant="secondary" onClick={() => closeForm()}>
+                  Cancel
+                </Button>
+              ) : null}
             </div>
           </form>
         </Panel>
@@ -477,31 +620,48 @@ export function ExpectedVisitorsPage() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {pageItems.map((v) => (
-          <button
-            key={v.visitId}
-            type="button"
-            disabled={!canArrive}
-            onClick={() => openArrival(v.visitId)}
-            className="rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-steel hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="truncate text-lg font-semibold text-steel">{v.visitorName}</div>
-                <div className="truncate text-sm text-gray-600">{v.companyName}</div>
-              </div>
-              <Badge className={statusBadgeClass(v.statusLabel)}>{v.statusLabel}</Badge>
-            </div>
-            <div className="mt-3 space-y-1 text-sm">
-              <div><span className="text-gray-500">When:</span> {formatDate(v.visitDate)} {v.visitTime?.slice(0, 5)}</div>
-              <div><span className="text-gray-500">Person to meet:</span> {v.hostName}</div>
-              <div><span className="text-gray-500">Dept:</span> {v.departmentName}</div>
-              {v.purposes?.length ? (
-                <div className="truncate"><span className="text-gray-500">Purpose:</span> {v.purposes.join(', ')}</div>
+        {pageItems.map((v) => {
+          const canEdit = canCreate && String(v.statusLabel).toLowerCase() === 'expected'
+          return (
+            <div
+              key={v.visitId}
+              className={cn(
+                'flex flex-col rounded-lg border border-gray-200 bg-white shadow-sm transition hover:border-steel hover:shadow-md',
+                v.visitId === savedVisitId && 'border-primary ring-2 ring-primary/40',
+              )}
+            >
+              <button
+                type="button"
+                disabled={!canArrive}
+                onClick={() => openArrival(v.visitId)}
+                className="flex-1 rounded-lg p-4 text-left disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-lg font-semibold text-steel">{v.visitorName}</div>
+                    <div className="truncate text-sm text-gray-600">{v.companyName}</div>
+                  </div>
+                  <Badge className={statusBadgeClass(v.statusLabel)}>{v.statusLabel}</Badge>
+                </div>
+                <div className="mt-3 space-y-1 text-sm">
+                  <div><span className="text-gray-500">When:</span> {formatDate(v.visitDate)} {v.visitTime?.slice(0, 5)}</div>
+                  <div><span className="text-gray-500">Person to meet:</span> {v.hostName}</div>
+                  <div><span className="text-gray-500">Dept:</span> {v.departmentName}</div>
+                  {v.purposes?.length ? (
+                    <div className="truncate"><span className="text-gray-500">Purpose:</span> {v.purposes.join(', ')}</div>
+                  ) : null}
+                </div>
+              </button>
+              {canEdit ? (
+                <div className="flex justify-end border-t border-gray-100 px-4 py-2">
+                  <Button size="sm" variant="secondary" onClick={() => void startEdit(v.visitId)}>
+                    Edit
+                  </Button>
+                </div>
               ) : null}
             </div>
-          </button>
-        ))}
+          )
+        })}
       </div>
       {!loading && items.length > 0 ? (
         <Panel className="mt-3 p-0">

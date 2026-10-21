@@ -8,7 +8,7 @@ import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel } from '../components/ui/Field'
 import { SecureImage } from '../components/SecureImage'
 import { FaceCameraPanel } from '../components/FaceCameraPanel'
-import { captureFaceJpeg } from '../lib/cameraCapture'
+import { captureFaceJpeg, openFaceCamera, toggleCameraFacing } from '../lib/cameraCapture'
 import { cn } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 
@@ -79,10 +79,7 @@ export function FaceCheckoutPage() {
     setError(null)
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      })
+      const stream = await openFaceCamera()
       if (attempt !== cameraAttemptRef.current) {
         stream.getTracks().forEach((t) => t.stop())
         return
@@ -360,7 +357,13 @@ export function FaceCheckoutPage() {
             </Panel>
           ) : (
             <Panel>
-              <FaceCameraPanel videoRef={videoRef} />
+              <FaceCameraPanel
+                videoRef={videoRef}
+                onSwitchCamera={() => {
+                  toggleCameraFacing()
+                  void startCamera()
+                }}
+              />
               <p className="mt-3 text-center text-sm text-gray-600">{statusText}</p>
               <div className="mt-3 flex flex-wrap justify-center gap-2">
                 {!cameraReady ? (

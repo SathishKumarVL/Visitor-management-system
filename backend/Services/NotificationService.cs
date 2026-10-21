@@ -16,8 +16,10 @@ public interface INotificationService
         string body,
         string? idempotencyKey = null,
         Guid? locationId = null,
-        MailSender? sender = null);
-    Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null);
+        MailSender? sender = null,
+        string? link = null);
+    /// <summary>With <paramref name="sender"/>, the test goes out from that address (checks the Send As permission).</summary>
+    Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null, MailSender? sender = null);
     /// <summary>Re-attempts delivery for unsent Email outbox rows (e.g. after SMTP config fix).</summary>
     Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20);
 }
@@ -53,7 +55,8 @@ public class NotificationService : INotificationService
         string body,
         string? idempotencyKey = null,
         Guid? locationId = null,
-        MailSender? sender = null)
+        MailSender? sender = null,
+        string? link = null)
     {
         var tenantId = QueueingTenantId;
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -79,6 +82,7 @@ public class NotificationService : INotificationService
             FromAddress = Clip(sender?.FromAddress, 256),
             FromName = Clip(sender?.FromName, 200),
             ReplyTo = Clip(sender?.ReplyTo, 256),
+            Link = Clip(link, 300),
             IsSent = false
         };
         _db.NotificationOutbox.Add(row);
@@ -103,7 +107,7 @@ public class NotificationService : INotificationService
         return trimmed.Length > max ? trimmed[..max] : trimmed;
     }
 
-    public async Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null)
+    public async Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null, MailSender? sender = null)
     {
         if (string.IsNullOrWhiteSpace(recipient))
             return (false, "Recipient email is required.");
@@ -116,6 +120,9 @@ public class NotificationService : INotificationService
             Recipient = recipient.Trim(),
             Subject = "Tiaano VMS SMTP test",
             Body = $"SMTP test from Tiaano Visitor Management at {AppTime.Now:dd MMM yyyy HH:mm:ss}.",
+            FromAddress = Clip(sender?.FromAddress, 256),
+            FromName = Clip(sender?.FromName, 200),
+            ReplyTo = Clip(sender?.ReplyTo, 256),
             IsSent = false
         };
         _db.NotificationOutbox.Add(row);
@@ -132,7 +139,9 @@ public class NotificationService : INotificationService
             row.SentAt = DateTime.UtcNow;
             row.Error = null;
             await _db.SaveChangesAsync();
-            return (true, $"Email sent to {row.Recipient}.");
+            return (true, row.FromAddress is null
+                ? $"Email sent to {row.Recipient}."
+                : $"Email sent to {row.Recipient} from {row.FromAddress}.");
         }
         catch (Exception ex)
         {

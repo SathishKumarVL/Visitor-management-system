@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { apiErrorMessage, mastersApi } from '../lib/api'
-import type { MasterItemDto, MasterUpsertRequest } from '../types/api'
+import { Link } from 'react-router-dom'
+import { apiErrorMessage, lookupsApi, mastersApi } from '../lib/api'
+import type { LookupSourceOptionDto, MasterItemDto, MasterUpsertRequest, PurposeFieldDto } from '../types/api'
 import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
@@ -14,12 +15,13 @@ import { SortHeader } from '../components/ui/SortHeader'
 import { hasAnyRole } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 
-type MasterKind = 'departments' | 'purposes' | 'locations'
+type MasterKind = 'departments' | 'purposes' | 'locations' | 'designations'
 
 const singular: Record<MasterKind, string> = {
   departments: 'department',
   purposes: 'purpose',
   locations: 'location',
+  designations: 'designation',
 }
 
 const config: Record<MasterKind, {
@@ -49,6 +51,12 @@ const config: Record<MasterKind, {
     create: (b) => mastersApi.createLocation(b),
     update: (id, b) => mastersApi.updateLocation(id, b),
   },
+  designations: {
+    title: 'Designations',
+    list: (a) => mastersApi.designations(a),
+    create: (b) => mastersApi.createDesignation(b),
+    update: (id, b) => mastersApi.updateDesignation(id, b),
+  },
 }
 
 const blank = (): MasterUpsertRequest => ({
@@ -62,6 +70,8 @@ const blank = (): MasterUpsertRequest => ({
   isDefault: false,
   locationId: null,
 })
+
+const MAX_PURPOSE_FIELDS = 5
 
 export function MasterListPage({ kind }: { kind: MasterKind }) {
   const cfg = config[kind]
@@ -108,6 +118,12 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
     void load()
   }, [load])
 
+  const [lookupSources, setLookupSources] = useState<LookupSourceOptionDto[]>([])
+  useEffect(() => {
+    if (kind === 'purposes') void lookupsApi.sources().then(setLookupSources).catch(() => setLookupSources([]))
+  }, [kind])
+  const lookupName = (id?: string | null) => lookupSources.find((s) => s.id === id)?.name ?? 'lookup'
+
   function closeForm() {
     setFormOpen(false)
     setEditing(null)
@@ -121,8 +137,20 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
     setForm({
       ...blank(),
       locationId: cfg.locationScoped ? filterLocationId || null : null,
+      fields: kind === 'purposes' ? [] : undefined,
+      momRequired: kind === 'locations' ? true : undefined,
     })
     setFormOpen(true)
+  }
+
+  const fields = form.fields ?? []
+
+  function setFields(next: PurposeFieldDto[]) {
+    setForm((f) => ({ ...f, fields: next }))
+  }
+
+  function patchField(index: number, patch: Partial<PurposeFieldDto>) {
+    setFields(fields.map((f, i) => (i === index ? { ...f, ...patch } : f)))
   }
 
   function startEdit(item: MasterItemDto) {
@@ -140,6 +168,8 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
       requiresOtherText: item.requiresOtherText,
       isDefault: item.isDefault,
       locationId: item.locationId || null,
+      fields: kind === 'purposes' ? (item.fields ?? []).map((f) => ({ ...f })) : undefined,
+      momRequired: kind === 'locations' ? item.momRequired ?? true : undefined,
     })
   }
 
@@ -156,6 +186,9 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
       const body: MasterUpsertRequest = {
         ...form,
         locationId: form.locationId || null,
+        fields: form.fields
+          ?.map((f) => ({ ...f, label: f.label.trim() }))
+          .filter((f) => f.label.length > 0),
       }
       if (editing) await cfg.update(editing.id, body)
       else await cfg.create(body)
@@ -174,6 +207,19 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
     try {
       await mastersApi.deactivate(kind, id)
       setMessage('Deactivated.')
+      await load()
+    } catch (e) {
+      setError(apiErrorMessage(e))
+    }
+  }
+
+  async function remove(item: MasterItemDto) {
+    if (!window.confirm(`Delete ${singular[kind]} "${item.name}" permanently? This cannot be undone.`)) return
+    setError(null)
+    setMessage(null)
+    try {
+      await mastersApi.remove(kind, item.id)
+      setMessage(`Deleted ${item.name}.`)
       await load()
     } catch (e) {
       setError(apiErrorMessage(e))
@@ -228,7 +274,23 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
               <tbody>
                 {pageItems.map((item) => (
                   <tr key={item.id} className="border-t border-gray-100">
-                    <td className="px-4 py-3 font-medium">{item.name}</td>
+                    <td className="px-4 py-3 font-medium">
+                      {item.name}
+                      {item.fields?.length ? (
+                        <div className="mt-0.5 text-xs font-normal text-ink-muted">
+                          Extra fields:{' '}
+                          {item.fields
+                            .map(
+                              (f) =>
+                                `${f.label}${f.isRequired ? ' *' : ''}${f.type === 'lookup' ? ` (search ${lookupName(f.lookupSourceId)})` : ''}`,
+                            )
+                            .join(', ')}
+                        </div>
+                      ) : null}
+                      {kind === 'locations' && item.momRequired === false ? (
+                        <div className="mt-0.5 text-xs font-normal text-ink-muted">No minutes of meeting</div>
+                      ) : null}
+                    </td>
                     <td className="px-4 py-3">{item.code || '—'}</td>
                     {cfg.locationScoped ? (
                       <td className="px-4 py-3">{item.locationName || 'All locations'}</td>
@@ -239,6 +301,9 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                         <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
                         {item.isActive && canAddAndRemove ? (
                           <Button size="sm" variant="danger" onClick={() => void deactivate(item.id)}>Deactivate</Button>
+                        ) : null}
+                        {isSuperAdmin ? (
+                          <Button size="sm" variant="danger" onClick={() => void remove(item)}>Delete</Button>
                         ) : null}
                       </div>
                     </td>
@@ -307,6 +372,116 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                 Active
               </label>
             ) : null}
+            {kind === 'locations' ? (
+              <div className="sm:col-span-2">
+                <label className="flex min-h-11 items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.momRequired ?? true}
+                    onChange={(e) => setForm({ ...form, momRequired: e.target.checked })}
+                  />
+                  Minutes of meeting (MoM)
+                </label>
+                <p className="text-xs text-ink-muted">
+                  {form.momRequired ?? true
+                    ? 'Hosts are reminded to add minutes after each visit here, and visits stay "MoM pending" until they do.'
+                    : 'Visits here are marked "MoM not required": no minutes reminder emails, and nothing shows as pending.'}
+                </p>
+              </div>
+            ) : null}
+            {kind === 'purposes' ? (
+              <div className="rounded-xl border border-border bg-mint/40 p-3 sm:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">Extra fields</p>
+                    <p className="text-xs text-ink-muted">
+                      Asked at walk-in registration only when this purpose is selected, e.g. Invoice number.
+                      {lookupSources.length > 0 ? (
+                        ' A "Search" field looks the value up in an outside system.'
+                      ) : isSuperAdmin ? (
+                        <>
+                          {' '}To search an outside system (e.g. a student list),{' '}
+                          <Link to="/settings?tab=lookups" className="font-medium text-primary underline">
+                            set up a lookup source
+                          </Link>{' '}
+                          first; it then appears in the field&apos;s type list.
+                        </>
+                      ) : (
+                        ' Super Admin can connect outside systems to search in Settings, under Lookup sources.'
+                      )}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={fields.length >= MAX_PURPOSE_FIELDS}
+                    onClick={() => setFields([...fields, { id: null, label: '', isRequired: false }])}
+                  >
+                    + Add field
+                  </Button>
+                </div>
+                {fields.length === 0 ? (
+                  <p className="mt-2 text-sm text-ink-muted">No extra fields.</p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {fields.map((field, index) => (
+                      <div key={field.id || `new-${index}`} className="flex flex-wrap items-center gap-2">
+                        <TextInput
+                          className="min-w-0 flex-1 basis-56"
+                          maxLength={100}
+                          placeholder="Field name, e.g. Vehicle number"
+                          aria-label={`Extra field ${index + 1} name`}
+                          value={field.label}
+                          onChange={(e) => patchField(index, { label: e.target.value })}
+                        />
+                        <TextSelect
+                          className="basis-44"
+                          aria-label={`Extra field ${index + 1} type`}
+                          value={field.type === 'lookup' ? field.lookupSourceId ?? '' : ''}
+                          onChange={(e) =>
+                            patchField(
+                              index,
+                              e.target.value
+                                ? { type: 'lookup', lookupSourceId: e.target.value }
+                                : { type: 'text', lookupSourceId: null },
+                            )
+                          }
+                        >
+                          <option value="">Text</option>
+                          {lookupSources.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              Search {s.name}
+                              {s.isActive ? '' : ' (off)'}
+                            </option>
+                          ))}
+                        </TextSelect>
+                        <label className="flex min-h-11 items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={field.isRequired}
+                            onChange={(e) => patchField(index, { isRequired: e.target.checked })}
+                          />
+                          Required
+                        </label>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Remove ${field.label || `field ${index + 1}`}`}
+                          onClick={() => setFields(fields.filter((_, i) => i !== index))}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {fields.length >= MAX_PURPOSE_FIELDS ? (
+                  <p className="mt-2 text-xs text-ink-muted">A purpose can have up to {MAX_PURPOSE_FIELDS} extra fields.</p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex justify-end gap-2 border-t border-gray-100 pt-3 sm:col-span-2">
               <Button type="button" variant="secondary" onClick={closeForm}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
@@ -325,4 +500,7 @@ export function PurposesPage() {
 }
 export function LocationsPage() {
   return <MasterListPage kind="locations" />
+}
+export function DesignationsPage() {
+  return <MasterListPage kind="designations" />
 }

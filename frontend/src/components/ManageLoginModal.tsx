@@ -5,7 +5,7 @@ import { Alert, Spinner } from './ui/Panel'
 import { Button } from './ui/Button'
 import { FieldLabel, PasswordInput, TextInput, TextSelect } from './ui/Field'
 import { Modal } from './ui/Modal'
-import { menusForRole, roleLabel, type MenuKey } from '../lib/roles'
+import { MENU_ITEMS, menusForRole, roleLabel, type MenuKey } from '../lib/roles'
 import { formatDateTime, hasAnyRole, titledName } from '../lib/utils'
 import { useAuthStore } from '../store/authStore'
 
@@ -62,7 +62,11 @@ export function ManageLoginModal({
   const [faceError, setFaceError] = useState<string | null>(null)
 
   const roles = ROLES.filter((r) => (r !== 'SuperAdmin' || actorIsSuperAdmin) && (r !== 'Host' || !!employee || initialRole === 'Host'))
-  const menuOptions = useMemo(() => menusForRole(role), [role])
+  // A Super Admin may grant any menu; an Admin only the menus of the chosen role.
+  const allMenus = useMemo(
+    () => (actorIsSuperAdmin ? MENU_ITEMS.filter((item) => !item.alwaysVisible) : menusForRole(role)),
+    [actorIsSuperAdmin, role],
+  )
   const needsLocation = LOCATION_BOUND_ROLES.includes(role)
   const employeeMissingLocation = !!employee && needsLocation && !employee.locationId
 
@@ -212,20 +216,20 @@ export function ManageLoginModal({
             <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
               <div>
                 <FieldLabel>Visible menus</FieldLabel>
-                <p className="text-xs text-gray-500">Sidebar items this login can see. Options depend on the role.</p>
+                <p className="text-xs text-gray-500">Sidebar items this login can see.</p>
               </div>
               <div className="flex gap-2">
-                <Button type="button" size="sm" variant="secondary" onClick={() => setMenus(menuOptions.map((o) => o.key))}>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setMenus(allMenus.map((o) => o.key))}>
                   Select all
                 </Button>
                 <Button type="button" size="sm" variant="secondary" onClick={() => setMenus([])}>Clear</Button>
               </div>
             </div>
             <div className="grid gap-x-4 rounded-md border border-gray-200 px-3 py-1 sm:grid-cols-2 lg:grid-cols-3">
-              {menuOptions.map((item) => (
+              {allMenus.map((item) => (
                 <label key={item.key} className="flex min-h-9 cursor-pointer items-center gap-2 text-sm">
                   <input type="checkbox" checked={menus.includes(item.key)} onChange={() => toggleMenu(item.key)} />
-                  {item.label}
+                  <span>{item.label}</span>
                 </label>
               ))}
             </div>
@@ -252,7 +256,7 @@ export function ManageLoginModal({
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                 />
-                <p className="text-xs text-gray-500">At least 10 characters with upper, lower, digit and a symbol.</p>
+                <p className="text-xs text-gray-500">At least 10 characters with an uppercase letter, a lowercase letter, a number and a special character (e.g. ! @ # $).</p>
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={mustChange} onChange={(e) => setMustChange(e.target.checked)} />
                   Change it at next sign-in

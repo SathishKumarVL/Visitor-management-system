@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { cn } from '../../lib/utils'
-import type { PropsWithChildren, ReactNode } from 'react'
+import { useEffect, useState, type PropsWithChildren, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { LoadingMask } from '../LoadingMask'
 
 export function PageHeader({
@@ -63,10 +64,77 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cn('skeleton', className)} aria-hidden />
 }
 
+export const ALERT_AUTO_HIDE_MS = 5000
+
+function popupRoot(): HTMLElement {
+  let root = document.getElementById('alert-popups')
+  if (!root) {
+    root = document.createElement('div')
+    root.id = 'alert-popups'
+    root.className =
+      'pointer-events-none fixed inset-x-0 top-4 z-[1000] flex flex-col items-center gap-2 px-4'
+    document.body.appendChild(root)
+  }
+  return root
+}
+
+/**
+ * Hides itself {@link ALERT_AUTO_HIDE_MS} after it appears; a different text message shows again for another 5 s.
+ * Use `persistent` for alerts that are the page's only content or carry something the user must read or copy.
+ * Errors that are not persistent pop up at the top of the screen instead of sitting in the page.
+ */
 export function Alert({
   tone = 'info',
+  persistent = false,
   children,
-}: PropsWithChildren<{ tone?: 'info' | 'error' | 'success' | 'warning' }>) {
+}: PropsWithChildren<{ tone?: 'info' | 'error' | 'success' | 'warning'; persistent?: boolean }>) {
+  const messageKey = typeof children === 'string' || typeof children === 'number' ? String(children) : ''
+  const [hiddenKey, setHiddenKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (persistent) return
+    const timer = window.setTimeout(() => setHiddenKey(messageKey), ALERT_AUTO_HIDE_MS)
+    return () => window.clearTimeout(timer)
+  }, [persistent, messageKey])
+
+  const hidden = !persistent && hiddenKey === messageKey
+
+  if (tone === 'error' && !persistent) {
+    // The anchor lets CSS collapse the page's wrapper (e.g. "mb-4") that would otherwise leave a gap.
+    return (
+      <>
+        <span data-alert-anchor hidden />
+        {hidden
+          ? null
+          : createPortal(
+              <div
+                role="alert"
+                className="alert-popup pointer-events-auto flex w-full max-w-lg items-start gap-3 rounded-xl border border-danger/30 bg-white px-4 py-3 text-sm text-danger shadow-lg ring-1 ring-black/5"
+              >
+                <span
+                  aria-hidden
+                  className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs font-bold text-white"
+                >
+                  !
+                </span>
+                <div className="min-w-0 flex-1 break-words font-medium">{children}</div>
+                <button
+                  type="button"
+                  aria-label="Close"
+                  onClick={() => setHiddenKey(messageKey)}
+                  className="-mr-1 -mt-0.5 shrink-0 rounded-md px-1.5 text-base leading-none text-danger/70 hover:bg-red-50 hover:text-danger"
+                >
+                  ×
+                </button>
+              </div>,
+              popupRoot(),
+            )}
+      </>
+    )
+  }
+
+  if (hidden) return null
+
   const styles = {
     info: 'border-primary/20 bg-aqua-light/70 text-primary-deep',
     error: 'border-danger/30 bg-red-50 text-danger',

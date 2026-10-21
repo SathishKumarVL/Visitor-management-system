@@ -88,6 +88,12 @@ public class VisitorVisit
     [MaxLength(1000)]
     public string? PurposeNotes { get; set; }
 
+    /// <summary>
+    /// JSON array of <see cref="PurposeFieldValue"/>: answers to the selected purposes' extra fields,
+    /// with purpose name and label copied so later edits to the purpose do not rewrite history.
+    /// </summary>
+    public string? PurposeFieldsJson { get; set; }
+
     [MaxLength(100)]
     public string? PlantNumber { get; set; }
 
@@ -177,6 +183,31 @@ public class VisitorVisit
     public ICollection<VisitorVisitLocation> VisitLocations { get; set; } = new List<VisitorVisitLocation>();
     public ICollection<Approval> Approvals { get; set; } = new List<Approval>();
     public ICollection<VisitorPass> Passes { get; set; } = new List<VisitorPass>();
+}
+
+/// <summary>One answer to a purpose's extra field, stored in <see cref="VisitorVisit.PurposeFieldsJson"/>.</summary>
+public class PurposeFieldValue
+{
+    public Guid FieldId { get; set; }
+    public string Purpose { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+
+    /// <summary>Null for a text field; true when picked from the lookup source, false when typed by hand.</summary>
+    public bool? Verified { get; set; }
+    public string? Source { get; set; }
+    public string? RecordId { get; set; }
+    /// <summary>Record properties copied from the source at registration, so later API changes do not alter history.</summary>
+    public List<PurposeFieldDetail>? Details { get; set; }
+    /// <summary>"mobile" or "email" when the source checks the visitor against the record.</summary>
+    public string? MatchAgainst { get; set; }
+    public bool? Matched { get; set; }
+}
+
+public class PurposeFieldDetail
+{
+    public string Label { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
 }
 
 /// <summary>One follow-up from a meeting, stored in <see cref="VisitorVisit.MomActionItemsJson"/>.</summary>
@@ -451,4 +482,8 @@ public class NotificationOutbox
     /// <summary>Where replies go, e.g. the host who met the visitor.</summary>
     [MaxLength(256)]
     public string? ReplyTo { get; set; }
+
+    /// <summary>App page opened when a push notification is tapped, e.g. "/visitors/{id}/minutes".</summary>
+    [MaxLength(300)]
+    public string? Link { get; set; }
 }

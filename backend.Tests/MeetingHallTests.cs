@@ -15,7 +15,8 @@ namespace Tiaano.Vms.Api.Tests;
 
 /// <summary>
 /// Meeting halls are allocated at check-in: the smallest free hall at the visit's location that seats the party,
-/// rotating between equal halls, freed at check-out. Each test works in its own new location so halls and
+/// rotating between equal halls, freed at check-out. Halls of 6+ seats are kept for groups of 6+ unless no smaller
+/// hall could seat the party. Each test works in its own new location so halls and
 /// visits left behind by other runs cannot interfere.
 /// </summary>
 [Collection("CoreWorkflow")]
@@ -49,12 +50,18 @@ public class MeetingHallTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         Assert.NotNull(halls.Single(h => h.Id == small.Id).OccupiedByVisitNumber);
 
         var second = await RegisterAsync(admin, location, persons: 3);
-        Assert.Equal("Board Room", (await CheckInAsync(admin, second)).MeetingHallName);
+        var secondPass = await CheckInAsync(admin, second);
+        Assert.Null(secondPass.MeetingHallName);
+        Assert.Contains("are in use", secondPass.MeetingHallWarning);
+        Assert.Contains("kept for larger groups", secondPass.MeetingHallWarning);
 
-        var third = await RegisterAsync(admin, location, persons: 3);
-        var thirdPass = await CheckInAsync(admin, third);
-        Assert.Null(thirdPass.MeetingHallName);
-        Assert.Contains("are in use", thirdPass.MeetingHallWarning);
+        var group = await RegisterAsync(admin, location, persons: 8);
+        Assert.Equal("Board Room", (await CheckInAsync(admin, group)).MeetingHallName);
+        await CheckOutAsync(admin, group);
+
+        var five = await RegisterAsync(admin, location, persons: 5);
+        Assert.Equal("Board Room", (await CheckInAsync(admin, five)).MeetingHallName);
+        await CheckOutAsync(admin, five);
 
         await CheckOutAsync(admin, first);
         var fourth = await RegisterAsync(admin, location, persons: 3);
@@ -68,7 +75,7 @@ public class MeetingHallTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         var detail = await admin.GetFromJsonAsync<ApiResponse<VisitorDetailDto>>($"/api/visitors/{first}", JsonOptions);
         Assert.Equal("Huddle Room", detail!.Data!.MeetingHallName);
 
-        foreach (var visit in new[] { second, third, fourth, crowd })
+        foreach (var visit in new[] { second, fourth, crowd })
             await CheckOutAsync(admin, visit);
     }
 
@@ -78,8 +85,8 @@ public class MeetingHallTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         var admin = await AdminAsync();
         var location = await CreateLocationAsync();
         var tag = Guid.NewGuid().ToString("N")[..6];
-        await CreateHallAsync(admin, $"A-{tag}", "Hall A", 6, location);
-        await CreateHallAsync(admin, $"B-{tag}", "Hall B", 6, location);
+        await CreateHallAsync(admin, $"A-{tag}", "Hall A", 4, location);
+        await CreateHallAsync(admin, $"B-{tag}", "Hall B", 4, location);
 
         var picks = new List<string?>();
         for (var i = 0; i < 3; i++)

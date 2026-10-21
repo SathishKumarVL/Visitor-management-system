@@ -279,12 +279,15 @@ public static class DbSeeder
     private static async Task EnsureColumnWidthsAsync(ApplicationDbContext context)
     {
         // Widen ID columns without a full migration so existing local DBs stop truncating.
+        // Only issue DDL when a column is actually narrow: the production app identity has no ALTER rights.
         await context.Database.ExecuteSqlRawAsync("""
-            IF COL_LENGTH('dbo.VisitorDocuments', 'IdNumberMasked') IS NOT NULL
+            IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.VisitorDocuments') AND name = 'IdNumberMasked'
+                       AND ((max_length <> -1 AND max_length < 100) OR is_nullable = 1))
             BEGIN
                 ALTER TABLE dbo.VisitorDocuments ALTER COLUMN IdNumberMasked nvarchar(50) NOT NULL;
             END
-            IF COL_LENGTH('dbo.VisitorDocuments', 'IdNumberEncrypted') IS NOT NULL
+            IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.VisitorDocuments') AND name = 'IdNumberEncrypted'
+                       AND ((max_length <> -1 AND max_length < 1000) OR is_nullable = 1))
             BEGIN
                 ALTER TABLE dbo.VisitorDocuments ALTER COLUMN IdNumberEncrypted nvarchar(500) NOT NULL;
             END
@@ -448,5 +451,19 @@ public static class SensitiveDataHelper
         using var decryptor = aes.CreateDecryptor();
         var plain = decryptor.TransformFinalBlock(all, 16, all.Length - 16);
         return Encoding.UTF8.GetString(plain);
+    }
+
+    /// <summary>Null when the value was encrypted with a different key (e.g. data from an earlier installation).</summary>
+    public static string? TryDecrypt(string? cipherText, string key)
+    {
+        if (string.IsNullOrEmpty(cipherText)) return null;
+        try
+        {
+            return Decrypt(cipherText, key);
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException or ArgumentException)
+        {
+            return null;
+        }
     }
 }

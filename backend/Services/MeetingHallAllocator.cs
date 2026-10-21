@@ -17,9 +17,13 @@ public interface IMeetingHallAllocator
 /// <summary>
 /// Smallest free hall at the visit's location that seats everyone. Equal-sized halls take turns: the one used
 /// least recently wins. A hall is busy while a visit holding it is inside, so check-out frees it.
+/// Large halls (<see cref="LargeGroupMinPersons"/> seats or more) are kept for groups of that size; a smaller
+/// party only gets one when no regular hall at the location could ever seat it.
 /// </summary>
 public class MeetingHallAllocator : IMeetingHallAllocator
 {
+    public const int LargeGroupMinPersons = 6;
+
     private readonly ApplicationDbContext _db;
     private readonly ITenantContext _tenant;
 
@@ -47,6 +51,17 @@ public class MeetingHallAllocator : IMeetingHallAllocator
             return new MeetingHallAllocation(null,
                 $"No meeting hall seats {persons} {(persons == 1 ? "person" : "people")}. Checked in without a meeting hall.");
 
+        var largeHallsReserved = false;
+        if (persons < LargeGroupMinPersons)
+        {
+            var regular = fitting.Where(h => h.SeatingCapacity < LargeGroupMinPersons).ToList();
+            if (regular.Count > 0)
+            {
+                largeHallsReserved = regular.Count < fitting.Count;
+                fitting = regular;
+            }
+        }
+
         // Visits are location-filtered for bound users; occupancy must count every visit in the tenant.
         var fittingIds = fitting.Select(h => h.Id).ToList();
         var busy = await _db.VisitorVisits.IgnoreQueryFilters().AsNoTracking()
@@ -59,7 +74,9 @@ public class MeetingHallAllocator : IMeetingHallAllocator
             .ToList();
         if (free.Count == 0)
             return new MeetingHallAllocation(null,
-                $"All meeting halls that seat {persons} {(persons == 1 ? "person" : "people")} are in use. Checked in without a meeting hall.");
+                $"All meeting halls that seat {persons} {(persons == 1 ? "person" : "people")} are in use" +
+                (largeHallsReserved ? $" (halls for {LargeGroupMinPersons} or more are kept for larger groups)" : "") +
+                ". Checked in without a meeting hall.");
 
         var freeIds = free.Select(h => h.Id).ToList();
         var lastUsed = await _db.VisitorVisits.IgnoreQueryFilters().AsNoTracking()

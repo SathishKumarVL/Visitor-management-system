@@ -25,7 +25,7 @@ export function ChangePasswordPage() {
     setError(null)
 
     if (newPassword.length < 10) {
-      setError('New password must be at least 10 characters and include upper, lower, digit, and a symbol.')
+      setError('New password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number and a special character (e.g. ! @ # $).')
       return
     }
     if (newPassword !== confirm) {

@@ -106,14 +106,14 @@ export function ResetPasswordPage() {
     <AuthCard title={t('login.resetTitle')} subtitle={t('login.resetHelp')}>
       {!userId || !token ? (
         <div className="space-y-4">
-          <Alert tone="error">{t('login.resetInvalidLink')}</Alert>
+          <Alert tone="error" persistent>{t('login.resetInvalidLink')}</Alert>
           <Link to="/forgot-password" className="block text-center text-sm font-medium text-primary hover:underline">
             {t('login.forgotPassword')}
           </Link>
         </div>
       ) : done ? (
         <div className="space-y-4">
-          <Alert tone="success">{done}</Alert>
+          <Alert tone="success" persistent>{done}</Alert>
           <Link to="/login">
             <Button size="lg" className="w-full">{t('login.backToSignIn')}</Button>
           </Link>

@@ -8,7 +8,8 @@ import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 import { Pagination } from '../components/ui/Pagination'
 import { SortHeader } from '../components/ui/SortHeader'
 import { nextSort, type SortState } from '../lib/useSort'
-import { formatDate, formatDateTime, statusBadgeClass } from '../lib/utils'
+import { formatDate, formatDateTime, hasAnyRole, statusBadgeClass } from '../lib/utils'
+import { useAuthStore } from '../store/authStore'
 
 const QUICK_FILTERS = [
   { value: 'today', label: 'Today' },
@@ -25,6 +26,7 @@ const QUICK_FILTERS = [
 ]
 
 export function VisitorsPage() {
+  const canRegister = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin', 'Admin', 'Reception'])
   const [params, setParams] = useSearchParams()
   const [items, setItems] = useState<VisitorListItemDto[]>([])
   const [total, setTotal] = useState(0)
@@ -114,9 +116,11 @@ export function VisitorsPage() {
         title="Visitors"
         subtitle={`${total} record${total === 1 ? '' : 's'}`}
         actions={
-          <Link to="/visitors/new">
-            <Button variant="amber">New visitor</Button>
-          </Link>
+          canRegister ? (
+            <Link to="/visitors/new">
+              <Button variant="amber">New visitor</Button>
+            </Link>
+          ) : null
         }
       />
 

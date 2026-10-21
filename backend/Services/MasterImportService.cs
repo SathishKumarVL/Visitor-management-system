@@ -25,7 +25,7 @@ public class MasterImportService : IMasterImportService
     private const int TemplateRows = 1000;
     private const int MaxImportRows = 5000;
 
-    private enum ColumnType { Text, Number, YesNo, Location, Department }
+    private enum ColumnType { Text, Number, YesNo, Location, Department, Designation }
 
     private sealed record Column(string Key, string Header, ColumnType Type, bool Required, string Help, params string[] Aliases);
 
@@ -45,7 +45,7 @@ public class MasterImportService : IMasterImportService
             {
                 new Column("name", "Full Name", ColumnType.Text, true, "Employee full name.", "name", "employeename"),
                 new Column("code", "Employee Code", ColumnType.Text, false, "Optional employee code. Used to match existing employees on re-upload.", "code"),
-                new Column("designation", "Designation", ColumnType.Text, false, "Optional job title."),
+                new Column("designation", "Designation", ColumnType.Designation, false, "Optional job title. Pick from the Lists sheet; a new title is added to Masters → Designations."),
                 new Column("department", "Department", ColumnType.Department, true, "Department name or code (must already exist)."),
                 new Column("location", "Location", ColumnType.Location, false, "Location name or code. Leave blank for all locations."),
                 new Column("phone", "Phone", ColumnType.Text, false, "Optional 10-digit mobile number.", "mobile"),
@@ -69,6 +69,13 @@ public class MasterImportService : IMasterImportService
                 new Column("active", "Active", ColumnType.YesNo, false, "Yes or No. Default Yes."),
                 new Column("plant", "Requires Plant Number", ColumnType.YesNo, false, "Yes or No. Default No."),
                 new Column("other", "Requires Other Text", ColumnType.YesNo, false, "Yes or No. Default No."),
+            }),
+            ["designations"] = ("Designations", new[]
+            {
+                new Column("name", "Name", ColumnType.Text, true, "Designation (job title), e.g. Manager. Up to 100 characters.", "designation"),
+                new Column("code", "Code", ColumnType.Text, false, "Optional short code. Used to match existing designations on re-upload."),
+                new Column("sort", "Sort Order", ColumnType.Number, false, "Whole number; lower shows first."),
+                new Column("active", "Active", ColumnType.YesNo, false, "Yes or No. Default Yes."),
             }),
             ["meeting-halls"] = ("Meeting Halls", new[]
             {
@@ -114,6 +121,10 @@ public class MasterImportService : IMasterImportService
                 .OrderBy(d => d.Name).Select(d => d.Name).ToListAsync())
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList()
             : new List<string>();
+        var designationNames = columns.Any(c => c.Type == ColumnType.Designation)
+            ? await _db.Designations.AsNoTracking().Where(d => d.IsActive)
+                .OrderBy(d => d.SortOrder).ThenBy(d => d.Name).Select(d => d.Name).ToListAsync()
+            : new List<string>();
 
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add(DataSheet);
@@ -127,8 +138,10 @@ public class MasterImportService : IMasterImportService
         lists.Cell(1, 3).Value = "Yes / No";
         lists.Cell(2, 3).Value = "Yes";
         lists.Cell(3, 3).Value = "No";
+        lists.Cell(1, 4).Value = "Designations";
+        for (var i = 0; i < designationNames.Count; i++) lists.Cell(i + 2, 4).Value = designationNames[i];
         lists.Row(1).Style.Font.Bold = true;
-        lists.Columns(1, 3).AdjustToContents();
+        lists.Columns(1, 4).AdjustToContents();
 
         for (var i = 0; i < columns.Length; i++)
         {
@@ -155,6 +168,12 @@ public class MasterImportService : IMasterImportService
                 case ColumnType.Department when departmentNames.Count > 0:
                     AddSoftListValidation(body, lists.Range(2, 2, departmentNames.Count + 1, 2));
                     break;
+                case ColumnType.Designation:
+                    body.Style.NumberFormat.Format = "@";
+                    if (designationNames.Count > 0)
+                        AddSoftListValidation(body, lists.Range(2, 4, designationNames.Count + 1, 4),
+                            "Value is not in the Lists sheet. A new designation will be added to the master.");
+                    break;
             }
             ws.Column(i + 1).Width = Math.Max(16, col.Header.Length + 6);
         }
@@ -170,7 +189,7 @@ public class MasterImportService : IMasterImportService
         help.Cell(1, 1).Style.Font.FontSize = 14;
         help.Cell(2, 1).Value = "Fill one record per row in the 'Data' sheet, starting at row 2. Do not rename or reorder the header row.";
         help.Cell(3, 1).Value = "Columns marked * are required. Rows matching an existing record (same code, or same name) update that record instead of adding a duplicate.";
-        help.Cell(4, 1).Value = "The 'Lists' sheet shows the locations and departments you can pick from.";
+        help.Cell(4, 1).Value = "The 'Lists' sheet shows the locations, departments and designations you can pick from.";
         help.Cell(6, 1).Value = "Column";
         help.Cell(6, 2).Value = "Required";
         help.Cell(6, 3).Value = "Description";
@@ -192,13 +211,14 @@ public class MasterImportService : IMasterImportService
     }
 
     /// <summary>Dropdown that still accepts codes typed by hand (warning instead of hard stop).</summary>
-    private static void AddSoftListValidation(IXLRange body, IXLRange source)
+    private static void AddSoftListValidation(IXLRange body, IXLRange source,
+        string message = "Value is not in the Lists sheet. Codes are also accepted.")
     {
         var dv = body.CreateDataValidation();
         dv.List(source, true);
         dv.ErrorStyle = XLErrorStyle.Warning;
         dv.ErrorTitle = "Not in list";
-        dv.ErrorMessage = "Value is not in the Lists sheet. Codes are also accepted.";
+        dv.ErrorMessage = message;
     }
 
     public async Task<MasterImportResultDto> ImportAsync(string kind, Stream excel, string? user)
@@ -252,6 +272,7 @@ public class MasterImportService : IMasterImportService
                         "employees" => await ImportEmployeeAsync(row, locations, user),
                         "purposes" => await ImportPurposeAsync(row, locations, user),
                         "locations" => await ImportLocationAsync(row, user),
+                        "designations" => await ImportDesignationAsync(row, user),
                         "feedback-questions" => await ImportFeedbackQuestionAsync(row, locations, user),
                         "meeting-halls" => await ImportMeetingHallAsync(row, locations, user),
                         _ => throw new InvalidOperationException("Unsupported import type."),
@@ -423,6 +444,26 @@ public class MasterImportService : IMasterImportService
             IsActive = row.Bool("active") ?? existing?.IsActive ?? true,
             RequiresPlantNumber = row.Bool("plant") ?? existing?.RequiresPlantNumber ?? false,
             RequiresOtherText = row.Bool("other") ?? existing?.RequiresOtherText ?? false,
+        }, user);
+        return existing is null;
+    }
+
+    private async Task<bool> ImportDesignationAsync(RowValues row, string? user)
+    {
+        var name = row.Text("name")!;
+        var code = row.Text("code");
+
+        var existing = (code is not null
+                ? await _db.Designations.AsNoTracking().FirstOrDefaultAsync(d => d.Code == code)
+                : null)
+            ?? await _db.Designations.AsNoTracking().FirstOrDefaultAsync(d => d.Name == name);
+
+        await _masters.UpsertDesignationAsync(existing?.Id, new MasterUpsertRequest
+        {
+            Name = name,
+            Code = code ?? existing?.Code,
+            SortOrder = row.Int("sort") ?? existing?.SortOrder ?? 0,
+            IsActive = row.Bool("active") ?? existing?.IsActive ?? true,
         }, user);
         return existing is null;
     }

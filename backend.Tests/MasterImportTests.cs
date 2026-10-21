@@ -22,6 +22,7 @@ public class MasterImportTests : IClassFixture<TestApiFactory>
     [InlineData("employees", "Full Name *")]
     [InlineData("purposes", "Name *")]
     [InlineData("locations", "Name *")]
+    [InlineData("designations", "Name *")]
     [InlineData("feedback-questions", "Question *")]
     public async Task Template_Download_Returns_Xlsx_With_Header_Row(string kind, string firstHeader)
     {
@@ -93,6 +94,47 @@ public class MasterImportTests : IClassFixture<TestApiFactory>
             .SingleAsync(e => e.Code == $"E1{suffix}");
         Assert.Equal(deptName, emp.Department.Name);
         Assert.Equal("9876543210", emp.Phone);
+    }
+
+    [Fact]
+    public async Task Designation_Upload_Creates_Then_Updates_And_Employee_Template_Lists_Them()
+    {
+        var client = await LoginAsync("admin");
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var headers = new[] { "Name *", "Code", "Sort Order", "Active" };
+        var rows = new[]
+        {
+            new[] { $"Import Desig A {suffix}", $"DA{suffix}", "1", "Yes" },
+            new[] { $"Import Desig B {suffix}", "", "", "" },
+        };
+
+        var first = await UploadAsync(client, "designations", headers, rows);
+        Assert.Equal(2, first.GetProperty("created").GetInt32());
+
+        rows[1][3] = "No";
+        var second = await UploadAsync(client, "designations", headers, rows);
+        Assert.Equal(0, second.GetProperty("created").GetInt32());
+        Assert.Equal(2, second.GetProperty("updated").GetInt32());
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var imported = await db.Designations.IgnoreQueryFilters()
+            .Where(d => d.Name.EndsWith(suffix)).ToListAsync();
+        Assert.Equal(2, imported.Count);
+        Assert.False(imported.Single(d => d.Name == $"Import Desig B {suffix}").IsActive);
+
+        var superadmin = await LoginAsync("superadmin");
+        var template = await superadmin.GetAsync("/api/masters/import/employees/template");
+        using (var wb = new XLWorkbook(await template.Content.ReadAsStreamAsync()))
+        {
+            var listed = wb.Worksheet("Lists").Column(4).CellsUsed().Select(c => c.GetString()).ToList();
+            Assert.Equal("Designations", listed[0]);
+            Assert.Contains($"Import Desig A {suffix}", listed);
+            Assert.DoesNotContain($"Import Desig B {suffix}", listed);
+        }
+
+        db.Designations.RemoveRange(imported);
+        await db.SaveChangesAsync();
     }
 
     [Fact]

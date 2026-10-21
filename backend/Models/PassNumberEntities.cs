@@ -90,7 +90,7 @@ public class PassNumberHold
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
-/// <summary>Optional device token for push delivery (stub foundation).</summary>
+/// <summary>A device that receives push notifications for a user. Browser (Web Push) subscriptions use Platform "web".</summary>
 public class DevicePushToken
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -102,11 +102,20 @@ public class DevicePushToken
     public string UserId { get; set; } = string.Empty;
     public ApplicationUser? User { get; set; }
 
+    /// <summary>For Web Push, the browser's push service endpoint URL.</summary>
     [Required, MaxLength(500)]
     public string Token { get; set; } = string.Empty;
 
     [MaxLength(40)]
     public string Platform { get; set; } = "unknown";
+
+    /// <summary>Web Push subscription public key (base64url).</summary>
+    [MaxLength(200)]
+    public string? P256dh { get; set; }
+
+    /// <summary>Web Push subscription auth secret (base64url).</summary>
+    [MaxLength(100)]
+    public string? Auth { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }

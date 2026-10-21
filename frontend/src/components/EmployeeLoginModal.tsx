@@ -103,7 +103,7 @@ export function EmployeeLoginModal({
       onClick={onClose}
     >
       <div
-        className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+        className="max-h-[94dvh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-1 text-lg font-semibold text-steel">Create login</h2>
@@ -117,7 +117,7 @@ export function EmployeeLoginModal({
 
         {created ? (
           <div className="space-y-3 text-sm">
-            <Alert tone="success">Login created. Share these details with {employee.fullName}.</Alert>
+            <Alert tone="success" persistent>Login created. Share these details with {employee.fullName}.</Alert>
             <div className="rounded-xl bg-gray-50 p-3 font-mono text-sm">
               <div>Username: {created.userName}</div>
               <div>Temporary password: {password}</div>
@@ -163,7 +163,7 @@ export function EmployeeLoginModal({
                 </Button>
               </div>
               <p className="mt-1 text-xs text-ink-muted">
-                At least 10 characters with upper and lower case, a number and a symbol.
+                At least 10 characters with an uppercase letter, a lowercase letter, a number and a special character (e.g. ! @ # $).
               </p>
             </div>
             <div className="flex justify-end gap-2 pt-2 sm:col-span-2">

@@ -171,6 +171,65 @@ public class CheckOutAndMinutesMailTests : IClassFixture<TestApiFactory>
         Assert.Single(_mail.CheckOutsFor(visitNumber));
     }
 
+    [Fact]
+    public async Task Location_Without_Minutes_Marks_Its_Visits_Mom_Not_Required()
+    {
+        Guid locationId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var purpose = await FirstPurposeAsync(db);
+            locationId = purpose.LocationId ?? await db.Locations.IgnoreQueryFilters()
+                .Where(l => l.IsActive && l.TenantId == WellKnownTenants.TiaanoId).OrderBy(l => l.SortOrder).Select(l => l.Id).FirstAsync();
+        }
+
+        var superadmin = await LoginAsync("superadmin");
+        var locations = (await superadmin.GetFromJsonAsync<ApiResponse<List<MasterItemDto>>>(
+            "/api/masters/locations?activeOnly=false", JsonOptions))!.Data!;
+        var location = locations.Single(l => l.Id == locationId);
+        Assert.True(location.MomRequired);
+
+        async Task SetMomRequired(bool required)
+        {
+            var update = await superadmin.PutAsJsonAsync($"/api/masters/locations/{locationId}", new
+            {
+                name = location.Name,
+                code = location.Code,
+                sortOrder = location.SortOrder,
+                isActive = location.IsActive,
+                requiresPlantNumber = location.RequiresPlantNumber,
+                requiresOtherText = location.RequiresOtherText,
+                momRequired = required,
+            });
+            Assert.True(update.IsSuccessStatusCode, await update.Content.ReadAsStringAsync());
+            Assert.Equal(required, (await update.Content.ReadFromJsonAsync<ApiResponse<MasterItemDto>>(JsonOptions))!.Data!.MomRequired);
+        }
+
+        await SetMomRequired(false);
+        try
+        {
+            var (visitId, visitNumber) = await RegisterAndCheckInAsync("MoM Location Off", locationId);
+            var detail = (await superadmin.GetFromJsonAsync<ApiResponse<VisitorDetailDto>>($"/api/visitors/{visitId}", JsonOptions))!.Data!;
+            Assert.True(detail.MomNotRequired);
+            Assert.Equal(VisitorService.LocationMomNotRequiredBy, detail.MomNotRequiredBy);
+
+            (await superadmin.PostAsJsonAsync($"/api/visitors/{visitId}/check-out", new { skipFeedback = true }))
+                .EnsureSuccessStatusCode();
+            await WaitForAsync(() => _mail.CheckOutsFor(visitNumber), "check-out");
+            var pending = (await superadmin.GetFromJsonAsync<ApiResponse<PagedResult<VisitorListItemDto>>>(
+                "/api/visitors?quickFilter=momnotsent&pageSize=100", JsonOptions))!.Data!.Items;
+            Assert.DoesNotContain(pending, v => v.VisitId == visitId);
+        }
+        finally
+        {
+            await SetMomRequired(true);
+        }
+
+        var (requiredVisitId, _) = await RegisterAndCheckInAsync("MoM Location On", locationId);
+        var requiredDetail = (await superadmin.GetFromJsonAsync<ApiResponse<VisitorDetailDto>>($"/api/visitors/{requiredVisitId}", JsonOptions))!.Data!;
+        Assert.False(requiredDetail.MomNotRequired);
+    }
+
     private static async Task<List<VisitMailContext>> WaitForAsync(Func<List<VisitMailContext>> read, string what)
     {
         for (var i = 0; i < 50; i++)
@@ -182,7 +241,11 @@ public class CheckOutAndMinutesMailTests : IClassFixture<TestApiFactory>
         throw new Xunit.Sdk.XunitException($"No {what} email was sent.");
     }
 
-    private async Task<(Guid VisitId, string VisitNumber)> RegisterAndCheckInAsync(string namePrefix)
+    private static Task<VisitPurpose> FirstPurposeAsync(ApplicationDbContext db) =>
+        db.VisitPurposes.IgnoreQueryFilters()
+            .Where(p => p.IsActive && p.TenantId == WellKnownTenants.TiaanoId).OrderBy(p => p.SortOrder).FirstAsync();
+
+    private async Task<(Guid VisitId, string VisitNumber)> RegisterAndCheckInAsync(string namePrefix, Guid? locationId = null)
     {
         var admin = await LoginAsync("superadmin");
         var settings = (await (await admin.GetAsync("/api/settings")).Content
@@ -197,8 +260,7 @@ public class CheckOutAndMinutesMailTests : IClassFixture<TestApiFactory>
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var host = await db.Employees.IgnoreQueryFilters()
                 .Where(e => e.IsActive && e.TenantId == WellKnownTenants.TiaanoId).OrderBy(e => e.FullName).FirstAsync();
-            var purpose = await db.VisitPurposes.IgnoreQueryFilters()
-                .Where(p => p.IsActive && p.TenantId == WellKnownTenants.TiaanoId).OrderBy(p => p.SortOrder).FirstAsync();
+            var purpose = await FirstPurposeAsync(db);
             (departmentId, hostId, purposeId) = (host.DepartmentId, host.Id, purpose.Id);
         }
 
@@ -214,7 +276,7 @@ public class CheckOutAndMinutesMailTests : IClassFixture<TestApiFactory>
             departmentId,
             hostEmployeeId = hostId,
             purposeIds = new[] { purposeId },
-            locationIds = Array.Empty<Guid>(),
+            locationIds = locationId is Guid lid ? new[] { lid } : Array.Empty<Guid>(),
             numberOfPersons = 1,
             isWalkIn = true,
             idTypeName = "Aadhaar",

@@ -11,6 +11,7 @@ public interface IMediaStorageService
     Task<(Stream Stream, string ContentType)?> OpenAsync(string fileName);
     string ToPublicApiPath(string storedFileName);
     bool IsAllowedImage(byte[] bytes, out string contentType);
+    void Delete(string storedFileName);
 }
 
 public sealed class MediaStorageService : IMediaStorageService
@@ -86,6 +87,15 @@ public sealed class MediaStorageService : IMediaStorageService
 
         await File.WriteAllBytesAsync(fullPath, bytes);
         return safeName;
+    }
+
+    public void Delete(string storedFileName)
+    {
+        var safe = Path.GetFileName(storedFileName?.Trim() ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(safe)) return;
+        var full = Path.GetFullPath(Path.Combine(PrivateRoot, safe));
+        if (full.StartsWith(PrivateRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(full))
+            File.Delete(full);
     }
 
     /// <summary>

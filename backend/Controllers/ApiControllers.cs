@@ -223,6 +223,21 @@ public class VisitorsController : ControllerBase
         }
     }
 
+    [HttpPut("expected/{id:guid}")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Host}")]
+    public async Task<ActionResult<ApiResponse<VisitorDetailDto>>> UpdateExpected(Guid id, [FromBody] ExpectedVisitorRequest request)
+    {
+        try
+        {
+            var result = await _visitors.UpdateExpectedAsync(id, request, User);
+            return Ok(new ApiResponse<VisitorDetailDto>(true, result, "Appointment updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<VisitorDetailDto>(false, null, ex.Message));
+        }
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<VisitorDetailDto>>> Get(Guid id)
     {
@@ -761,6 +776,20 @@ public class MastersController : ControllerBase
     public async Task<ActionResult<ApiResponse<MeetingHallDto>>> UpdateMeetingHall(Guid id, [FromBody] MeetingHallUpsertRequest request) =>
         Ok(new ApiResponse<MeetingHallDto>(true, await _masters.UpsertMeetingHallAsync(id, request, User.Identity?.Name)));
 
+    [HttpGet("designations")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> Designations([FromQuery] bool activeOnly = true) =>
+        Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetDesignationsAsync(activeOnly)));
+
+    [HttpPost("designations")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<MasterItemDto>>> CreateDesignation([FromBody] MasterUpsertRequest request) =>
+        Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertDesignationAsync(null, request, User.Identity?.Name)));
+
+    [HttpPut("designations/{id:guid}")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin}")]
+    public async Task<ActionResult<ApiResponse<MasterItemDto>>> UpdateDesignation(Guid id, [FromBody] MasterUpsertRequest request) =>
+        Ok(new ApiResponse<MasterItemDto>(true, await _masters.UpsertDesignationAsync(id, request, User.Identity?.Name)));
+
     [HttpGet("id-types")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<MasterItemDto>>>> IdTypes([FromQuery] bool activeOnly = true) =>
         Ok(new ApiResponse<IReadOnlyList<MasterItemDto>>(true, await _masters.GetIdTypesAsync(activeOnly)));
@@ -836,6 +865,14 @@ public class MastersController : ControllerBase
     {
         await _masters.DeactivateMasterAsync(type, id, User.Identity?.Name);
         return Ok(new ApiResponse<object>(true, null, "Deactivated."));
+    }
+
+    [HttpDelete("{type}/{id:guid}")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
+    public async Task<ActionResult<ApiResponse<object>>> Delete(string type, Guid id)
+    {
+        await _masters.DeleteMasterAsync(type, id);
+        return Ok(new ApiResponse<object>(true, null, "Deleted."));
     }
 }
 
@@ -917,7 +954,8 @@ public class UsersController : ControllerBase
     {
         try
         {
-            return Ok(new ApiResponse<UserDto>(true, await _users.UpdateAsync(id, request, User.Identity?.Name)));
+            return Ok(new ApiResponse<UserDto>(true, await _users.UpdateAsync(
+                id, request, User.Identity?.Name, User.IsInRole(AppRoles.SuperAdmin))));
         }
         catch (InvalidOperationException ex)
         {
@@ -978,12 +1016,14 @@ public class SettingsController : ControllerBase
     private readonly ISettingsService _settings;
     private readonly INotificationService _notifications;
     private readonly ITenantContext _tenant;
+    private readonly ApplicationDbContext _db;
 
-    public SettingsController(ISettingsService settings, INotificationService notifications, ITenantContext tenant)
+    public SettingsController(ISettingsService settings, INotificationService notifications, ITenantContext tenant, ApplicationDbContext db)
     {
         _settings = settings;
         _notifications = notifications;
         _tenant = tenant;
+        _db = db;
     }
 
     /// <summary>Branding for the signed-in user's location, falling back to tenant defaults.</summary>
@@ -1061,7 +1101,22 @@ public class SettingsController : ControllerBase
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
     public async Task<ActionResult<ApiResponse<object>>> TestEmail([FromBody] TestEmailRequest request)
     {
-        var (ok, message) = await _notifications.SendTestEmailAsync(request.To, ScopeLocation(request.LocationId));
+        MailSender? sender = null;
+        var sendAs = request.SendAsEmail?.Trim();
+        if (!string.IsNullOrEmpty(sendAs))
+        {
+            // Only an employee's own address, exactly as visitor mails would use it.
+            var employee = await _db.Employees.AsNoTracking()
+                .Where(e => e.IsActive && e.Email == sendAs)
+                .Select(e => new { e.FullName, e.Email })
+                .FirstOrDefaultAsync();
+            if (employee is null)
+                return BadRequest(new ApiResponse<object>(false, null,
+                    $"'{sendAs}' is not the email of an active employee in Masters → Employees."));
+            sender = new MailSender(employee.Email, employee.FullName, employee.Email);
+        }
+
+        var (ok, message) = await _notifications.SendTestEmailAsync(request.To, ScopeLocation(request.LocationId), sender);
         if (!ok) return BadRequest(new ApiResponse<object>(false, null, message));
         return Ok(new ApiResponse<object>(true, null, message));
     }
@@ -1071,6 +1126,8 @@ public class TestEmailRequest
 {
     public string To { get; set; } = string.Empty;
     public Guid? LocationId { get; set; }
+    /// <summary>Optional employee email to send the test from, to check the SMTP login's Send As permission.</summary>
+    public string? SendAsEmail { get; set; }
 }
 
 [ApiController]
@@ -1167,6 +1224,89 @@ public class DevicesController : ControllerBase
 
         await _db.SaveChangesAsync();
         return Ok(new ApiResponse<object>(true, null, "Device token registered."));
+    }
+}
+
+[ApiController]
+[Route("notifications")]
+[Authorize]
+[RequireModule(ModuleKeys.VisitorManagement)]
+public class NotificationsController : ControllerBase
+{
+    private readonly IEmployeeNotificationService _employeeNotifications;
+    private readonly IWebPushService _push;
+    private readonly ITenantContext _tenant;
+
+    public NotificationsController(IEmployeeNotificationService employeeNotifications, IWebPushService push, ITenantContext tenant)
+    {
+        _employeeNotifications = employeeNotifications;
+        _push = push;
+        _tenant = tenant;
+    }
+
+    private string? CurrentUserId =>
+        User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+
+    /// <summary>The header bell: today's appointments, visits waiting for minutes, and approvals for the signed-in user.</summary>
+    [HttpGet("summary")]
+    public async Task<ActionResult<ApiResponse<NotificationSummaryDto>>> Summary() =>
+        Ok(new ApiResponse<NotificationSummaryDto>(true, await _employeeNotifications.GetSummaryAsync(User)));
+
+    [HttpGet("push")]
+    public async Task<ActionResult<ApiResponse<WebPushStatusDto>>> PushStatus()
+    {
+        if (_tenant.TenantId is not Guid tenantId || CurrentUserId is not string userId)
+            return Unauthorized(new ApiResponse<WebPushStatusDto>(false, null, "Sign in again."));
+        return Ok(new ApiResponse<WebPushStatusDto>(true, new WebPushStatusDto
+        {
+            PublicKey = await _push.GetPublicKeyAsync(tenantId),
+            Devices = await _push.CountSubscriptionsAsync(tenantId, userId)
+        }));
+    }
+
+    [HttpPost("push/subscribe")]
+    public async Task<ActionResult<ApiResponse<object>>> Subscribe([FromBody] WebPushSubscribeRequest request)
+    {
+        if (_tenant.TenantId is not Guid tenantId || CurrentUserId is not string userId)
+            return Unauthorized(new ApiResponse<object>(false, null, "Sign in again."));
+        try
+        {
+            await _push.SubscribeAsync(tenantId, userId,
+                new WebPushSubscriptionInput(request.Endpoint, request.P256dh, request.Auth));
+            return Ok(new ApiResponse<object>(true, null, "Notifications are on for this device."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
+    }
+
+    [HttpPost("push/unsubscribe")]
+    public async Task<ActionResult<ApiResponse<object>>> Unsubscribe([FromBody] WebPushUnsubscribeRequest request)
+    {
+        if (_tenant.TenantId is not Guid tenantId || CurrentUserId is not string userId)
+            return Unauthorized(new ApiResponse<object>(false, null, "Sign in again."));
+        await _push.UnsubscribeAsync(tenantId, userId, request.Endpoint);
+        return Ok(new ApiResponse<object>(true, null, "Notifications are off for this device."));
+    }
+
+    [HttpPost("push/test")]
+    public async Task<ActionResult<ApiResponse<object>>> TestPush()
+    {
+        if (_tenant.TenantId is not Guid tenantId || CurrentUserId is not string userId)
+            return Unauthorized(new ApiResponse<object>(false, null, "Sign in again."));
+        try
+        {
+            var delivered = await _push.SendToUserAsync(tenantId, userId,
+                new PushMessage("Tiaano VMS", "Notifications are working on this device.", "/", "push-test"));
+            return delivered > 0
+                ? Ok(new ApiResponse<object>(true, null, $"Test notification sent to {delivered} device(s)."))
+                : BadRequest(new ApiResponse<object>(false, null, "Notifications are not turned on for any of your devices."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
     }
 }
 

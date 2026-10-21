@@ -16,6 +16,7 @@ public interface IEmployeeMasterService
     Task<IReadOnlyList<EmployeeDto>> ListAsync(Guid? locationId, Guid? departmentId, bool activeOnly);
     Task<EmployeeDto> UpsertAsync(Guid? id, EmployeeProfileRequest request, string? actor);
     Task DeactivateAsync(Guid id, string? actor);
+    Task DeleteAsync(Guid id);
 }
 
 public class EmployeeMasterService : IEmployeeMasterService
@@ -175,6 +176,7 @@ public class EmployeeMasterService : IEmployeeMasterService
         }
 
         if (!id.HasValue) _db.Employees.Add(entity);
+        await DesignationMaster.EnsureAsync(_db, entity.TenantId, entity.Designation, actor);
         await _db.SaveChangesAsync();
         if (hasNewFace && entity.UserId is not null)
             await _faces.ReplaceLoginFaceFromEmployeeAsync(entity.Id, entity.UserId, actor);
@@ -191,6 +193,30 @@ public class EmployeeMasterService : IEmployeeMasterService
         entity.UpdatedAt = DateTime.UtcNow;
         entity.UpdatedBy = actor;
         await _db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Permanently removes an employee who was never a visiting person; anyone with visits can only be
+    /// deactivated. Their login account is kept and simply unlinked.
+    /// </summary>
+    public async Task DeleteAsync(Guid id)
+    {
+        var entity = await _db.Employees.FirstOrDefaultAsync(e => e.Id == id)
+            ?? throw new InvalidOperationException("Employee not found.");
+        EnsureInScope(entity.LocationId);
+
+        var tenantId = CurrentTenantId;
+        var visits = await _db.VisitorVisits.IgnoreQueryFilters()
+            .CountAsync(v => v.TenantId == tenantId && v.HostEmployeeId == id);
+        var approvals = await _db.Approvals.CountAsync(a => a.HostEmployeeId == id);
+        if (visits + approvals > 0)
+            throw new InvalidOperationException(
+                $"'{entity.FullName}' cannot be deleted because they are the visiting person on {visits} visit{(visits == 1 ? "" : "s")}. Deactivate them instead.");
+
+        var photo = entity.PhotoPath;
+        _db.Employees.Remove(entity);
+        await _db.SaveChangesAsync();
+        if (!string.IsNullOrWhiteSpace(photo)) _media.Delete(photo);
     }
 
     private void EnsureInScope(Guid? recordLocationId)

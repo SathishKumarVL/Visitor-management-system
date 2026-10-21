@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { apiErrorMessage, mastersApi } from '../lib/api'
 import type { MailContentTemplateDto, MailContentUpsertRequest, MasterItemDto } from '../types/api'
-import { Alert, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
+import { Alert, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
@@ -38,10 +38,11 @@ const KIND_LABELS: Record<number, string> = {
 
 const kindLabel = (item: MailContentTemplateDto) => KIND_LABELS[item.kind] ?? item.kindLabel
 
-export function MailContentPage() {
+/** Settings → Mail content: email templates, tenant default or per location. */
+export function MailContentPanel({ lockedLocationId = '' }: { lockedLocationId?: string }) {
   const [items, setItems] = useState<MailContentTemplateDto[]>([])
   const [locations, setLocations] = useState<MasterItemDto[]>([])
-  const [locationId, setLocationId] = useState('')
+  const [locationId, setLocationId] = useState(lockedLocationId)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -70,6 +71,11 @@ export function MailContentPage() {
     void load()
   }, [load])
 
+  function closeEditor() {
+    setEditing(null)
+    setForm(null)
+  }
+
   function startEdit(item: MailContentTemplateDto) {
     setEditing(item)
     setForm({
@@ -89,13 +95,9 @@ export function MailContentPage() {
     setMessage(null)
     setError(null)
     try {
-      await mastersApi.upsertMailContent({
-        ...form,
-        locationId: locationId || null,
-      })
+      await mastersApi.upsertMailContent({ ...form, locationId: locationId || null })
       setMessage('Mail content saved.')
-      setEditing(null)
-      setForm(null)
+      closeEditor()
       await load()
     } catch (err) {
       setError(apiErrorMessage(err))
@@ -105,28 +107,29 @@ export function MailContentPage() {
   }
 
   return (
-    <div>
+    <div className="space-y-4">
       {saving ? <LoadingMask label="Saving…" /> : null}
-      {loading ? <Spinner label="Loading mail content…" /> : null}
-      <PageHeader
-        title="Mail Content"
-        subtitle="Templates for check-in, check-out, and appointment emails — tenant default or per location"
-      />
-      {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
-      {message ? <div className="mb-4"><Alert tone="success">{message}</Alert></div> : null}
+      <div>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-ink-muted">Mail content</h2>
+        <p className="mt-1 text-xs text-ink-muted">
+          Subject and body of the check-in, check-out, appointment and minutes emails.
+        </p>
+      </div>
+      {error ? <Alert tone="error">{error}</Alert> : null}
+      {message ? <Alert tone="success">{message}</Alert> : null}
 
-      <Panel className="mb-4">
+      <div>
         <FieldLabel htmlFor="mailLocation">Location</FieldLabel>
         <TextSelect
           id="mailLocation"
           value={locationId}
+          disabled={!!lockedLocationId}
           onChange={(e) => {
             setLocationId(e.target.value)
-            setEditing(null)
-            setForm(null)
+            closeEditor()
           }}
         >
-          <option value="">Tenant default (all locations)</option>
+          {lockedLocationId ? null : <option value="">Tenant default (all locations)</option>}
           {locations.map((loc) => (
             <option key={loc.id} value={loc.id}>
               {loc.name}
@@ -136,95 +139,69 @@ export function MailContentPage() {
         <p className="mt-1 text-xs text-ink-muted">
           Visit emails use the visit location’s template when configured; otherwise the tenant default.
         </p>
-      </Panel>
-
-      <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
-        <Panel className="overflow-x-auto p-0">
-          {!loading && items.length === 0 ? (
-            <div className="p-4"><EmptyState title="No mail templates" /></div>
-          ) : null}
-          {!loading && items.length > 0 ? (
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-gray-50 text-gray-500">
-                <tr>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Subject</th>
-                  <th className="px-4 py-3">Active</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody>
-                {pageItems.map((item) => (
-                  <tr key={item.id} className="border-t border-gray-100">
-                    <td className="px-4 py-3 font-medium">{kindLabel(item)}</td>
-                    <td className="px-4 py-3 max-w-xs truncate">{item.subject}</td>
-                    <td className="px-4 py-3">{item.isActive ? 'Yes' : 'No'}</td>
-                    <td className="px-4 py-3 text-right">
-                      <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : null}
-          {!loading ? <Pagination {...pagination} /> : null}
-        </Panel>
-
-        <Panel>
-          {form && editing ? (
-            <>
-              <h2 className="mb-3 font-semibold text-steel">Edit — {kindLabel(editing)}</h2>
-              <form onSubmit={save} className="space-y-3">
-                <div>
-                  <FieldLabel>Subject *</FieldLabel>
-                  <TextInput
-                    required
-                    value={form.subject}
-                    onChange={(e) => setForm({ ...form, subject: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <FieldLabel>Body *</FieldLabel>
-                  <textarea
-                    required
-                    rows={12}
-                    className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm shadow-sm focus:border-steel focus:outline-none focus:ring-1 focus:ring-steel"
-                    value={form.body}
-                    onChange={(e) => setForm({ ...form, body: e.target.value })}
-                  />
-                </div>
-                <label className="flex min-h-11 items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={form.isActive}
-                    onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-                  />
-                  Active
-                </label>
-                <p className="text-xs text-ink-muted">
-                  Placeholders:{' '}
-                  {(form.kind === MINUTES_KIND ? [...PLACEHOLDERS, ...MINUTES_PLACEHOLDERS] : PLACEHOLDERS).join(', ')}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => {
-                      setEditing(null)
-                      setForm(null)
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            </>
-          ) : (
-            <p className="text-sm text-ink-muted">Select a template to edit its subject and body.</p>
-          )}
-        </Panel>
       </div>
+
+      {loading ? <Spinner label="Loading mail content…" /> : null}
+      {!loading && items.length === 0 ? <p className="text-sm text-ink-muted">No mail templates.</p> : null}
+      {!loading && items.length > 0 ? (
+        <div className="overflow-x-auto rounded-md border border-gray-200">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-gray-50 text-gray-500">
+              <tr>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Subject</th>
+                <th className="px-4 py-3">Active</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((item) => (
+                <tr key={item.id} className="border-t border-gray-100">
+                  <td className="px-4 py-3 font-medium">{kindLabel(item)}</td>
+                  <td className="max-w-xs truncate px-4 py-3">{item.subject}</td>
+                  <td className="px-4 py-3">{item.isActive ? 'Yes' : 'No'}</td>
+                  <td className="px-4 py-3 text-right">
+                    <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Pagination {...pagination} />
+        </div>
+      ) : null}
+
+      {form && editing ? (
+        <form onSubmit={save} className="space-y-3 rounded-md border border-gray-200 p-4">
+          <h3 className="font-semibold text-steel">Edit — {kindLabel(editing)}</h3>
+          <div>
+            <FieldLabel>Subject *</FieldLabel>
+            <TextInput required value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
+          </div>
+          <div>
+            <FieldLabel>Body *</FieldLabel>
+            <textarea
+              required
+              rows={12}
+              className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm shadow-sm focus:border-steel focus:outline-none focus:ring-1 focus:ring-steel"
+              value={form.body}
+              onChange={(e) => setForm({ ...form, body: e.target.value })}
+            />
+          </div>
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+            Active
+          </label>
+          <p className="text-xs text-ink-muted">
+            Placeholders:{' '}
+            {(form.kind === MINUTES_KIND ? [...PLACEHOLDERS, ...MINUTES_PLACEHOLDERS] : PLACEHOLDERS).join(', ')}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+            <Button type="button" variant="secondary" onClick={closeEditor}>Cancel</Button>
+          </div>
+        </form>
+      ) : null}
     </div>
   )
 }

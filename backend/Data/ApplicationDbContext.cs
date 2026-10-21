@@ -18,6 +18,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Employee> Employees => Set<Employee>();
+    public DbSet<Designation> Designations => Set<Designation>();
     public DbSet<VisitPurpose> VisitPurposes => Set<VisitPurpose>();
     public DbSet<Location> Locations => Set<Location>();
     public DbSet<IdType> IdTypes => Set<IdType>();
@@ -50,6 +51,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<IntegrationApiKey> IntegrationApiKeys => Set<IntegrationApiKey>();
     public DbSet<UserFaceLogin> UserFaceLogins => Set<UserFaceLogin>();
     public DbSet<MeetingHall> MeetingHalls => Set<MeetingHall>();
+    public DbSet<LookupSource> LookupSources => Set<LookupSource>();
 
     /// <summary>One inside visit per hall: concurrent check-ins cannot both take the same hall.</summary>
     public const string MeetingHallInsideIndex = "IX_VisitorVisits_MeetingHallId_Inside";
@@ -78,6 +80,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
+        builder.Entity<LookupSource>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name }).IsUnique();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
         builder.Entity<Tenant>(e =>
         {
             e.HasIndex(x => x.Code).IsUnique();
@@ -91,6 +100,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
             // Fail closed: when a scoped tenant context exists without TenantId, return no rows (never all tenants).
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
+        });
+
+        builder.Entity<Designation>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Name }).IsUnique();
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
@@ -141,6 +157,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.TenantId, x.EntryNumber });
             e.Property(x => x.EntryNumber).HasMaxLength(50);
             e.HasIndex(x => x.Status);
+            e.HasIndex(x => new { x.Status, x.CheckOutAt });
             e.HasIndex(x => x.VisitDate);
             e.HasIndex(x => x.PreRegistrationReference);
             // Additive column: existing rows default to false (face/normal check-out).

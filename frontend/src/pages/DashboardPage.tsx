@@ -136,7 +136,7 @@ export function DashboardPage() {
   if (error) {
     return (
       <div className="space-y-3">
-        <Alert tone="error">{error}</Alert>
+        <Alert tone="error" persistent>{error}</Alert>
         <Button onClick={() => void load()}>Retry</Button>
       </div>
     )
@@ -145,7 +145,7 @@ export function DashboardPage() {
   if (!data) {
     return (
       <div className="space-y-3">
-        <Alert tone="warning">No dashboard data returned.</Alert>
+        <Alert tone="warning" persistent>No dashboard data returned.</Alert>
         <Button onClick={() => void load()}>Retry</Button>
       </div>
     )
@@ -155,8 +155,8 @@ export function DashboardPage() {
   const isSuperAdmin = hasAnyRole(user?.roles ?? [], ['SuperAdmin'])
   const showMomCard = hasAnyRole(user?.roles ?? [], ['SuperAdmin', 'Admin', 'Host'])
   const waivedCount = Math.max(0, (data.checkedOutWithoutMomCount ?? 0) - momPendingCount)
-  const cardCount = 4 + (isSuperAdmin ? 1 : 0) + (showMomCard ? 1 : 0)
-  const cardColumns = cardCount >= 6 ? 'xl:grid-cols-6' : cardCount === 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'
+  const cardCount = 3 + (isSuperAdmin ? 1 : 0) + (showMomCard ? 1 : 0)
+  const cardColumns = cardCount >= 5 ? 'xl:grid-cols-5' : cardCount === 4 ? 'xl:grid-cols-4' : 'xl:grid-cols-3'
 
   return (
     <div>
@@ -179,13 +179,6 @@ export function DashboardPage() {
         <KpiCard label="Visitors Today" value={data.visitorsToday ?? 0} to="/visitors?quickFilter=today" icon="◎" />
         <KpiCard label="Currently Inside" value={data.currentlyInside ?? 0} to="/visitors/inside" icon="●" />
         <KpiCard label="Expected Today" value={data.expectedToday ?? 0} to="/visitors/expected" icon="◷" />
-        <KpiCard
-          label="Pending Approvals"
-          value={data.pendingApprovals ?? 0}
-          to="/host"
-          icon="◇"
-          hint={(data.pendingApprovals ?? 0) === 0 ? 'Clear' : 'Action'}
-        />
         {isSuperAdmin ? (
           <KpiCard
             label="Manual check-outs today"

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { addDays, format, startOfMonth, startOfWeek, subMonths, subYears } from 'date-fns'
 import { apiErrorMessage, mastersApi, reportsApi } from '../lib/api'
 import type { MasterItemDto } from '../types/api'
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
@@ -43,6 +44,38 @@ interface ReportResult {
   rows: ReportRow[]
 }
 
+type Duration = 'today' | 'week' | 'month' | '3months' | '6months' | 'year' | 'custom'
+
+const DURATIONS: { value: Duration; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'This week' },
+  { value: 'month', label: 'This month' },
+  { value: '3months', label: 'Last 3 months' },
+  { value: '6months', label: 'Last 6 months' },
+  { value: 'year', label: 'Last 1 year' },
+  { value: 'custom', label: 'Custom dates' },
+]
+
+/** From/To for a preset, ending today. Weeks start on Monday. */
+function durationRange(duration: Exclude<Duration, 'custom'>): { from: string; to: string } {
+  const today = new Date()
+  const iso = (d: Date) => format(d, 'yyyy-MM-dd')
+  switch (duration) {
+    case 'today':
+      return { from: iso(today), to: iso(today) }
+    case 'week':
+      return { from: iso(startOfWeek(today, { weekStartsOn: 1 })), to: iso(today) }
+    case 'month':
+      return { from: iso(startOfMonth(today)), to: iso(today) }
+    case '3months':
+      return { from: iso(addDays(subMonths(today, 3), 1)), to: iso(today) }
+    case '6months':
+      return { from: iso(addDays(subMonths(today, 6), 1)), to: iso(today) }
+    case 'year':
+      return { from: iso(addDays(subYears(today, 1), 1)), to: iso(today) }
+  }
+}
+
 function formatMinutes(minutes: number) {
   const h = Math.floor(minutes / 60)
   const m = minutes % 60
@@ -58,6 +91,7 @@ export function ReportsPage() {
   const [locationId, setLocationId] = useState('')
   const [company, setCompany] = useState('')
   const [reportType, setReportType] = useState('daily')
+  const [duration, setDuration] = useState<Duration>('today')
   const [rows, setRows] = useState<ReportRow[]>([])
   const [total, setTotal] = useState(0)
   const [manualCheckOutCount, setManualCheckOutCount] = useState(0)
@@ -97,7 +131,21 @@ export function ReportsPage() {
       const today = todayIsoDate()
       setDateFrom(today)
       setDateTo(today)
+      setDuration('today')
     }
+  }
+
+  function onDurationChange(next: Duration) {
+    setDuration(next)
+    if (next === 'custom') {
+      if (reportType === 'daily') setReportType('range')
+      return
+    }
+    const range = durationRange(next)
+    setDateFrom(range.from)
+    setDateTo(range.to)
+    // "Daily" is today only; any longer period becomes a date-range report.
+    if (reportType === 'daily' && next !== 'today') setReportType('range')
   }
 
   function params() {
@@ -171,7 +219,7 @@ export function ReportsPage() {
       <PageHeader title="Reports" subtitle="Visitor activity reports with export" />
 
       <Panel className="mb-4">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
           <div>
             <FieldLabel>Report type</FieldLabel>
             <TextSelect value={reportType} onChange={(e) => onReportTypeChange(e.target.value)}>
@@ -183,12 +231,24 @@ export function ReportsPage() {
             </TextSelect>
           </div>
           <div>
+            <FieldLabel>Duration</FieldLabel>
+            <TextSelect value={duration} onChange={(e) => onDurationChange(e.target.value as Duration)}>
+              {DURATIONS.map((d) => (
+                <option key={d.value} value={d.value}>{d.label}</option>
+              ))}
+            </TextSelect>
+          </div>
+          <div>
             <FieldLabel>From</FieldLabel>
             <TextInput
               type="date"
               value={dateFrom}
+              max={dateTo || undefined}
               disabled={reportType === 'daily'}
-              onChange={(e) => setDateFrom(e.target.value)}
+              onChange={(e) => {
+                setDateFrom(e.target.value)
+                setDuration('custom')
+              }}
             />
           </div>
           <div>
@@ -196,8 +256,12 @@ export function ReportsPage() {
             <TextInput
               type="date"
               value={dateTo}
+              min={dateFrom || undefined}
               disabled={reportType === 'daily'}
-              onChange={(e) => setDateTo(e.target.value)}
+              onChange={(e) => {
+                setDateTo(e.target.value)
+                setDuration('custom')
+              }}
             />
           </div>
           <div>

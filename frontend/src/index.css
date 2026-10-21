@@ -157,6 +157,40 @@ textarea {
   }
 }
 
+/* Tablets: no grey tap flash, no double-tap zoom delay, no long-press menu on controls. */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+a,
+button,
+input,
+label,
+select,
+textarea,
+summary,
+[role='button'] {
+  touch-action: manipulation;
+}
+
+button,
+[role='button'],
+nav a {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Installed app: a swipe down must not reload the page mid check-in. */
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
@@ -189,7 +223,31 @@ textarea {
   border-radius: var(--radius-md);
 }
 
+/* An error alert renders as a popup; the page wrapper it sat in (e.g. "mb-4") would leave an empty gap. */
+:has(> [data-alert-anchor]:only-child) {
+  display: none;
+}
+
+@keyframes alert-popup-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.alert-popup {
+  animation: alert-popup-in 160ms ease-out;
+}
+
 @media print {
+  #alert-popups {
+    display: none !important;
+  }
+
   /* Printed passes keep their layout regardless of the Font size setting. */
   html {
     font-size: 100% !important;

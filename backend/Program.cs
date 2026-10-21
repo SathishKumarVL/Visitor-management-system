@@ -52,6 +52,7 @@ builder.Services
         options.User.RequireUniqueEmail = true;
     })
     .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddErrorDescriber<FriendlyIdentityErrorDescriber>()
     .AddDefaultTokenProviders();
 
 const string authSelectorScheme = "JwtOrApiKey";
@@ -135,8 +136,10 @@ builder.Services.AddScoped<ISettingsService, SettingsService>();
 builder.Services.AddScoped<EmailNotificationProvider>();
 builder.Services.AddScoped<IEmailNotificationProvider>(sp => sp.GetRequiredService<EmailNotificationProvider>());
 builder.Services.AddScoped<INotificationDeliveryProvider>(sp => sp.GetRequiredService<EmailNotificationProvider>());
+builder.Services.AddScoped<IWebPushService, WebPushService>();
 builder.Services.AddScoped<INotificationDeliveryProvider, PushNotificationProvider>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IEmployeeNotificationService, EmployeeNotificationService>();
 builder.Services.AddScoped<IVisitMailService, VisitMailService>();
 builder.Services.AddScoped<IPassNumberService, PassNumberService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -153,7 +156,21 @@ builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 builder.Services.AddScoped<IMediaStorageService, MediaStorageService>();
 builder.Services.AddScoped<IEntitlementService, EntitlementService>();
 builder.Services.AddScoped<IEmergencyService, EmergencyService>();
+builder.Services.AddScoped<ILookupService, LookupService>();
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient(LookupService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        AutomaticDecompression = System.Net.DecompressionMethods.All,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+        ConnectTimeout = TimeSpan.FromSeconds(10),
+        ConnectCallback = OutboundUrlGuard.ConnectCallback(
+            builder.Configuration.GetValue<bool>("Lookups:AllowPrivateNetworks")),
+    });
 builder.Services.AddHostedService<AppointmentReminderWorker>();
+builder.Services.AddHostedService<MomReminderWorker>();
 builder.Services.AddHostedService<StaleVisitAutoCheckOutWorker>();
 
 // Singleton: the ONNX sessions hold ~180 MB of weights and are thread-safe for concurrent inference.

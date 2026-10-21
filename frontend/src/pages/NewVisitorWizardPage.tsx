@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { apiErrorMessage, mastersApi, passApi, visitorsApi } from '../lib/api'
-import type { EmployeeDto, MasterItemDto, RegisterVisitorRequest, VisitorWizardDraft } from '../types/api'
+import { apiErrorMessage, lookupsApi, mastersApi, passApi, visitorsApi } from '../lib/api'
+import type {
+  EmployeeDto,
+  LookupSourceOptionDto,
+  MasterItemDto,
+  RegisterVisitorRequest,
+  VisitorWizardDraft,
+} from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../components/ui/Field'
@@ -10,10 +16,11 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { SecureImage } from '../components/SecureImage'
 import { LoadingMask } from '../components/LoadingMask'
 import { FaceCameraPanel } from '../components/FaceCameraPanel'
-import { captureFaceJpeg } from '../lib/cameraCapture'
+import { captureFaceJpeg, openFaceCamera, toggleCameraFacing } from '../lib/cameraCapture'
 import type { BookingMatchDto, FaceSearchMatchDto, GroupEmployeeMatchDto, PassDto } from '../types/api'
 import { useAuthStore } from '../store/authStore'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
+import { LookupFieldInput } from '../components/LookupFieldInput'
 
 const LEGACY_DRAFT_KEY = 'tiaano_visitor_wizard_draft'
 const STATIC_ID_TYPES = ['Aadhaar', 'Pan Card', 'Passport'] as const
@@ -38,6 +45,8 @@ const emptyDraft = (): VisitorWizardDraft => ({
   plantNumber: '',
   otherLocationText: '',
   otherPurposeText: '',
+  purposeFieldValues: {},
+  purposeLookupPicks: {},
   notes: '',
   photoBase64: '',
   idTypeName: '',
@@ -100,6 +109,20 @@ export function NewVisitorWizardPage() {
     () => purposes.filter((p) => p.name.trim().toLowerCase() !== 'others'),
     [purposes],
   )
+  /** Selected purposes that ask extra fields, in master order. */
+  const purposesWithFields = useMemo(() => {
+    const selected = new Set(draft.purposeIds)
+    if (draft.othersChecked && othersPurpose) selected.add(othersPurpose.id)
+    return purposes.filter((p) => selected.has(p.id) && (p.fields?.length ?? 0) > 0)
+  }, [purposes, draft.purposeIds, draft.othersChecked, othersPurpose])
+  const needsLookups = useMemo(
+    () => purposes.some((p) => p.fields?.some((f) => f.type === 'lookup')),
+    [purposes],
+  )
+  const [lookupSources, setLookupSources] = useState<LookupSourceOptionDto[]>([])
+  useEffect(() => {
+    if (needsLookups) void lookupsApi.sources().then(setLookupSources).catch(() => setLookupSources([]))
+  }, [needsLookups])
   const departmentName = useMemo(
     () => departments.find((d) => d.id === draft.departmentId)?.name || '',
     [departments, draft.departmentId],
@@ -199,9 +222,12 @@ export function NewVisitorWizardPage() {
         setEmployees(hosts)
         const dept = d.find((x) => x.name === visit.departmentName)
         const host = hosts.find((h) => h.fullName === visit.hostName)
-        const purposeIds = p.filter((x) => visit.purposes.includes(x.name)).map((x) => x.id)
         const others = p.find((x) => x.name.trim().toLowerCase() === 'others')
-        const othersChecked = !!(others && purposeIds.includes(others.id))
+        // The API shows the typed reason in place of "Others".
+        const othersChecked = !!others && (visit.purposes.includes(others.name) || !!visit.purposeNotes?.trim())
+        const purposeIds = p
+          .filter((x) => visit.purposes.includes(x.name) || (othersChecked && x.id === others?.id))
+          .map((x) => x.id)
         setDraft({
           ...emptyDraft(),
           visitorName: visit.visitorName,
@@ -323,6 +349,13 @@ export function NewVisitorWizardPage() {
     if (draft.othersChecked && !draft.otherPurposeText.trim()) {
       return 'Enter the specific reason when Others is selected.'
     }
+    for (const purpose of purposesWithFields) {
+      for (const field of purpose.fields ?? []) {
+        if (field.isRequired && field.id && !draft.purposeFieldValues[field.id]?.trim()) {
+          return `${field.label} is required for ${purpose.name}.`
+        }
+      }
+    }
     const hasIdType = !!draft.idTypeName.trim()
     const hasIdNumber = !!draft.idNumber.trim()
     if (hasIdType !== hasIdNumber) {
@@ -353,10 +386,7 @@ export function NewVisitorWizardPage() {
   async function startCamera() {
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      })
+      const stream = await openFaceCamera()
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -544,6 +574,14 @@ export function NewVisitorWizardPage() {
       plantNumber: null,
       otherLocationText: null,
       purposeNotes: draft.othersChecked ? draft.otherPurposeText.trim() : null,
+      purposeFields: purposesWithFields
+        .flatMap((p) => p.fields ?? [])
+        .filter((f) => f.id && draft.purposeFieldValues[f.id]?.trim())
+        .map((f) => ({
+          fieldId: f.id!,
+          value: draft.purposeFieldValues[f.id!].trim(),
+          lookupToken: f.type === 'lookup' ? draft.purposeLookupPicks[f.id!]?.token ?? null : null,
+        })),
       notes: draft.notes.trim() || null,
       isWalkIn: draft.isWalkIn,
       expectedVisitId: draft.expectedVisitId,
@@ -637,7 +675,7 @@ export function NewVisitorWizardPage() {
       ) : null}
       {!online ? (
         <div className="mb-4">
-          <Alert tone="warning">Offline — submit when connected.</Alert>
+          <Alert tone="warning" persistent>Offline — submit when connected.</Alert>
         </div>
       ) : null}
 
@@ -647,7 +685,14 @@ export function NewVisitorWizardPage() {
           <div className="grid gap-6 lg:grid-cols-2">
             <div>
               <FieldLabel>Face capture</FieldLabel>
-              <FaceCameraPanel videoRef={videoRef} photoUrl={draft.photoBase64 || null} />
+              <FaceCameraPanel
+                videoRef={videoRef}
+                photoUrl={draft.photoBase64 || null}
+                onSwitchCamera={() => {
+                  toggleCameraFacing()
+                  void startCamera()
+                }}
+              />
               <div className="mt-3 flex flex-wrap justify-center gap-2">
                 {draft.photoBase64 ? (
                   <Button variant="secondary" onClick={retakePhoto} disabled={faceBusy}>
@@ -920,15 +965,16 @@ export function NewVisitorWizardPage() {
                 <FieldLabel htmlFor="numberOfPersons">Number of persons *</FieldLabel>
                 <TextInput
                   id="numberOfPersons"
-                  type="number"
+                  type="text"
                   inputMode="numeric"
-                  min={1}
-                  max={99}
+                  autoComplete="off"
+                  maxLength={2}
                   required
-                  value={draft.numberOfPersons}
+                  placeholder="e.g. 3"
+                  value={draft.numberOfPersons > 0 ? String(draft.numberOfPersons) : ''}
                   onChange={(e) => {
-                    const n = Number.parseInt(e.target.value, 10)
-                    patch({ numberOfPersons: Number.isFinite(n) ? n : 1 })
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 2)
+                    patch({ numberOfPersons: digits ? Number.parseInt(digits, 10) : 0 })
                   }}
                 />
               </div>
@@ -1020,6 +1066,60 @@ export function NewVisitorWizardPage() {
                 />
               </div>
             ) : null}
+            {purposesWithFields.map((purpose) => (
+              <div key={purpose.id} className="mt-4 rounded-xl border border-border bg-mint/40 p-3">
+                <p className="mb-2 text-sm font-semibold text-ink">{purpose.name} details</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {(purpose.fields ?? []).map((field) =>
+                    field.id ? (
+                      <div key={field.id}>
+                        <FieldLabel htmlFor={`purpose-field-${field.id}`}>
+                          {field.label}
+                          {field.isRequired ? ' *' : ''}
+                        </FieldLabel>
+                        {field.type === 'lookup' && field.lookupSourceId ? (
+                          <LookupFieldInput
+                            id={`purpose-field-${field.id}`}
+                            sourceId={field.lookupSourceId}
+                            minChars={lookupSources.find((s) => s.id === field.lookupSourceId)?.minChars ?? 3}
+                            value={draft.purposeFieldValues[field.id] ?? ''}
+                            pick={draft.purposeLookupPicks[field.id]}
+                            telephone={sanitizePhoneDigits(draft.telephone)}
+                            email={draft.email.trim()}
+                            context={Object.fromEntries(
+                              (purpose.fields ?? [])
+                                .filter((f) => f.id && f.id !== field.id)
+                                .map((f) => [f.label, (draft.purposeFieldValues[f.id!] ?? '').trim()]),
+                            )}
+                            onChange={(value, pick) =>
+                              setDraft((d) => {
+                                const picks = { ...d.purposeLookupPicks }
+                                if (pick) picks[field.id!] = pick
+                                else delete picks[field.id!]
+                                return {
+                                  ...d,
+                                  purposeFieldValues: { ...d.purposeFieldValues, [field.id!]: value },
+                                  purposeLookupPicks: picks,
+                                }
+                              })
+                            }
+                          />
+                        ) : (
+                          <TextInput
+                            id={`purpose-field-${field.id}`}
+                            maxLength={500}
+                            value={draft.purposeFieldValues[field.id] ?? ''}
+                            onChange={(e) =>
+                              patch({ purposeFieldValues: { ...draft.purposeFieldValues, [field.id!]: e.target.value } })
+                            }
+                          />
+                        )}
+                      </div>
+                    ) : null,
+                  )}
+                </div>
+              </div>
+            ))}
           </Panel>
 
           <Panel>

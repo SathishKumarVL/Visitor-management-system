@@ -9,6 +9,8 @@ import type {
   IntegrationScope,
   DashboardDto,
   MomNotSentByEmployeeDto,
+  NotificationSummaryDto,
+  WebPushStatusDto,
   EmployeeDto,
   EmployeeProfileRequest,
   ExpectedVisitorRequest,
@@ -17,6 +19,12 @@ import type {
   FaceSearchMatchDto,
   GroupEmployeeMatchDto,
   LoginResponse,
+  LookupCheckResultDto,
+  LookupMatchDto,
+  LookupSourceDto,
+  LookupSourceOptionDto,
+  LookupSourceUpsertRequest,
+  LookupTestResultDto,
   MyDetailsDto,
   MailContentTemplateDto,
   MailContentUpsertRequest,
@@ -328,6 +336,8 @@ export const visitorsApi = {
     unwrap(api.get<ApiResponse<BookingMatchDto[]>>('/visitors/expected/match', { params })),
   createExpected: (body: ExpectedVisitorRequest) =>
     unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors/expected', body)),
+  updateExpected: (id: string, body: ExpectedVisitorRequest) =>
+    unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/expected/${id}`, body)),
   checkIn: (id: string, photoBase64?: string | null) =>
     unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {
       occurredAt: new Date().toISOString(),
@@ -376,6 +386,16 @@ export const dashboardApi = {
   momNotSentByEmployee: () => unwrap(api.get<ApiResponse<MomNotSentByEmployeeDto[]>>('/dashboard/mom-not-sent-by-employee')),
 }
 
+export const notificationsApi = {
+  summary: () => unwrap(api.get<ApiResponse<NotificationSummaryDto>>('/notifications/summary')),
+  pushStatus: () => unwrap(api.get<ApiResponse<WebPushStatusDto>>('/notifications/push')),
+  subscribe: (subscription: { endpoint: string; p256dh: string; auth: string }) =>
+    unwrapVoid(api.post<ApiResponse<object>>('/notifications/push/subscribe', subscription)),
+  unsubscribe: (endpoint: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>('/notifications/push/unsubscribe', { endpoint })),
+  testPush: () => unwrapVoid(api.post<ApiResponse<object>>('/notifications/push/test')),
+}
+
 /** Employee menu: employee profiles with their face. Admins only see their own location. */
 export const employeeMasterApi = {
   list: (locationId?: string, departmentId?: string, activeOnly = false) =>
@@ -386,6 +406,8 @@ export const employeeMasterApi = {
     unwrap(api.put<ApiResponse<EmployeeDto>>(`/employee-master/${id}`, body)),
   deactivate: (id: string) =>
     unwrapVoid(api.post<ApiResponse<object>>(`/employee-master/${id}/deactivate`)),
+  remove: (id: string) =>
+    unwrapVoid(api.delete<ApiResponse<object>>(`/employee-master/${id}`)),
 }
 
 export const mastersApi = {
@@ -445,6 +467,15 @@ export const mastersApi = {
     unwrapVoid(api.post<ApiResponse<object>>(`/masters/feedback-questions/${id}/deactivate`)),
   deactivate: (type: string, id: string) =>
     unwrapVoid(api.post<ApiResponse<object>>(`/masters/${type}/${id}/deactivate`)),
+  /** Super Admin only; refused while the record is still used by visits or other masters. */
+  remove: (type: string, id: string) =>
+    unwrapVoid(api.delete<ApiResponse<object>>(`/masters/${type}/${id}`)),
+  designations: (activeOnly = true) =>
+    unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/designations', { params: { activeOnly } })),
+  createDesignation: (body: MasterUpsertRequest) =>
+    unwrap(api.post<ApiResponse<MasterItemDto>>('/masters/designations', body)),
+  updateDesignation: (id: string, body: MasterUpsertRequest) =>
+    unwrap(api.put<ApiResponse<MasterItemDto>>(`/masters/designations/${id}`, body)),
   downloadImportTemplate: async (kind: MasterImportKind) => {
     const res = await api.get(`/masters/import/${kind}/template`, { responseType: 'blob' })
     return res.data as Blob
@@ -487,10 +518,11 @@ export const settingsApi = {
     })),
   upsertPassSeries: (body: UpsertPassNumberSeriesRequest) =>
     unwrap(api.put<ApiResponse<PassNumberSeriesDto>>('/pass-numbers/series', body)),
-  sendTestEmail: (to: string, locationId?: string) =>
+  sendTestEmail: (to: string, locationId?: string, sendAsEmail?: string) =>
     unwrapVoid(api.post<ApiResponse<object>>('/settings/test-email', {
       to,
       locationId: locationId || null,
+      sendAsEmail: sendAsEmail || null,
     })),
   listApiKeys: () => unwrap(api.get<ApiResponse<IntegrationApiKeyDto[]>>('/settings/api-keys')),
   createApiKey: (name: string, scopes: IntegrationScope[]) =>
@@ -498,6 +530,25 @@ export const settingsApi = {
   revokeApiKey: async (id: string) => {
     await api.post(`/settings/api-keys/${id}/revoke`)
   },
+  listLookupSources: () => unwrap(api.get<ApiResponse<LookupSourceDto[]>>('/settings/lookup-sources')),
+  saveLookupSource: (id: string | null, body: LookupSourceUpsertRequest) =>
+    unwrap(
+      id
+        ? api.put<ApiResponse<LookupSourceDto>>(`/settings/lookup-sources/${id}`, body)
+        : api.post<ApiResponse<LookupSourceDto>>('/settings/lookup-sources', body),
+    ),
+  deleteLookupSource: (id: string) => unwrapVoid(api.delete<ApiResponse<object>>(`/settings/lookup-sources/${id}`)),
+  testLookupSource: (id: string | null, source: LookupSourceUpsertRequest, query: string, context: Record<string, string>) =>
+    unwrap(api.post<ApiResponse<LookupTestResultDto>>('/settings/lookup-sources/test', { id, source, query, context })),
+}
+
+/** Searches go through the server, which holds the API key; the browser never calls the external API. */
+export const lookupsApi = {
+  sources: () => unwrap(api.get<ApiResponse<LookupSourceOptionDto[]>>('/lookups/sources')),
+  search: (sourceId: string, query: string, context: Record<string, string>, signal?: AbortSignal) =>
+    unwrap(api.post<ApiResponse<LookupMatchDto[]>>(`/lookups/${sourceId}/search`, { query, context }, { signal })),
+  check: (token: string, telephone: string, email: string) =>
+    unwrap(api.post<ApiResponse<LookupCheckResultDto>>('/lookups/check', { token, telephone, email })),
 }
 
 export const usersApi = {

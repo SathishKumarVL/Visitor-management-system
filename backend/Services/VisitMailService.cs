@@ -25,7 +25,8 @@ public record VisitMailContext(
     string MomDecisions = "",
     string MomActionItems = "",
     string MomNextMeetingDate = "",
-    string MomSendKey = "");
+    string MomSendKey = "",
+    string AppointmentSendKey = "");
 
 /// <summary>Renders Mail Content templates and queues check-in / check-out / appointment / minutes emails.</summary>
 public interface IVisitMailService
@@ -42,6 +43,7 @@ public class VisitMailService : IVisitMailService
     private readonly INotificationService _notifications;
     private readonly ILogger<VisitMailService> _logger;
     private readonly bool _checkOutSendAsHost;
+    private readonly bool _sendAsHostOnly;
 
     public VisitMailService(
         ApplicationDbContext db,
@@ -52,13 +54,26 @@ public class VisitMailService : IVisitMailService
         _db = db;
         _notifications = notifications;
         _logger = logger;
-        _checkOutSendAsHost = configuration.GetValue<bool>("Mail:CheckOutSendAsHost");
+        _sendAsHostOnly = configuration.GetValue<bool>("Mail:SendAsHostOnly");
+        _checkOutSendAsHost = _sendAsHostOnly || configuration.GetValue<bool>("Mail:CheckOutSendAsHost");
+    }
+
+    /// <summary>
+    /// With Mail:SendAsHostOnly a visitor mail must come from the host's own address, so it is not sent at all
+    /// when the host has no email.
+    /// </summary>
+    private bool MaySendVisitorCopy(VisitMailContext ctx, string what)
+    {
+        if (!_sendAsHostOnly || !string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail)) return true;
+        _logger.LogWarning("{What} visitor email skipped — host {Host} has no email to send from.", what, ctx.VisitingPerson);
+        return false;
     }
 
     /// <summary>
     /// Mails to the visitor (appointment confirmation, check-out) come from the person they meet: their name in
     /// From and their address in Reply-To. With Mail:CheckOutSendAsHost the host's address is the actual sender,
-    /// which requires the SMTP mailbox to have "Send As" rights for that host.
+    /// which requires the SMTP mailbox to have "Send As" rights for that host and the host's domain to authorise
+    /// the SMTP server (SPF/DMARC); otherwise visitors' mail providers reject or spam-file the message.
     /// </summary>
     private MailSender? HostSender(VisitMailContext ctx)
     {
@@ -87,8 +102,9 @@ public class VisitMailService : IVisitMailService
 
         if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
         {
-            await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
-                $"checkout-visitor:{ctx.VisitNumber}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
+            if (MaySendVisitorCopy(ctx, "Check-out"))
+                await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+                    $"checkout-visitor:{ctx.VisitNumber}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
         }
         else
         {
@@ -116,8 +132,9 @@ public class VisitMailService : IVisitMailService
 
         if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
         {
-            await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
-                $"mom-visitor:{ctx.MomSendKey}", ctx.LocationId, HostSender(ctx));
+            if (MaySendVisitorCopy(ctx, "Minutes of meeting"))
+                await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+                    $"mom-visitor:{ctx.MomSendKey}", ctx.LocationId, HostSender(ctx));
         }
         else
         {
@@ -142,7 +159,7 @@ public class VisitMailService : IVisitMailService
         {
             var (subject, body) = await RenderAsync(MailContentKind.Appointment, ctx);
             await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
-                $"appointment:{ctx.VisitNumber}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
+                $"appointment:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
         }
         else
         {
@@ -151,9 +168,10 @@ public class VisitMailService : IVisitMailService
 
         if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
         {
+            if (!MaySendVisitorCopy(ctx, "Appointment")) return;
             var (subject, body) = await RenderAsync(MailContentKind.AppointmentVisitor, ctx);
             await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
-                $"appointment-visitor:{ctx.VisitNumber}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
+                $"appointment-visitor:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
         }
         else
         {

@@ -289,19 +289,7 @@ public class SettingsService : ISettingsService
             return _config.GetValue(key, fallback);
         }
 
-        var password = "";
-        if (map.TryGetValue("Smtp:PasswordEncrypted", out var enc) && !string.IsNullOrWhiteSpace(enc))
-        {
-            try
-            {
-                var key = SecretConfiguration.GetRequiredEncryptionKey(_config, _env);
-                password = SensitiveDataHelper.Decrypt(enc, key);
-            }
-            catch
-            {
-                password = "";
-            }
-        }
+        var password = TryDecryptSmtpPassword(map.GetValueOrDefault("Smtp:PasswordEncrypted")) ?? "";
         if (string.IsNullOrEmpty(password))
             password = _config["Smtp:Password"] ?? "";
 
@@ -368,7 +356,24 @@ public class SettingsService : ISettingsService
         if (map.TryGetValue("Smtp:IgnoreSslErrors", out var ise) && bool.TryParse(ise, out var ignore))
             dto.SmtpIgnoreSslErrors = ignore;
         dto.SmtpPassword = null;
-        dto.SmtpPasswordConfigured = map.TryGetValue("Smtp:PasswordEncrypted", out var enc) && !string.IsNullOrWhiteSpace(enc);
+        dto.SmtpPasswordConfigured = !string.IsNullOrEmpty(TryDecryptSmtpPassword(map.GetValueOrDefault("Smtp:PasswordEncrypted")));
+    }
+
+    /// <summary>
+    /// Null when nothing is stored or the stored value was encrypted with a different Security:DataProtectionKey
+    /// (e.g. after a server move); Settings then shows no saved password so it gets re-entered.
+    /// </summary>
+    private string? TryDecryptSmtpPassword(string? encrypted)
+    {
+        if (string.IsNullOrWhiteSpace(encrypted)) return null;
+        try
+        {
+            return SensitiveDataHelper.Decrypt(encrypted, SecretConfiguration.GetRequiredEncryptionKey(_config, _env));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>Tenant Smtp:* keys, overlaid by SmtpLoc:{id}:* when a location is selected.</summary>

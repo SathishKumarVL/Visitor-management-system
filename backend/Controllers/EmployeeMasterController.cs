@@ -42,4 +42,12 @@ public class EmployeeMasterController : ControllerBase
         await _employees.DeactivateAsync(id, User.Identity?.Name);
         return Ok(new ApiResponse<object>(true, null, "Deactivated."));
     }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
+    public async Task<ActionResult<ApiResponse<object>>> Delete(Guid id)
+    {
+        await _employees.DeleteAsync(id);
+        return Ok(new ApiResponse<object>(true, null, "Deleted."));
+    }
 }

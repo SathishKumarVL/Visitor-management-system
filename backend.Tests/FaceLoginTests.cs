@@ -158,6 +158,40 @@ public class FaceLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         (await superadmin.DeleteAsync($"/api/users/{superAdminId}/faces/{added.Id}")).EnsureSuccessStatusCode();
     }
 
+    [Fact]
+    public async Task Changing_A_Login_Role_Saves_And_A_Clashing_Email_Is_Reported()
+    {
+        var admin = await LoginAsync("admin");
+        var login = await CreateUserAsync(admin, AppRoles.Security);
+        var other = await CreateUserAsync(admin, AppRoles.Security);
+        var users = (await admin.GetFromJsonAsync<ApiResponse<List<UserDto>>>("/api/users", JsonOptions))!.Data!;
+        var current = users.Single(u => u.Id == login.Id);
+        var otherEmail = users.Single(u => u.Id == other.Id).Email;
+
+        object Body(string role, string email) => new
+        {
+            fullName = current.FullName,
+            email,
+            role,
+            departmentId = current.DepartmentId,
+            locationId = current.LocationId,
+            allowedMenuKeys = Array.Empty<string>(),
+            isActive = true,
+        };
+
+        var clash = await admin.PutAsJsonAsync($"/api/users/{login.Id}", Body(AppRoles.Reception, otherEmail));
+        Assert.Equal(HttpStatusCode.BadRequest, clash.StatusCode);
+        Assert.Contains("Another login already uses the email", await clash.Content.ReadAsStringAsync());
+
+        users = (await admin.GetFromJsonAsync<ApiResponse<List<UserDto>>>("/api/users", JsonOptions))!.Data!;
+        Assert.Equal(new[] { AppRoles.Security }, users.Single(u => u.Id == login.Id).Roles);
+
+        var saved = await admin.PutAsJsonAsync($"/api/users/{login.Id}", Body(AppRoles.Reception, current.Email));
+        Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
+        users = (await admin.GetFromJsonAsync<ApiResponse<List<UserDto>>>("/api/users", JsonOptions))!.Data!;
+        Assert.Equal(new[] { AppRoles.Reception }, users.Single(u => u.Id == login.Id).Roles);
+    }
+
     private async Task<HttpResponseMessage> FaceLoginAsync(string photoBase64) =>
         await _factory.CreateClient().PostAsJsonAsync("/api/auth/face-login", new { photoBase64, rememberMe = false });
 

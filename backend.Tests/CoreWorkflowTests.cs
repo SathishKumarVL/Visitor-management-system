@@ -473,7 +473,127 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         Assert.True(others.IsSuccessStatusCode, await others.Content.ReadAsStringAsync());
         var data = (await others.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
         Assert.Equal("Annual vendor audit", data.GetProperty("purposeNotes").GetString());
-        Assert.Contains(data.GetProperty("purposes").EnumerateArray(), p => p.GetString() == "Others");
+        Assert.Contains(data.GetProperty("purposes").EnumerateArray(), p => p.GetString() == "Annual vendor audit");
+        Assert.DoesNotContain(data.GetProperty("purposes").EnumerateArray(), p => p.GetString() == "Others");
+    }
+
+    [Fact]
+    public async Task Purpose_Extra_Fields_Are_Required_And_Saved_With_The_Visit()
+    {
+        var admin = await LoginAsync("superadmin");
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, _) = await SeedRefsAsync();
+        Guid locationId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            locationId = await db.Locations.IgnoreQueryFilters()
+                .Where(l => l.IsActive && l.TenantId == WellKnownTenants.TiaanoId)
+                .Select(l => l.Id)
+                .FirstAsync();
+        }
+
+        var purposeName = $"Delivery {Guid.NewGuid():N}";
+        var create = await admin.PostAsJsonAsync("/api/masters/purposes", new
+        {
+            name = purposeName,
+            sortOrder = 9999,
+            isActive = true,
+            locationId,
+            fields = new[]
+            {
+                new { label = " Invoice number ", isRequired = true },
+                new { label = "Vehicle number", isRequired = false },
+            },
+        });
+        Assert.True(create.IsSuccessStatusCode, await create.Content.ReadAsStringAsync());
+        var purpose = (await create.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+        var purposeId = purpose.GetProperty("id").GetGuid();
+        var fields = purpose.GetProperty("fields").EnumerateArray().ToList();
+        Assert.Equal(2, fields.Count);
+        Assert.Equal("Invoice number", fields[0].GetProperty("label").GetString());
+        var invoiceId = fields[0].GetProperty("id").GetGuid();
+
+        try
+        {
+            object Body(object[] purposeFields) => new
+            {
+                visitorName = "Purpose Fields",
+                gender = 1,
+                companyName = "Delivery Co",
+                telephone = "9000000004",
+                email = $"{Guid.NewGuid():N}@example.test",
+                departmentId,
+                hostEmployeeId = hostId,
+                purposeIds = new[] { purposeId },
+                purposeFields,
+                locationIds = Array.Empty<Guid>(),
+                numberOfPersons = 1,
+                isWalkIn = true,
+                skipBookingMatch = true,
+                idTypeName = "Aadhaar",
+                idNumber = "123456789012",
+                photoBase64 = TestPhotos.Base64($"purpose-fields-{Guid.NewGuid():N}"),
+            };
+
+            var missing = await reception.PostAsJsonAsync("/api/visitors", Body([]));
+            Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+            Assert.Contains($"Invoice number is required for {purposeName}", await missing.Content.ReadAsStringAsync());
+
+            var saved = await reception.PostAsJsonAsync("/api/visitors",
+                Body([new { fieldId = invoiceId, value = "  INV-42  " }]));
+            Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
+            var visitId = VisitId((await saved.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data"));
+
+            var detail = (await reception.GetFromJsonAsync<JsonElement>($"/api/visitors/{visitId}", JsonOptions)).GetProperty("data");
+            var value = Assert.Single(detail.GetProperty("purposeFields").EnumerateArray());
+            Assert.Equal(purposeName, value.GetProperty("purpose").GetString());
+            Assert.Equal("Invoice number", value.GetProperty("label").GetString());
+            Assert.Equal("INV-42", value.GetProperty("value").GetString());
+        }
+        finally
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var row = await db.VisitPurposes.IgnoreQueryFilters().FirstAsync(p => p.Id == purposeId);
+            row.IsActive = false;
+            await db.SaveChangesAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Expected_Visit_Can_Be_Edited_While_Still_Expected()
+    {
+        var reception = await LoginAsync("reception");
+        var (departmentId, hostId, purposeId) = await SeedRefsAsync();
+        var slot = AppTime.Now.AddHours(2);
+        var phone = $"9{Random.Shared.Next(100_000_000, 999_999_999)}";
+        object Body(string name, DateTime when) => new
+        {
+            visitorName = name,
+            gender = 1,
+            companyName = "Preregistered Co",
+            phone,
+            email = $"{Guid.NewGuid():N}@example.test",
+            expectedDate = when.ToString("yyyy-MM-dd"),
+            expectedTime = when.ToString("HH:mm"),
+            departmentId,
+            hostEmployeeId = hostId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        };
+
+        var create = await reception.PostAsJsonAsync("/api/visitors/expected", Body("Edit Me", slot));
+        Assert.True(create.IsSuccessStatusCode, await create.Content.ReadAsStringAsync());
+        var visitId = (await create.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data").GetProperty("visitId").GetGuid();
+
+        var moved = slot.AddHours(1);
+        var update = await reception.PutAsJsonAsync($"/api/visitors/expected/{visitId}", Body("Edited Name", moved));
+        Assert.True(update.IsSuccessStatusCode, await update.Content.ReadAsStringAsync());
+        var data = (await update.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+        Assert.Equal("Edited Name", data.GetProperty("visitorName").GetString());
+        Assert.Equal(hostId, data.GetProperty("hostEmployeeId").GetGuid());
+        Assert.Contains(data.GetProperty("purposeIds").EnumerateArray(), p => p.GetGuid() == purposeId);
     }
 
     [Fact]

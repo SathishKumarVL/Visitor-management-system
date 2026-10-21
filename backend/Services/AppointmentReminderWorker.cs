@@ -6,7 +6,7 @@ using Tiaano.Vms.Api.Models.Enums;
 namespace Tiaano.Vms.Api.Services;
 
 /// <summary>
-/// Queues Email + Push reminders for expected visits (appointments) at configured hour offsets.
+/// Queues Email + Push reminders to the host for expected visits (appointments) at configured hour offsets.
 /// Idempotent via NotificationOutbox.IdempotencyKey.
 /// </summary>
 public sealed class AppointmentReminderWorker : BackgroundService
@@ -89,9 +89,10 @@ public sealed class AppointmentReminderWorker : BackgroundService
                     if (!string.IsNullOrWhiteSpace(visit.HostEmployee?.Email))
                         await notifications.NotifyAsync("Email", visit.HostEmployee.Email, subject, body, emailKey);
 
-                    var pushRecipient = visit.HostEmployee?.UserId ?? visit.Visitor.Email;
-                    if (!string.IsNullOrWhiteSpace(pushRecipient))
-                        await notifications.NotifyAsync("Push", pushRecipient!, subject, body, pushKey);
+                    // Push goes to the host's login; visitors have none.
+                    if (!string.IsNullOrWhiteSpace(visit.HostEmployee?.UserId))
+                        await notifications.NotifyAsync("Push", visit.HostEmployee.UserId, subject, body, pushKey,
+                            link: $"/visitors/expected?date={visit.ExpectedDate:yyyy-MM-dd}");
                 }
                 catch (Exception ex)
                 {

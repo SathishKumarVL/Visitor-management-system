@@ -163,6 +163,32 @@ public class Employee
     public string? UpdatedBy { get; set; }
 }
 
+/// <summary>
+/// Job titles offered in the Employees form. Employees keep the title as text, so deleting or deactivating a
+/// designation never changes existing employee records; renaming one renames it on its employees.
+/// </summary>
+public class Designation
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    [Required, MaxLength(100)]
+    public string Name { get; set; } = string.Empty;
+
+    [MaxLength(50)]
+    public string? Code { get; set; }
+
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? UpdatedBy { get; set; }
+}
+
 public class VisitPurpose
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -180,6 +206,9 @@ public class VisitPurpose
     public Guid? LocationId { get; set; }
     public Location? Location { get; set; }
 
+    /// <summary>JSON array of <see cref="PurposeField"/>: extra text fields asked at registration for this purpose.</summary>
+    public string? FieldsJson { get; set; }
+
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
 
@@ -187,6 +216,23 @@ public class VisitPurpose
     public DateTime? UpdatedAt { get; set; }
     public string? CreatedBy { get; set; }
     public string? UpdatedBy { get; set; }
+}
+
+/// <summary>One extra text field of a purpose, stored in <see cref="VisitPurpose.FieldsJson"/>.</summary>
+public class PurposeField
+{
+    public Guid Id { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public bool IsRequired { get; set; }
+    /// <summary><see cref="PurposeFieldTypes"/>; missing in fields saved before lookups existed, which are text.</summary>
+    public string? Type { get; set; }
+    public Guid? LookupSourceId { get; set; }
+}
+
+public static class PurposeFieldTypes
+{
+    public const string Text = "text";
+    public const string Lookup = "lookup";
 }
 
 public class Location
@@ -204,6 +250,8 @@ public class Location
 
     public bool RequiresPlantNumber { get; set; }
     public bool RequiresOtherText { get; set; }
+    /// <summary>Off: visits here are marked "MoM not required", so no minutes reminders and nothing pending.</summary>
+    public bool MomRequired { get; set; } = true;
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
 
@@ -214,8 +262,8 @@ public class Location
 }
 
 /// <summary>
-/// A room at a location. Allocated automatically at check-in to the smallest free hall that seats the party;
-/// a hall is busy while a visit holding it is still inside.
+/// A room at a location. Allocated automatically at check-in to the smallest free hall that seats the party
+/// (halls of 6+ seats are kept for groups of 6+); a hall is busy while a visit holding it is still inside.
 /// </summary>
 public class MeetingHall
 {

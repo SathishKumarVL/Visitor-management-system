@@ -12,6 +12,7 @@ import { usePagination } from '../lib/usePagination'
 import { useSort } from '../lib/useSort'
 import { SortHeader } from '../components/ui/SortHeader'
 import { useAuthStore } from '../store/authStore'
+import { hasAnyRole } from '../lib/utils'
 
 const blank = (locationId: string): MeetingHallUpsertRequest => ({
   code: '',
@@ -36,6 +37,7 @@ export function MeetingHallsPage() {
   const [formError, setFormError] = useState<string | null>(null)
   // Users bound to a location only see and manage that location's halls (the API enforces this too).
   const userLocationId = useAuthStore((s) => s.user?.locationId) || ''
+  const isSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
   const effectiveLocationId = userLocationId || filterLocationId
   const visibleLocations = userLocationId ? locations.filter((l) => l.id === userLocationId) : locations
 
@@ -142,13 +144,26 @@ export function MeetingHallsPage() {
     }
   }
 
+  async function remove(item: MeetingHallDto) {
+    if (!window.confirm(`Delete meeting hall "${item.name}" permanently? This cannot be undone.`)) return
+    setError(null)
+    setMessage(null)
+    try {
+      await mastersApi.remove('meeting-halls', item.id)
+      setMessage(`Deleted ${item.name}.`)
+      await load()
+    } catch (e) {
+      setError(apiErrorMessage(e))
+    }
+  }
+
   return (
     <div>
       {saving ? <LoadingMask label="Saving…" /> : null}
       {loading ? <Spinner label="Loading meeting halls…" /> : null}
       <PageHeader
         title="Meeting Halls"
-        subtitle="At check-in each visitor is given the smallest free hall at their location that seats the whole party. A hall is free again once the visitor checks out."
+        subtitle="At check-in each visitor is given the smallest free hall at their location that seats the whole party. Halls with 6 or more seats are kept for groups of 6 or more. A hall is free again once the visitor checks out."
         actions={
           <div className="flex flex-wrap gap-2">
             <TextSelect
@@ -211,6 +226,9 @@ export function MeetingHallsPage() {
                       <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
                       {item.isActive ? (
                         <Button size="sm" variant="danger" onClick={() => void deactivate(item.id)}>Deactivate</Button>
+                      ) : null}
+                      {isSuperAdmin ? (
+                        <Button size="sm" variant="danger" onClick={() => void remove(item)}>Delete</Button>
                       ) : null}
                     </div>
                   </td>

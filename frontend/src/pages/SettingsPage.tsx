@@ -12,6 +12,9 @@ import { FONT_PRESETS, FONT_SIZES, THEME_PRESETS, applyBranding } from '../lib/b
 import { useI18n } from '../i18n'
 import { useAuthStore } from '../store/authStore'
 import { ApiKeysPanel } from '../components/ApiKeysPanel'
+import { LookupSourcesPanel } from '../components/LookupSourcesPanel'
+import { MailContentPanel } from './MailContentPage'
+import { useSearchParams } from 'react-router-dom'
 
 const SECTIONS = [
   { id: 'general', labelKey: 'settings.general' },
@@ -19,8 +22,10 @@ const SECTIONS = [
   { id: 'visitor', labelKey: 'settings.visitorRules' },
   { id: 'pass', labelKey: 'settings.passSettings' },
   { id: 'email', labelKey: 'settings.email' },
+  { id: 'mailContent', labelKey: 'settings.mailContent' },
   { id: 'security', labelKey: 'settings.security' },
   { id: 'apiKeys', labelKey: 'settings.apiKeys', superAdminOnly: true },
+  { id: 'lookups', labelKey: 'settings.lookupSources', superAdminOnly: true },
 ] as const
 
 /** Stored once for the whole company, so only a Super Admin can change them. */
@@ -40,6 +45,7 @@ export function SettingsPage() {
   const [form, setForm] = useState<SettingsDto>(settings)
   const [smtpPassword, setSmtpPassword] = useState('')
   const [testEmailTo, setTestEmailTo] = useState('')
+  const [testSendAs, setTestSendAs] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
   const [smtpLocationId, setSmtpLocationId] = useState(locationBound ? userLocationId : '')
   const [passLocationId, setPassLocationId] = useState(locationBound ? userLocationId : '')
@@ -49,7 +55,10 @@ export function SettingsPage() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [section, setSection] = useState<(typeof SECTIONS)[number]['id']>('branding')
+  const [searchParams] = useSearchParams()
+  const [section, setSection] = useState<(typeof SECTIONS)[number]['id']>(
+    () => visibleSections.find((s) => s.id === searchParams.get('tab'))?.id ?? 'branding',
+  )
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [series, setSeries] = useState<PassNumberSeriesDto | null>(null)
@@ -233,8 +242,12 @@ export function SettingsPage() {
         smtpLocationId || undefined,
       )
       if (smtpPassword.trim()) setSmtpPassword('')
-      await settingsApi.sendTestEmail(testEmailTo.trim(), smtpLocationId || undefined)
-      setMessage(t('settings.testEmailSent'))
+      const sent = await settingsApi.sendTestEmail(
+        testEmailTo.trim(),
+        smtpLocationId || undefined,
+        testSendAs.trim() || undefined,
+      )
+      setMessage(sent || t('settings.testEmailSent'))
     } catch (err) {
       setError(apiErrorMessage(err, t('settings.testEmailError')))
     } finally {
@@ -311,6 +324,10 @@ export function SettingsPage() {
         <Panel>
           {section === 'apiKeys' ? (
             <ApiKeysPanel />
+          ) : section === 'lookups' ? (
+            <LookupSourcesPanel />
+          ) : section === 'mailContent' ? (
+            <MailContentPanel lockedLocationId={locationBound ? userLocationId : ''} />
           ) : (
           <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
             {section === 'general' ? (
@@ -704,6 +721,16 @@ export function SettingsPage() {
                       {t('settings.testEmail')}
                     </Button>
                   </div>
+                  <div className="mt-3" />
+                  <FieldLabel htmlFor="testSendAs">{t('settings.testSendAs')}</FieldLabel>
+                  <TextInput
+                    id="testSendAs"
+                    type="email"
+                    value={testSendAs}
+                    onChange={(e) => setTestSendAs(e.target.value)}
+                    placeholder="employee@example.com"
+                  />
+                  <p className="mt-1 text-xs text-ink-muted">{t('settings.testSendAsHelp')}</p>
                 </div>
               </>
             ) : null}

@@ -153,7 +153,7 @@ export function MeetingMinutesPage() {
   }
 
   if (loading) return <Spinner label="Loading visit…" />
-  if (!visitor) return error ? <Alert tone="error">{error}</Alert> : null
+  if (!visitor) return error ? <Alert tone="error" persistent>{error}</Alert> : null
 
   const status = String(visitor.statusLabel).toLowerCase()
   const canRecord = status.includes('inside') || status.includes('checkedout')
@@ -188,12 +188,12 @@ export function MeetingMinutesPage() {
       </Panel>
 
       {!canRecord ? (
-        <Alert tone="info">Minutes of meeting can be recorded once the visitor has checked in.</Alert>
+        <Alert tone="info" persistent>Minutes of meeting can be recorded once the visitor has checked in.</Alert>
       ) : (
         <Panel>
           {visitor.momNotRequired && !visitor.hasMeetingMinutes ? (
             <div className="mb-4">
-              <Alert tone="info">
+              <Alert tone="info" persistent>
                 Marked as not required{visitor.momNotRequiredBy ? ` by ${visitor.momNotRequiredBy}` : ''}
                 {visitor.momNotRequiredAt ? ` on ${formatDateTime(visitor.momNotRequiredAt)}` : ''}. You can still
                 record minutes here.
@@ -320,7 +320,7 @@ export function MeetingMinutesPage() {
 
           {!visitor.email ? (
             <div className="mt-4">
-              <Alert tone="warning">
+              <Alert tone="warning" persistent>
                 {visitor.visitorName} has no email address, so the MOM email will go to {visitor.hostName} only.
               </Alert>
             </div>

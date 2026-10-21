@@ -60,6 +60,7 @@ export function EmployeeMasterPage() {
   const [items, setItems] = useState<EmployeeDto[]>([])
   const [departments, setDepartments] = useState<MasterItemDto[]>([])
   const [locations, setLocations] = useState<MasterItemDto[]>([])
+  const [designations, setDesignations] = useState<MasterItemDto[]>([])
   const [departmentId, setDepartmentId] = useState('')
   const [locationId, setLocationId] = useState('')
   const [search, setSearch] = useState('')
@@ -129,10 +130,11 @@ export function EmployeeMasterPage() {
   }, [departmentId, effectiveLocationId])
 
   useEffect(() => {
-    void Promise.all([mastersApi.departments(true), mastersApi.locations(true)])
-      .then(([d, l]) => {
+    void Promise.all([mastersApi.departments(true), mastersApi.locations(true), mastersApi.designations(true)])
+      .then(([d, l, g]) => {
         setDepartments(d)
         setLocations(l)
+        setDesignations(g)
       })
       .catch((e) => setError(apiErrorMessage(e)))
   }, [])
@@ -248,7 +250,26 @@ export function EmployeeMasterPage() {
     }
   }
 
-  const showCamera = !editing || !editing.hasFace || retakeFace
+  async function remove(item: EmployeeDto) {
+    if (!window.confirm(`Delete ${titledName(item)} permanently? This cannot be undone. Their login, if any, is kept.`)) return
+    setSaving(true)
+    setFormError(null)
+    try {
+      await employeeMasterApi.remove(item.id)
+      setMessage(`${item.fullName} deleted.`)
+      closeForm()
+      await load()
+    } catch (err) {
+      setFormError(apiErrorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Only a Super Admin edits employee details; location admins open the record to manage its login.
+  const readOnly = !!editing && !isSuperAdmin
+  const showCamera = !readOnly && (!editing || !editing.hasFace || retakeFace)
+  const editingLogin = editing?.userId ? usersById.get(editing.userId) : undefined
 
   return (
     <div>
@@ -370,18 +391,8 @@ export function EmployeeMasterPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2 whitespace-nowrap">
-                        {login ? (
-                          <Button size="sm" variant="secondary" onClick={() => setManaging({ user: login, employee: item })}>
-                            Login
-                          </Button>
-                        ) : null}
-                        {!item.userName && item.isActive ? (
-                          <Button size="sm" variant="secondary" onClick={() => setLoginFor(item)}>Create login</Button>
-                        ) : null}
-                        {isSuperAdmin ? (
-                          <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
-                        ) : null}
+                      <div className="flex justify-end whitespace-nowrap">
+                        <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>Edit</Button>
                       </div>
                     </td>
                   </tr>
@@ -437,14 +448,14 @@ export function EmployeeMasterPage() {
 
       <Modal
         open={formOpen}
-        title={editing ? 'Edit employee' : 'Add employee'}
+        title={editing ? (readOnly ? 'Employee' : 'Edit employee') : 'Add employee'}
         subtitle={editing ? titledName(editing) : 'All fields marked * and the face are required.'}
         onClose={closeForm}
         size="xl"
       >
         <form onSubmit={save} className="grid gap-4 lg:grid-cols-[1fr_260px]">
           {formError ? <div className="lg:col-span-2"><Alert tone="error">{formError}</Alert></div> : null}
-          <div className="grid content-start gap-3 sm:grid-cols-2">
+          <fieldset disabled={readOnly} className="grid min-w-0 content-start gap-3 sm:grid-cols-2">
             <div>
               <FieldLabel>Employee ID *</FieldLabel>
               <TextInput required maxLength={50} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
@@ -517,7 +528,15 @@ export function EmployeeMasterPage() {
             </div>
             <div>
               <FieldLabel>Designation</FieldLabel>
-              <TextInput maxLength={100} value={form.designation || ''} onChange={(e) => setForm({ ...form, designation: e.target.value })} />
+              <TextSelect value={form.designation || ''} onChange={(e) => setForm({ ...form, designation: e.target.value })}>
+                <option value="">Select designation</option>
+                {designations.map((d) => (
+                  <option key={d.id} value={d.name}>{d.name}</option>
+                ))}
+                {form.designation && !designations.some((d) => d.name === form.designation) ? (
+                  <option value={form.designation}>{form.designation}</option>
+                ) : null}
+              </TextSelect>
             </div>
             <div>
               <FieldLabel>Intercom</FieldLabel>
@@ -552,7 +571,7 @@ export function EmployeeMasterPage() {
                 ))}
               </TextSelect>
             </div>
-          </div>
+          </fieldset>
 
           <div className="space-y-2">
             <FieldLabel>Face *</FieldLabel>
@@ -586,31 +605,89 @@ export function EmployeeMasterPage() {
               </>
             ) : (
               <>
-                <SecureImage src={editing?.photoUrl} alt={editing?.fullName ?? ''} className="aspect-[3/4] w-full rounded-xl object-cover" />
-                <Button type="button" variant="secondary" className="w-full" onClick={() => setRetakeFace(true)}>
-                  Capture a new face
-                </Button>
+                {editing?.photoUrl ? (
+                  <SecureImage src={editing.photoUrl} alt={editing.fullName} className="aspect-[3/4] w-full rounded-xl object-cover" />
+                ) : (
+                  <p className="rounded-xl bg-amber-50 px-3 py-6 text-center text-xs font-medium text-amber-700">No face enrolled</p>
+                )}
+                {readOnly ? null : (
+                  <Button type="button" variant="secondary" className="w-full" onClick={() => setRetakeFace(true)}>
+                    Capture a new face
+                  </Button>
+                )}
               </>
             )}
             <p className="text-xs text-ink-muted">
               Reception recognises the employee by this face at any location, and it becomes their face sign-in when a login is created.
             </p>
+
+            {editing ? (
+              <div className="space-y-2 border-t border-gray-100 pt-3">
+                <FieldLabel>Login</FieldLabel>
+                {editingLogin ? (
+                  <>
+                    <p className="text-sm">
+                      <span className="font-medium">{editingLogin.username}</span>
+                      <span className="text-ink-muted"> · {roleLabel(editingLogin.roles[0] ?? '')}</span>
+                      {!editingLogin.isActive ? <span className="ml-1 font-medium text-amber-700">· Blocked</span> : null}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => {
+                        const employee = editing
+                        closeForm()
+                        setManaging({ user: editingLogin, employee })
+                      }}
+                    >
+                      Manage login
+                    </Button>
+                  </>
+                ) : editing.userName ? (
+                  <p className="text-sm font-medium">{editing.userName}</p>
+                ) : editing.isActive ? (
+                  <>
+                    <p className="text-xs text-ink-muted">No login yet.</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => {
+                        const employee = editing
+                        closeForm()
+                        setLoginFor(employee)
+                      }}
+                    >
+                      Create login
+                    </Button>
+                  </>
+                ) : (
+                  <p className="text-xs text-ink-muted">Reactivate the employee to create a login.</p>
+                )}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 lg:col-span-2">
-            {editing?.isActive ? (
+            {editing?.isActive && !readOnly ? (
               <Button type="button" variant="danger" disabled={saving} onClick={() => void deactivate(editing)}>
                 Deactivate employee
               </Button>
             ) : null}
-            {editing && !editing.isActive ? (
+            {editing && !editing.isActive && !readOnly ? (
               <Button type="button" variant="secondary" disabled={saving} onClick={() => void persist(true, `${editing.fullName} reactivated.`)}>
                 Reactivate employee
               </Button>
             ) : null}
+            {editing && isSuperAdmin ? (
+              <Button type="button" variant="danger" disabled={saving} onClick={() => void remove(editing)}>
+                Delete employee
+              </Button>
+            ) : null}
             <div className="ml-auto flex gap-2">
-              <Button type="button" variant="secondary" onClick={closeForm}>Cancel</Button>
-              <Button type="submit" loading={saving}>Save</Button>
+              <Button type="button" variant="secondary" onClick={closeForm}>{readOnly ? 'Close' : 'Cancel'}</Button>
+              {readOnly ? null : <Button type="submit" loading={saving}>Save</Button>}
             </div>
           </div>
         </form>

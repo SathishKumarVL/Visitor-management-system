@@ -101,7 +101,7 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
 
   const order = [
     'dashboard', 'reception', 'visitors', 'inside', 'expected',
-    'reports', 'employeemaster', 'departments', 'purposes', 'locations', 'feedback', 'meetinghalls', 'settings',
+    'reports', 'employeemaster', 'departments', 'designations', 'purposes', 'locations', 'feedback', 'meetinghalls', 'settings',
   ]
   const pathByKey: Record<string, string> = {
     dashboard: '/dashboard',
@@ -111,6 +111,7 @@ export function homePathForRoles(roles: string[], allowedMenuKeys?: string[] | n
     expected: '/visitors/expected',
     reports: '/reports',
     departments: '/masters/departments',
+    designations: '/masters/designations',
     purposes: '/masters/purposes',
     locations: '/masters/locations',
     feedback: '/masters/feedback',

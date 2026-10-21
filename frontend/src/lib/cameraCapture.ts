@@ -6,6 +6,41 @@ export const FACE_CAPTURE = {
   heightRatio: 0.72,
 } as const
 
+export type CameraFacing = 'user' | 'environment'
+
+const FACING_KEY = 'camera.facing'
+
+/**
+ * Remembered per device: a self check-in kiosk faces the visitor with the front camera,
+ * while reception holding the tablet points the back camera at the visitor.
+ */
+export function getCameraFacing(): CameraFacing {
+  return localStorage.getItem(FACING_KEY) === 'environment' ? 'environment' : 'user'
+}
+
+export function toggleCameraFacing(): CameraFacing {
+  const next: CameraFacing = getCameraFacing() === 'user' ? 'environment' : 'user'
+  localStorage.setItem(FACING_KEY, next)
+  return next
+}
+
+export function openFaceCamera(): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    video: { facingMode: getCameraFacing(), width: { ideal: 640 }, height: { ideal: 480 } },
+    audio: false,
+  })
+}
+
+/** Device labels and counts are only reliable after camera permission, so call once a stream is live. */
+export async function hasMultipleCameras(): Promise<boolean> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    return devices.filter((d) => d.kind === 'videoinput').length > 1
+  } catch {
+    return false
+  }
+}
+
 /**
  * Draw only the centered face frame from a video element into a JPEG data URL.
  * Full-frame capture pulls in people standing beside the visitor.

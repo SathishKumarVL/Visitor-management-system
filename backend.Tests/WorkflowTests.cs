@@ -37,6 +37,8 @@ public class TestApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Seed:DefaultPassword", TestSecrets.SeedPassword);
         builder.UseSetting("Smtp:Enabled", "false");
         builder.UseSetting("Smtp:IgnoreSslErrors", "false");
+        // MomReminderTests drive the reminders directly; the background sweep would mail every test check-out.
+        builder.UseSetting("Reminders:MomEnabled", "false");
 
         // Recognition quality is proven against the real weights in ArcFacePipelineTests; the HTTP
         // tests only need embedding to be deterministic and not cost 180 MB of model loading.

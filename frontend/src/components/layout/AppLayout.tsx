@@ -2,8 +2,11 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { BrandLogo } from '../BrandLogo'
 import { OfflineBanner } from './OfflineBanner'
+import { NotificationBell } from './NotificationBell'
+import { detachPushSubscription } from '../../lib/push'
 import { Button } from '../ui/Button'
 import { useAuthStore } from '../../store/authStore'
+import { isInstalledApp, useScreenWakeLock } from '../../hooks/useScreenWakeLock'
 import { roleLabel, visibleMenu, type MenuItem } from '../../lib/roles'
 import { cn, primaryRole } from '../../lib/utils'
 import { LanguageSwitcher, useI18n } from '../../i18n'
@@ -27,6 +30,7 @@ const MENU_ICONS: Record<string, string> = {
   expected: '◷',
   reports: '▤',
   departments: '▣',
+  designations: '◈',
   employees: '☰',
   purposes: '◇',
   locations: '⌖',
@@ -54,6 +58,8 @@ export function AppLayout() {
   const items = visibleMenu(user?.roles ?? [], user?.allowedMenuKeys)
   const allPaths = items.map((i) => i.path)
   const role = primaryRole(user?.roles ?? [])
+  const deskDevice = !!user?.roles.some((r) => r === 'Reception' || r === 'Security')
+  useScreenWakeLock(deskDevice && isInstalledApp())
   const pageTitle = useMemo(() => {
     const match = items.find((i) => isMenuItemActive(location.pathname, i.path, allPaths))
     return match ? t(`nav.${match.key}`) : t('nav.visitorManagement')
@@ -158,7 +164,7 @@ export function AppLayout() {
                   'fixed bottom-0 left-0 top-0 w-72 max-w-[85vw]',
                   open ? 'translate-x-0' : '-translate-x-full',
                 )
-              : cn('sticky top-0 h-screen shrink-0', open ? 'w-64' : 'w-0 overflow-hidden border-0'),
+              : cn('sticky top-0 h-dvh shrink-0', open ? 'w-64' : 'w-0 overflow-hidden border-0'),
           )}
         >
           <div className="border-b border-border/70 px-4 py-5">
@@ -228,6 +234,7 @@ export function AppLayout() {
               </div>
               <div className="ml-auto flex items-center gap-2 sm:gap-3">
                 <LanguageSwitcher className="hidden sm:flex" />
+                <NotificationBell />
                 <div className="hidden text-right sm:block">
                   <div className="text-sm font-semibold text-ink">{user?.fullName}</div>
                   <div className="text-xs text-ink-muted">{user?.roles.map(roleLabel).join(', ')}</div>
@@ -242,6 +249,7 @@ export function AppLayout() {
                   variant="secondary"
                   size="sm"
                   onClick={async () => {
+                    await detachPushSubscription().catch(() => undefined)
                     await logout()
                     navigate('/login')
                   }}

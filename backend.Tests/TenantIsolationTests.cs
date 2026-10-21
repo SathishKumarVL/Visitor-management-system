@@ -202,6 +202,12 @@ public class TenantIsolationTests : IClassFixture<TestApiFactory>
             });
             await db.SaveChangesAsync();
         }
+
+        // The test database is kept between runs: keep the visit inside the reports' 30-day window.
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        await db.VisitorVisits.IgnoreQueryFilters()
+            .Where(v => v.TenantId == TenantBId && v.VisitNumber == "TB-2026-000001" && v.VisitDate < today)
+            .ExecuteUpdateAsync(s => s.SetProperty(v => v.VisitDate, today));
     }
 
     private async Task<(HttpClient Client, string Token)> LoginAsync(string username, string password)

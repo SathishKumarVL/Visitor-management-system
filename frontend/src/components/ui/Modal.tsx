@@ -40,7 +40,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
       <div
         className={cn(
-          'flex max-h-[94vh] w-full flex-col rounded-2xl bg-white shadow-xl',
+          'flex max-h-[94dvh] w-full flex-col rounded-2xl bg-white shadow-xl',
           size === 'xl' ? 'max-w-5xl' : size === 'lg' ? 'max-w-3xl' : 'max-w-lg',
         )}
       >
@@ -53,7 +53,7 @@ export function Modal({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-mr-1 flex h-9 w-9 items-center justify-center rounded-full text-xl leading-none text-ink-muted hover:bg-gray-100 hover:text-ink"
+            className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-2xl leading-none text-ink-muted hover:bg-gray-100 hover:text-ink"
           >
             ×
           </button>

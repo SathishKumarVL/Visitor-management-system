@@ -95,7 +95,7 @@ export function ExcelImportButtons({
           onClick={() => setOpen(false)}
         >
           <div
-            className="max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+            className="max-h-[94dvh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-3 text-lg font-semibold text-steel">{label} import</h2>
@@ -108,7 +108,7 @@ export function ExcelImportButtons({
                   <Stat label="Failed" value={result.failed} tone={result.failed ? 'text-red-600' : 'text-ink-muted'} />
                 </div>
                 {result.totalRows === 0 ? (
-                  <Alert tone="warning">No data rows were found. Fill the rows below the header in the Data sheet.</Alert>
+                  <Alert tone="warning" persistent>No data rows were found. Fill the rows below the header in the Data sheet.</Alert>
                 ) : null}
                 {result.errors.length > 0 ? (
                   <div>

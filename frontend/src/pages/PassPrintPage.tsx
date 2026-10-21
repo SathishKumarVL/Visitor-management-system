@@ -30,7 +30,7 @@ export function PassPrintPage() {
   }, [visitId])
 
   if (loading) return <Spinner label="Loading pass…" />
-  if (error) return <Alert tone="error">{error}</Alert>
+  if (error) return <Alert tone="error" persistent>{error}</Alert>
   if (!pass) return null
 
   const company = pass.brandCompanyName || storeCompany
@@ -82,6 +82,9 @@ export function PassPrintPage() {
             <Row label="Visit #" value={pass.visitNumber} />
             <Row label="Check-in" value={formatDateTime(pass.checkInAt)} />
             <Row label="Purpose" value={pass.purposes.join(', ') || '—'} />
+            {(pass.purposeFields ?? []).map((f, i) => (
+              <Row key={`${f.purpose}-${f.label}-${i}`} label={f.label} value={f.value} />
+            ))}
             <Row label="Locations" value={pass.locations.join(', ') || '—'} />
             <Row label="Status" value={pass.status} />
           </div>

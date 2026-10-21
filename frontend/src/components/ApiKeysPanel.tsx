@@ -236,7 +236,7 @@ export function ApiKeysPanel() {
       >
         {createdKey ? (
           <div className="space-y-4 text-sm">
-            <Alert tone="success">
+            <Alert tone="success" persistent>
               Copy the key and URL now and give them to the other application. The key will not be shown again.
             </Alert>
             <CopyRow label="API key (send in the X-Api-Key header)" value={createdKey} />

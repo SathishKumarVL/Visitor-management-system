@@ -18,6 +18,7 @@ public interface IVisitorService
 {
     Task<VisitorDetailDto> RegisterAsync(RegisterVisitorRequest request, ClaimsPrincipal user, string webRoot);
     Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user);
+    Task<VisitorDetailDto> UpdateExpectedAsync(Guid visitId, ExpectedVisitorRequest request, ClaimsPrincipal user);
     Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes);
     Task<VisitorDetailDto?> GetAsync(Guid visitId, ClaimsPrincipal user, string encryptionKey);
     Task<VisitorListItemDto> ApproveAsync(Guid visitId, ClaimsPrincipal user);
@@ -53,6 +54,7 @@ public class VisitorService : IVisitorService
     private readonly INotificationService _notifications;
     private readonly IConfiguration _config;
     private const int ExpectedBookingGraceMinutes = 5;
+    public const string LocationMomNotRequiredBy = "Location setting";
 
     private readonly IHostEnvironment _env;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -158,6 +160,13 @@ public class VisitorService : IVisitorService
 
         var purposes = await _db.VisitPurposes.Where(p => request.PurposeIds.Contains(p.Id) && p.IsActive).ToListAsync();
         if (purposes.Count == 0) throw new InvalidOperationException("At least one valid purpose is required.");
+        var lookupSecret = EncryptionKey();
+        var purposeFieldValues = PurposeFields.BuildValues(
+            purposes,
+            request.PurposeFields,
+            token => LookupTokens.Unprotect(token, lookupSecret, DateTimeOffset.UtcNow) is { } s && s.TenantId == _tenant.TenantId ? s : null,
+            request.Telephone,
+            request.Email);
 
         var locationIds = request.LocationIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
         if (_tenant.LocationId is Guid boundLocation && boundLocation != Guid.Empty
@@ -270,6 +279,7 @@ public class VisitorService : IVisitorService
             PlantNumber = request.PlantNumber,
             OtherLocationText = request.OtherLocationText,
             PurposeNotes = request.PurposeNotes,
+            PurposeFieldsJson = PurposeFields.Write(purposeFieldValues),
             Notes = request.Notes,
             PassNumber = passNumber,
             NumberOfPersons = request.NumberOfPersons < 1 ? 1 : Math.Min(request.NumberOfPersons, 99),
@@ -280,6 +290,12 @@ public class VisitorService : IVisitorService
             ClientRequestId = clientRequestId,
             CreatedBy = user.Identity?.Name
         };
+        if (locations.Count > 0 && locations.All(l => !l.MomRequired))
+        {
+            visit.MomNotRequired = true;
+            visit.MomNotRequiredBy = LocationMomNotRequiredBy;
+            visit.MomNotRequiredAt = DateTime.UtcNow;
+        }
 
         foreach (var p in purposes)
             visit.VisitPurposes.Add(new VisitorVisitPurpose { VisitPurposeId = p.Id });
@@ -360,9 +376,12 @@ public class VisitorService : IVisitorService
 
         if (needsApproval)
         {
-            var recipient = host.Email ?? host.UserId ?? "host";
-            await _notifications.NotifyAsync("Internal", recipient, "Visitor approval required",
-                $"Visitor {visitor.FullName} from {visitor.CompanyName} is pending your approval.");
+            var body = $"Visitor {visitor.FullName} from {visitor.CompanyName} is pending your approval.";
+            if (!string.IsNullOrWhiteSpace(host.UserId))
+                QueueHostPush(visit.TenantId, host.UserId, "Visitor approval required", body,
+                    $"approval-push:{visit.Id}", $"/visitors/{visit.Id}");
+            else
+                await _notifications.NotifyAsync("Internal", host.Email ?? "host", "Visitor approval required", body);
         }
 
         try
@@ -424,23 +443,7 @@ public class VisitorService : IVisitorService
         if (request.ExpectedDate.ToDateTime(request.ExpectedTime) < AppTime.Now.AddMinutes(-ExpectedBookingGraceMinutes))
             throw new InvalidOperationException("Appointment date and time cannot be in the past.");
 
-        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, TenantClaims.RequireTenantId(user, _tenant));
-        request.PurposeNotes = string.IsNullOrWhiteSpace(request.PurposeNotes) ? null : request.PurposeNotes.Trim();
-        if (request.PurposeNotes is not null)
-        {
-            var othersId = (await _db.VisitPurposes.AsNoTracking()
-                .FirstAsync(p => p.Name == VisitPurposeDefaults.OthersName)).Id;
-            if (!request.PurposeIds.Contains(othersId))
-                request.PurposeIds.Add(othersId);
-        }
-        if (request.PurposeIds.Count == 0)
-            throw new InvalidOperationException("Purpose of visit is required.");
-        var purposeIds = await _db.VisitPurposes
-            .Where(p => request.PurposeIds.Contains(p.Id) && p.IsActive)
-            .Select(p => p.Id)
-            .ToListAsync();
-        if (purposeIds.Count == 0)
-            throw new InvalidOperationException("At least one valid purpose is required.");
+        var purposeIds = await ResolveBookingPurposeIdsAsync(request, user);
 
         // A location-bound user only sees visits that include their location, so their bookings must carry it.
         var locationIds = request.LocationIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
@@ -533,7 +536,145 @@ public class VisitorService : IVisitorService
         return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
     }
 
-    private async Task TryQueueAppointmentAckAsync(VisitorVisit visit, Visitor visitor, Employee host)
+    /// <summary>Edits a booking that has not arrived yet. A changed date, time or host re-sends the appointment mail.</summary>
+    public async Task<VisitorDetailDto> UpdateExpectedAsync(Guid visitId, ExpectedVisitorRequest request, ClaimsPrincipal user)
+    {
+        var visit = await _db.VisitorVisits
+            .Include(v => v.Visitor)
+            .Include(v => v.VisitPurposes)
+            .Include(v => v.VisitLocations)
+            .FirstOrDefaultAsync(v => v.Id == visitId)
+            ?? throw new InvalidOperationException("Booking not found.");
+        if (visit.Status != VisitStatus.Expected)
+            throw new InvalidOperationException("Only bookings for visitors who have not arrived yet can be edited.");
+
+        if (string.IsNullOrWhiteSpace(request.VisitorName) || string.IsNullOrWhiteSpace(request.CompanyName))
+            throw new InvalidOperationException("Visitor name and company are required.");
+        if (request.Gender is not (VisitorGender.Male or VisitorGender.Female))
+            throw new InvalidOperationException("Gender is required (Male or Female).");
+        if (string.IsNullOrWhiteSpace(request.Phone))
+            throw new InvalidOperationException("Visitor mobile number is required.");
+
+        var oldDate = visit.ExpectedDate ?? visit.VisitDate;
+        var oldTime = visit.ExpectedTime ?? visit.VisitTime;
+        var whenChanged = oldDate != request.ExpectedDate || oldTime != request.ExpectedTime;
+        if (whenChanged && request.ExpectedDate.ToDateTime(request.ExpectedTime) < AppTime.Now.AddMinutes(-ExpectedBookingGraceMinutes))
+            throw new InvalidOperationException("Appointment date and time cannot be in the past.");
+
+        var purposeIds = await ResolveBookingPurposeIdsAsync(request, user);
+        var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
+        var phone = NormalizeTenDigitPhone(request.Phone!);
+
+        var duplicate = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Id != visit.Id
+                        && v.Status == VisitStatus.Expected
+                        && v.Visitor.Phone == phone
+                        && v.HostEmployeeId == host.Id
+                        && (v.ExpectedDate ?? v.VisitDate) == request.ExpectedDate)
+            .Select(v => new { v.VisitNumber, Time = v.ExpectedTime ?? v.VisitTime })
+            .FirstOrDefaultAsync();
+        if (duplicate is not null)
+            throw new InvalidOperationException(
+                $"This visitor already has an appointment with {host.FullName} on {request.ExpectedDate:dd/MM/yyyy} " +
+                $"at {duplicate.Time:HH:mm} (booking {duplicate.VisitNumber}).");
+
+        // Same rule as booking: a mobile number that already belongs to a visitor moves the booking to that visitor.
+        var visitor = visit.Visitor;
+        if (visitor.Phone != phone)
+        {
+            var existing = await VisitorsByPhone(phone).FirstOrDefaultAsync(v => v.Id != visitor.Id);
+            if (existing is not null)
+            {
+                visit.Visitor = existing;
+                visitor = existing;
+            }
+            else
+            {
+                visitor.Phone = phone;
+            }
+        }
+        visitor.FullName = request.VisitorName.Trim();
+        visitor.Gender = request.Gender;
+        visitor.CompanyName = request.CompanyName.Trim();
+        if (!string.IsNullOrWhiteSpace(request.Email))
+            visitor.Email = request.Email.Trim();
+        visitor.UpdatedAt = DateTime.UtcNow;
+        visitor.UpdatedBy = user.Identity?.Name;
+
+        var hostChanged = visit.HostEmployeeId != host.Id;
+        visit.VisitDate = request.ExpectedDate;
+        visit.VisitTime = request.ExpectedTime;
+        visit.ExpectedDate = request.ExpectedDate;
+        visit.ExpectedTime = request.ExpectedTime;
+        visit.DepartmentId = request.DepartmentId;
+        visit.HostEmployeeId = host.Id;
+        visit.PurposeNotes = request.PurposeNotes;
+        visit.UpdatedAt = DateTime.UtcNow;
+        visit.UpdatedBy = user.Identity?.Name;
+
+        foreach (var stale in visit.VisitPurposes.Where(p => !purposeIds.Contains(p.VisitPurposeId)).ToList())
+            visit.VisitPurposes.Remove(stale);
+        foreach (var pid in purposeIds.Where(id => visit.VisitPurposes.All(p => p.VisitPurposeId != id)))
+            visit.VisitPurposes.Add(new VisitorVisitPurpose { VisitPurposeId = pid });
+
+        var locationIds = request.LocationIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
+        if (_tenant.LocationId is Guid boundLocation && boundLocation != Guid.Empty && !locationIds.Contains(boundLocation))
+            locationIds.Add(boundLocation);
+        if (locationIds.Count > 0)
+        {
+            foreach (var stale in visit.VisitLocations.Where(l => !locationIds.Contains(l.LocationId)).ToList())
+                visit.VisitLocations.Remove(stale);
+            foreach (var lid in locationIds.Where(id => visit.VisitLocations.All(l => l.LocationId != id)))
+                visit.VisitLocations.Add(new VisitorVisitLocation { LocationId = lid });
+        }
+
+        await _db.SaveChangesAsync();
+
+        if (whenChanged || hostChanged)
+        {
+            try
+            {
+                var reloaded = await _db.VisitorVisits
+                    .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
+                    .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
+                    .Include(v => v.Department)
+                    .FirstAsync(v => v.Id == visit.Id);
+                await TryQueueAppointmentAckAsync(reloaded, visitor, host, $":updated-{DateTime.UtcNow.Ticks}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Updated appointment notify failed for visit {VisitId}", visit.Id);
+            }
+        }
+
+        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+    }
+
+    /// <summary>Booking purposes: typed "Others" text implies the Others purpose; at least one active purpose.</summary>
+    private async Task<List<Guid>> ResolveBookingPurposeIdsAsync(ExpectedVisitorRequest request, ClaimsPrincipal user)
+    {
+        await VisitPurposeDefaults.EnsureOthersPurposeAsync(_db, TenantClaims.RequireTenantId(user, _tenant));
+        request.PurposeNotes = string.IsNullOrWhiteSpace(request.PurposeNotes) ? null : request.PurposeNotes.Trim();
+        if (request.PurposeNotes is not null)
+        {
+            var othersId = (await _db.VisitPurposes.AsNoTracking()
+                .FirstAsync(p => p.Name == VisitPurposeDefaults.OthersName)).Id;
+            if (!request.PurposeIds.Contains(othersId))
+                request.PurposeIds.Add(othersId);
+        }
+        if (request.PurposeIds.Count == 0)
+            throw new InvalidOperationException("Purpose of visit is required.");
+        var purposeIds = await _db.VisitPurposes
+            .Where(p => request.PurposeIds.Contains(p.Id) && p.IsActive)
+            .Select(p => p.Id)
+            .ToListAsync();
+        if (purposeIds.Count == 0)
+            throw new InvalidOperationException("At least one valid purpose is required.");
+        return purposeIds;
+    }
+
+    /// <param name="sendKey">Distinguishes a re-send (edited booking) from the original appointment mail.</param>
+    private async Task TryQueueAppointmentAckAsync(VisitorVisit visit, Visitor visitor, Employee host, string sendKey = "")
     {
         var whenLocal = visit.ExpectedDate.HasValue
             ? visit.ExpectedDate.Value.ToDateTime(visit.ExpectedTime ?? TimeOnly.MinValue)
@@ -550,7 +691,7 @@ public class VisitorService : IVisitorService
             Location: visit.VisitLocations.Select(l => l.Location?.Name).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? "",
             LocationId: visit.VisitLocations.Select(l => (Guid?)l.LocationId).FirstOrDefault(id => id.HasValue && id.Value != Guid.Empty),
             Department: visit.Department?.Name ?? "",
-            Purpose: string.Join(", ", visit.VisitPurposes.Select(p => p.VisitPurpose?.Name).Where(n => !string.IsNullOrWhiteSpace(n))!),
+            Purpose: PurposeDisplay.Join(visit.VisitPurposes.Select(p => p.VisitPurpose?.Name), visit.PurposeNotes),
             MeetingMinutes: "",
             MomentLocal: whenLocal);
 
@@ -576,12 +717,15 @@ public class VisitorService : IVisitorService
             }
         }
 
-        await _visitMail.SendAppointmentAsync(ctx);
+        await _visitMail.SendAppointmentAsync(ctx with { AppointmentSendKey = sendKey });
         if (!string.IsNullOrWhiteSpace(host.UserId))
         {
-            var (subject, _) = MasterDataService.DefaultMailContent(MailContentKind.Appointment);
-            await _notifications.NotifyAsync("Push", host.UserId, subject.Replace("{{VisitorName}}", visitor.FullName),
-                $"Appointment: {visitor.FullName}");
+            var company = string.IsNullOrWhiteSpace(visitor.CompanyName) ? "" : $" ({visitor.CompanyName})";
+            await _notifications.NotifyAsync("Push", host.UserId,
+                sendKey.Length == 0 ? "Appointment booked" : "Appointment updated",
+                $"{visitor.FullName}{company} on {whenLocal:dd MMM yyyy, HH:mm}",
+                $"appointment-push:{visit.Id}{sendKey}",
+                link: $"/visitors/expected?date={whenLocal:yyyy-MM-dd}");
         }
     }
 
@@ -596,9 +740,7 @@ public class VisitorService : IVisitorService
             .FirstOrDefault(id => id.HasValue && id.Value != Guid.Empty);
         var purpose = visit.VisitPurposes is null
             ? ""
-            : string.Join(", ", visit.VisitPurposes
-                .Select(p => p.VisitPurpose?.Name)
-                .Where(n => !string.IsNullOrWhiteSpace(n))!);
+            : PurposeDisplay.Join(visit.VisitPurposes.Select(p => p.VisitPurpose?.Name), visit.PurposeNotes);
 
         return new VisitMailContext(
             VisitorName: visit.Visitor?.FullName ?? "",
@@ -693,6 +835,26 @@ public class VisitorService : IVisitorService
         });
     }
 
+    /// <summary>Push to the host's devices off the request path; the push services can be slow to answer.</summary>
+    private void QueueHostPush(Guid tenantId, string? userId, string title, string body, string idempotencyKey, string link)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                scope.ServiceProvider.GetRequiredService<ITenantContext>().Set(tenantId);
+                var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+                await notifications.NotifyAsync("Push", userId, title, body, idempotencyKey, link: link);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Background push {Key} failed", idempotencyKey);
+            }
+        });
+    }
+
     public async Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes)
     {
         var query = _db.VisitorVisits.AsNoTracking();
@@ -759,6 +921,8 @@ public class VisitorService : IVisitorService
             VisitNumber = dto.VisitNumber,
             VisitorName = dto.VisitorName,
             CompanyName = dto.CompanyName,
+            Gender = dto.Gender,
+            Salutation = dto.Salutation,
             Phone = dto.Phone,
             Email = dto.Email,
             HostName = dto.HostName,
@@ -784,8 +948,13 @@ public class VisitorService : IVisitorService
             MomNotRequiredAt = dto.MomNotRequiredAt,
             MeetingHallName = dto.MeetingHallName,
             IsGroupEmployee = dto.IsGroupEmployee,
+            HostEmployeeId = visit.HostEmployeeId,
+            DepartmentId = visit.DepartmentId,
+            PurposeIds = visit.VisitPurposes.Select(p => p.VisitPurposeId).ToList(),
+            LocationIds = visit.VisitLocations.Select(l => l.LocationId).ToList(),
             Intercom = visit.HostIntercom,
             PurposeNotes = visit.PurposeNotes,
+            PurposeFields = PurposeFields.ToValueDtos(visit.PurposeFieldsJson),
             Notes = visit.Notes,
             MeetingMinutes = visit.MeetingMinutes,
             MomDecisions = visit.MomDecisions,
@@ -800,7 +969,7 @@ public class VisitorService : IVisitorService
             OtherLocationText = visit.OtherLocationText,
             IdTypeName = doc?.IdType.Name,
             IdNumberMasked = doc?.IdNumberMasked,
-            IdNumberFull = canViewFullId && doc is not null ? SensitiveDataHelper.Decrypt(doc.IdNumberEncrypted, encryptionKey) : null,
+            IdNumberFull = canViewFullId && doc is not null ? SensitiveDataHelper.TryDecrypt(doc.IdNumberEncrypted, encryptionKey) : null,
             IdVerificationStatus = doc?.VerificationStatus ?? IdVerificationStatus.NotProvided,
             CheckedInBy = visit.CheckedInByUser?.FullName,
             CheckedOutBy = visit.CheckedOutByUser?.FullName,
@@ -936,6 +1105,13 @@ public class VisitorService : IVisitorService
             await _db.Entry(visit).Reference(v => v.MeetingHall).LoadAsync();
 
         QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckIn);
+        if (!visit.IsGroupEmployee)
+        {
+            var hall = visit.MeetingHall is null ? "" : $" Meeting hall: {visit.MeetingHall.Name}.";
+            QueueHostPush(visit.TenantId, visit.HostEmployee?.UserId, "Your visitor has arrived",
+                $"{visit.Visitor?.FullName} checked in at {AppTime.ToLocal(occurredAt):HH:mm}.{hall}",
+                $"checkin-push:{visit.Id}", $"/visitors/{visit.Id}");
+        }
 
         var dto = await BuildPassDto(visit, pass, webRoot);
         dto.MeetingHallWarning = allocation.Warning;
@@ -989,6 +1165,10 @@ public class VisitorService : IVisitorService
         await _passNumbers.ReleaseHoldAsync(visit.PassNumber);
 
         QueueVisitMail(visit.TenantId, BuildVisitMailContext(visit, AppTime.ToLocal(occurredAt)), MailContentKind.CheckOut);
+        if (visit.MomEmailSentAt is null && !visit.MomNotRequired)
+            QueueHostPush(visit.TenantId, visit.HostEmployee?.UserId, "Add minutes of meeting",
+                $"{visit.Visitor.FullName} checked out at {AppTime.ToLocal(occurredAt):HH:mm}. Add the minutes of meeting.",
+                $"checkout-push:{visit.Id}", $"/visitors/{visit.Id}/minutes");
 
         var settings = await _settings.GetAsync();
         return MapListItem(visit, settings.MaxVisitDurationWarningMinutes);
@@ -1221,7 +1401,7 @@ public class VisitorService : IVisitorService
             DepartmentName = v.DepartmentName,
             ExpectedTime = v.ExpectedTime ?? v.VisitTime,
             PurposeIds = v.Purposes.Select(p => p.VisitPurposeId).ToList(),
-            Purposes = v.Purposes.Select(p => p.Name).ToList(),
+            Purposes = PurposeDisplay.Names(v.Purposes.Select(p => p.Name), v.PurposeNotes),
             PurposeNotes = v.PurposeNotes,
             NumberOfPersons = v.NumberOfPersons
         }).ToList();
@@ -1561,6 +1741,7 @@ public class VisitorService : IVisitorService
             v.VisitTime,
             v.Status,
             Purposes = v.VisitPurposes.Select(p => p.VisitPurpose.Name).ToList(),
+            v.PurposeNotes,
             Locations = v.VisitLocations.Select(l => l.Location.Name).ToList(),
             PhotoPath = v.Visitor.Photos
                 .OrderByDescending(p => p.IsPrimary)
@@ -1612,7 +1793,7 @@ public class VisitorService : IVisitorService
                 VisitTime = v.VisitTime,
                 Status = v.Status,
                 StatusLabel = v.Status.ToString(),
-                Purposes = v.Purposes,
+                Purposes = PurposeDisplay.Names(v.Purposes, v.PurposeNotes),
                 Locations = v.Locations,
                 PhotoUrl = string.IsNullOrWhiteSpace(v.PhotoPath) ? null : _media.ToPublicApiPath(Path.GetFileName(v.PhotoPath)),
                 CheckInAt = AsUtc(v.CheckInAt),
@@ -1771,7 +1952,7 @@ public class VisitorService : IVisitorService
             VisitTime = visit.VisitTime,
             Status = visit.Status,
             StatusLabel = visit.Status.ToString(),
-            Purposes = visit.VisitPurposes.Select(p => p.VisitPurpose.Name).ToList(),
+            Purposes = PurposeDisplay.Names(visit.VisitPurposes.Select(p => p.VisitPurpose.Name), visit.PurposeNotes),
             Locations = visit.VisitLocations.Select(l => l.Location.Name).ToList(),
             PhotoUrl = photo is null ? null : _media.ToPublicApiPath(Path.GetFileName(photo.FilePath)),
             CheckInAt = AsUtc(visit.CheckInAt),
@@ -1809,6 +1990,7 @@ public class VisitorService : IVisitorService
             HostName = item.HostName,
             DepartmentName = item.DepartmentName,
             Purposes = item.Purposes,
+            PurposeFields = PurposeFields.ToValueDtos(visit.PurposeFieldsJson),
             Locations = item.Locations,
             VisitNumber = item.VisitNumber,
             CheckInAt = item.CheckInAt,

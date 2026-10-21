@@ -2,6 +2,7 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import type { Role } from '../types/api'
 import { hasAnyRole } from '../lib/utils'
+import { grantedByMenu } from '../lib/roles'
 import { LoadingMask } from './LoadingMask'
 
 export function ProtectedRoute({ roles }: { roles?: Role[] }) {
@@ -15,7 +16,7 @@ export function ProtectedRoute({ roles }: { roles?: Role[] }) {
   if (user.mustChangePassword && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" replace />
   }
-  if (roles && !hasAnyRole(user.roles, roles)) {
+  if (roles && !hasAnyRole(user.roles, roles) && !grantedByMenu(user.roles, location.pathname, user.allowedMenuKeys)) {
     return <Navigate to="/unauthorized" replace />
   }
   return <Outlet />

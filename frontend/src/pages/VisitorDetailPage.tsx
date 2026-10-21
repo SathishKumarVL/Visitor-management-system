@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiErrorMessage, isConflictError, visitorsApi } from '../lib/api'
-import type { VisitorDetailDto } from '../types/api'
+import type { PurposeFieldValueDto, VisitorDetailDto } from '../types/api'
 import { Alert, Badge, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
@@ -10,7 +10,7 @@ import { useAuthStore } from '../store/authStore'
 import { hasAnyRole } from '../lib/utils'
 import { SecureImage } from '../components/SecureImage'
 import { FaceCameraPanel } from '../components/FaceCameraPanel'
-import { captureFaceJpeg } from '../lib/cameraCapture'
+import { captureFaceJpeg, openFaceCamera, toggleCameraFacing } from '../lib/cameraCapture'
 
 export function VisitorDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -67,10 +67,7 @@ export function VisitorDetailPage() {
   async function startCamera() {
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop())
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      })
+      const stream = await openFaceCamera()
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -182,7 +179,7 @@ export function VisitorDetailPage() {
   }
 
   if (loading) return <Spinner label="Loading visitor…" />
-  if (error && !visitor) return <Alert tone="error">{error}</Alert>
+  if (error && !visitor) return <Alert tone="error" persistent>{error}</Alert>
   if (!visitor) return null
 
   const status = String(visitor.statusLabel).toLowerCase()
@@ -225,7 +222,15 @@ export function VisitorDetailPage() {
             This visitor has no photo on file. Capture a single face before completing check-in.
           </p>
           <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-            <FaceCameraPanel videoRef={videoRef} photoUrl={photoBase64} alt={visitor.visitorName} />
+            <FaceCameraPanel
+              videoRef={videoRef}
+              photoUrl={photoBase64}
+              alt={visitor.visitorName}
+              onSwitchCamera={() => {
+                toggleCameraFacing()
+                void startCamera()
+              }}
+            />
             <div className="flex flex-wrap gap-2">
               {!photoBase64 ? (
                 <>
@@ -294,31 +299,27 @@ export function VisitorDetailPage() {
             <dl className="grid flex-1 gap-2 text-sm sm:grid-cols-2">
               <Item label="Visitor #" value={visitor.visitorNumber} />
               <Item label="Visit #" value={visitor.visitNumber} />
-              <Item label="Pass No." value={visitor.passCode || '—'} />
+              <Item label="Pass No." value={visitor.passCode} />
               <Item label="Visit date" value={formatDate(visitor.visitDate)} />
               <Item label="Person to meet" value={visitor.hostName} />
               <Item label="Department" value={visitor.departmentName} />
-              <Item label="Meeting hall" value={visitor.meetingHallName || '—'} />
-              <Item label="Phone" value={visitor.phone || '—'} />
-              <Item label="Email" value={visitor.email || '—'} />
-              <Item label="Intercom" value={visitor.intercom || '—'} />
-              <Item label="Check-in" value={formatDateTime(visitor.checkInAt)} />
-              <Item label="Check-out" value={formatDateTime(visitor.checkOutAt)} />
-              <Item label="Duration" value={formatDuration(visitor.durationMinutes)} />
-              <Item label="Purposes" value={visitor.purposes.join(', ') || '—'} />
-              {visitor.purposeNotes ? (
-                <Item label="Other purpose detail" value={visitor.purposeNotes} />
-              ) : null}
-              <Item label="Locations" value={visitor.locations.join(', ') || '—'} />
+              <Item label="Meeting hall" value={visitor.meetingHallName} />
+              <Item label="Phone" value={visitor.phone} />
+              <Item label="Email" value={visitor.email} />
+              <Item label="Intercom" value={visitor.intercom} />
+              <Item label="Check-in" value={visitor.checkInAt ? formatDateTime(visitor.checkInAt) : null} />
+              <Item label="Check-out" value={visitor.checkOutAt ? formatDateTime(visitor.checkOutAt) : null} />
+              <Item label="Duration" value={visitor.durationMinutes != null ? formatDuration(visitor.durationMinutes) : null} />
+              <Item label={visitor.purposes.length > 1 ? 'Purposes' : 'Purpose'} value={visitor.purposes.join(', ')} />
+              {(visitor.purposeFields ?? []).filter((f) => f.value?.trim()).map((f, i) => (
+                <PurposeFieldItem key={`${f.purpose}-${f.label}-${i}`} field={f} />
+              ))}
+              <Item label={visitor.locations.length > 1 ? 'Locations' : 'Location'} value={visitor.locations.join(', ')} />
               <Item
                 label="ID"
-                value={
-                  visitor.idNumberMasked
-                    ? [visitor.idTypeName, visitor.idNumberMasked].filter(Boolean).join(' ')
-                    : '—'
-                }
+                value={visitor.idNumberMasked ? [visitor.idTypeName, visitor.idNumberMasked].filter(Boolean).join(' ') : null}
               />
-              <Item label="Notes" value={visitor.notes || '—'} />
+              <Item label="Notes" value={visitor.notes} />
             </dl>
             {visitor.photoUrl ? (
               <SecureImage
@@ -360,7 +361,7 @@ export function VisitorDetailPage() {
             </div>
             {visitor.momNotRequired && !visitor.hasMeetingMinutes ? (
               <div className="mb-3">
-                <Alert tone="info">
+                <Alert tone="info" persistent>
                   Marked as not required{visitor.momNotRequiredBy ? ` by ${visitor.momNotRequiredBy}` : ''}
                   {visitor.momNotRequiredAt ? ` on ${formatDateTime(visitor.momNotRequiredAt)}` : ''}. No MOM email will be
                   sent.
@@ -446,11 +447,41 @@ export function VisitorDetailPage() {
   )
 }
 
-function Item({ label, value }: { label: string; value: string }) {
+/** Fields the visit has no value for are left out rather than shown as a dash. */
+function Item({ label, value }: { label: string; value: string | null | undefined }) {
+  const text = value?.trim()
+  if (!text || text === '—') return null
   return (
     <div>
       <dt className="text-gray-500">{label}</dt>
       <dd className="font-medium text-gray-900">{value}</dd>
+    </div>
+  )
+}
+
+/** A lookup answer shows where it came from and whether the visitor matched the record. */
+function PurposeFieldItem({ field }: { field: PurposeFieldValueDto }) {
+  const what = field.matchAgainst === 'mobile' ? 'mobile' : 'email'
+  return (
+    <div>
+      <dt className="text-gray-500">{field.label}</dt>
+      <dd className="font-medium text-gray-900">{field.value}</dd>
+      {field.verified === true ? (
+        <dd className="text-xs text-emerald-700">
+          Verified from {field.source || 'lookup'}
+          {field.recordId ? ` (ID ${field.recordId})` : ''}
+        </dd>
+      ) : field.verified === false ? (
+        <dd className="text-xs text-amber-700">Typed by hand, not verified</dd>
+      ) : null}
+      {field.details?.length ? (
+        <dd className="text-xs text-gray-600">{field.details.map((d) => `${d.label}: ${d.value}`).join(' · ')}</dd>
+      ) : null}
+      {field.matched === true ? (
+        <dd className="text-xs text-emerald-700">Visitor&apos;s {what} is on the record</dd>
+      ) : field.matched === false ? (
+        <dd className="text-xs font-medium text-danger">Visitor&apos;s {what} was not on the record</dd>
+      ) : null}
     </div>
   )
 }
