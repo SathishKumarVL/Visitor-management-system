@@ -656,12 +656,16 @@ public class NotificationItemDto
     /// <summary>UTC moment: check-out for pending minutes, request time for approvals.</summary>
     public DateTime? At { get; set; }
     public string Link { get; set; } = string.Empty;
+    /// <summary>Arrived since the user last opened the bell.</summary>
+    public bool IsNew { get; set; }
 }
 
 /// <summary>What the header bell shows for the signed-in user.</summary>
 public class NotificationSummaryDto
 {
     public int Total { get; set; }
+    /// <summary>The badge: items that arrived since the user last opened the bell.</summary>
+    public int Unseen { get; set; }
     /// <summary>False when the list is every expected visitor today (desk roles), not only the user's own.</summary>
     public bool AppointmentsAreMine { get; set; }
     public int AppointmentsTodayCount { get; set; }

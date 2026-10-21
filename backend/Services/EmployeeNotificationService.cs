@@ -16,6 +16,9 @@ public interface IEmployeeNotificationService
 {
     Task<NotificationSummaryDto> GetSummaryAsync(ClaimsPrincipal user);
 
+    /// <summary>The user opened the bell: everything listed so far stops counting towards the badge.</summary>
+    Task MarkSeenAsync(ClaimsPrincipal user);
+
     /// <summary>
     /// Emails / pushes the host of each visit that checked out <c>Reminders:MomAfterHours</c> ago without minutes.
     /// Only check-outs inside the look-back window are considered, so an old backlog is left to the daily summary.
@@ -72,12 +75,20 @@ public sealed class EmployeeNotificationService : IEmployeeNotificationService
 
         var today = AppTime.Today;
         var dto = new NotificationSummaryDto { AppointmentsAreMine = !isDesk };
+        var seenAt = string.IsNullOrEmpty(userId)
+            ? null
+            : await _db.Users.AsNoTracking().Where(u => u.Id == userId).Select(u => u.NotificationsSeenAt).FirstOrDefaultAsync();
+        // A booking made earlier counts as new on its day until the bell is opened that day.
+        var seenToday = seenAt is DateTime s && s >= AppTime.StartOfDayUtc(today);
 
         // The desk prepares for every visitor expected today; everyone else only for their own.
         var appointments = _db.VisitorVisits.AsNoTracking()
             .Where(v => v.Status == VisitStatus.Expected && v.ExpectedDate == today);
         if (!isDesk) appointments = appointments.Where(v => myEmployeeIds.Contains(v.HostEmployeeId));
         dto.AppointmentsTodayCount = await appointments.CountAsync();
+        var appointmentsUnseen = seenToday
+            ? await appointments.CountAsync(v => v.CreatedAt > seenAt)
+            : dto.AppointmentsTodayCount;
         var appointmentRows = await appointments
             .OrderBy(v => v.ExpectedTime)
             .Take(ListSize)
@@ -87,6 +98,7 @@ public sealed class EmployeeNotificationService : IEmployeeNotificationService
                 v.Visitor.FullName,
                 v.Visitor.CompanyName,
                 v.ExpectedTime,
+                v.CreatedAt,
                 HostName = v.HostEmployee.FullName
             })
             .ToListAsync();
@@ -97,13 +109,15 @@ public sealed class EmployeeNotificationService : IEmployeeNotificationService
             Title = v.FullName,
             Subtitle = JoinParts(v.CompanyName, isDesk ? v.HostName : null),
             Time = v.ExpectedTime?.ToString("HH:mm"),
-            Link = $"/visitors/expected?date={dateParam}"
+            Link = $"/visitors/expected?date={dateParam}&visit={v.Id}",
+            IsNew = !seenToday || v.CreatedAt > seenAt
         }).ToList();
 
         var mom = _db.VisitorVisits.AsNoTracking()
             .Where(v => myEmployeeIds.Contains(v.HostEmployeeId)
                 && v.Status == VisitStatus.CheckedOut && v.MomEmailSentAt == null && !v.MomNotRequired);
         dto.MomPendingCount = await mom.CountAsync();
+        var momUnseen = seenAt is null ? dto.MomPendingCount : await mom.CountAsync(v => v.CheckOutAt > seenAt);
         var momRows = await mom
             .OrderByDescending(v => v.CheckOutAt)
             .Take(ListSize)
@@ -115,15 +129,18 @@ public sealed class EmployeeNotificationService : IEmployeeNotificationService
             Title = v.FullName,
             Subtitle = v.CompanyName,
             At = AsUtc(v.CheckOutAt),
-            Link = $"/visitors/{v.Id}/minutes"
+            Link = $"/visitors/{v.Id}/minutes",
+            IsNew = seenAt is null || v.CheckOutAt > seenAt
         }).ToList();
 
+        var approvalsUnseen = 0;
         // Same audience as the Approvals API: admins see all, employees their own.
         if (isAdmin || user.IsInRole(AppRoles.Host))
         {
             var approvals = _db.VisitorVisits.AsNoTracking().Where(v => v.Status == VisitStatus.PendingApproval);
             if (!isAdmin) approvals = approvals.Where(v => myEmployeeIds.Contains(v.HostEmployeeId));
             dto.ApprovalsCount = await approvals.CountAsync();
+            approvalsUnseen = seenAt is null ? dto.ApprovalsCount : await approvals.CountAsync(v => v.CreatedAt > seenAt);
             var approvalRows = await approvals
                 .OrderByDescending(v => v.CreatedAt)
                 .Take(ListSize)
@@ -135,12 +152,22 @@ public sealed class EmployeeNotificationService : IEmployeeNotificationService
                 Title = v.FullName,
                 Subtitle = JoinParts(v.CompanyName, isAdmin ? v.HostName : null),
                 At = AsUtc(v.CreatedAt),
-                Link = $"/visitors/{v.Id}"
+                Link = $"/visitors/{v.Id}",
+                IsNew = seenAt is null || v.CreatedAt > seenAt
             }).ToList();
         }
 
         dto.Total = dto.AppointmentsTodayCount + dto.MomPendingCount + dto.ApprovalsCount;
+        dto.Unseen = appointmentsUnseen + momUnseen + approvalsUnseen;
         return dto;
+    }
+
+    public async Task MarkSeenAsync(ClaimsPrincipal user)
+    {
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId)) return;
+        await _db.Users.Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(set => set.SetProperty(u => u.NotificationsSeenAt, DateTime.UtcNow));
     }
 
     public async Task<int> SendMomRemindersAsync(DateTime utcNow, CancellationToken ct = default)

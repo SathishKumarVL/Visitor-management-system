@@ -602,6 +602,44 @@ public class LocationScopingTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
+    public async Task Booking_Without_A_Location_Takes_The_Hosts_Location()
+    {
+        var fixture = await EnsureFixtureAsync();
+        var (deptId, southEmployeeId) = await EnsureScopedEmployeesAsync(fixture);
+        Guid purposeId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            purposeId = await db.VisitPurposes.IgnoreQueryFilters()
+                .Where(p => p.IsActive && p.TenantId == fixture.TenantId)
+                .OrderBy(p => p.SortOrder).Select(p => p.Id).FirstAsync();
+        }
+
+        var date = Tiaano.Vms.Api.Services.AppTime.Today.AddDays(2);
+        var marker = $"Roaming Booked {Guid.NewGuid():N}"[..28];
+        var roaming = await LoginAsync(RoamingUser);
+        var response = await roaming.PostAsJsonAsync("/api/visitors/expected", new
+        {
+            visitorName = marker,
+            gender = 1,
+            companyName = "Host Location Co",
+            phone = $"96{Random.Shared.Next(10000000, 99999999)}",
+            expectedDate = date.ToString("yyyy-MM-dd"),
+            expectedTime = "11:00:00",
+            departmentId = deptId,
+            hostEmployeeId = southEmployeeId,
+            purposeIds = new[] { purposeId },
+            locationIds = Array.Empty<Guid>()
+        });
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+
+        var south = await BodyAsync(await (await LoginAsync(SouthUser)).GetAsync($"/api/visitors/expected?date={date:yyyy-MM-dd}"));
+        Assert.Contains(marker, south);
+        var north = await BodyAsync(await (await LoginAsync(NorthUser)).GetAsync($"/api/visitors/expected?date={date:yyyy-MM-dd}"));
+        Assert.DoesNotContain(marker, north);
+    }
+
+    [Fact]
     public async Task Location_Write_Endpoints_Reject_Reception()
     {
         await EnsureFixtureAsync();

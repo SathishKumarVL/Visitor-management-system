@@ -639,10 +639,14 @@ export interface NotificationItemDto {
   /** UTC: check-out for pending minutes, request time for approvals. */
   at?: string | null
   link: string
+  /** Arrived since the user last opened the bell. */
+  isNew?: boolean
 }
 
 export interface NotificationSummaryDto {
   total: number
+  /** The badge: items that arrived since the user last opened the bell. */
+  unseen: number
   /** False for the desk, whose list is every visitor expected today. */
   appointmentsAreMine: boolean
   appointmentsTodayCount: number

@@ -120,6 +120,39 @@ public class EmployeeNotificationTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
+    public async Task Opening_The_Bell_Clears_The_Badge_Until_Something_New_Arrives()
+    {
+        var tag = Guid.NewGuid().ToString("N")[..6];
+        var before = await SeedVisitAsync($"Seen {tag}", VisitStatus.PendingApproval);
+        Guid? after = null;
+        try
+        {
+            var client = await LoginAsync("host");
+            static bool IsNew(JsonElement data, Guid id) => data.GetProperty("approvals").EnumerateArray()
+                .First(i => i.GetProperty("visitId").GetGuid() == id).GetProperty("isNew").GetBoolean();
+
+            var first = await GetDataAsync(client, "/api/notifications/summary");
+            Assert.True(first.GetProperty("unseen").GetInt32() >= 1);
+            Assert.True(IsNew(first, before));
+
+            (await client.PostAsync("/api/notifications/seen", null)).EnsureSuccessStatusCode();
+            var seen = await GetDataAsync(client, "/api/notifications/summary");
+            Assert.False(IsNew(seen, before));
+            Assert.Contains(Ids(seen, "approvals"), id => id == before);
+            Assert.Equal(first.GetProperty("total").GetInt32(), seen.GetProperty("total").GetInt32());
+
+            after = await SeedVisitAsync($"Arrived {tag}", VisitStatus.PendingApproval);
+            var later = await GetDataAsync(client, "/api/notifications/summary");
+            Assert.True(IsNew(later, after.Value));
+            Assert.True(later.GetProperty("unseen").GetInt32() >= 1);
+        }
+        finally
+        {
+            await CleanupAsync(after is Guid a ? [before, a] : [before], []);
+        }
+    }
+
+    [Fact]
     public async Task Push_Subscription_Can_Be_Turned_On_And_Off()
     {
         var client = await LoginAsync("host");

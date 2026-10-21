@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, visitorsApi } from '../lib/api'
 import type {
   EmployeeDto,
@@ -65,6 +65,7 @@ export function ExpectedVisitorsPage() {
   })
   const [savedVisitId, setSavedVisitId] = useState<string | null>(null)
   const [items, setItems] = useState<VisitorListItemDto[]>([])
+  const [loadedDate, setLoadedDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -79,6 +80,25 @@ export function ExpectedVisitorsPage() {
   const [editing, setEditing] = useState<{ visitId: string; visitNumber: string; date: string; time: string } | null>(null)
 
   const { pageItems, pagination } = usePagination(items, 12, date)
+
+  // Notification links carry ?date=…&visit=…; they can arrive while this page is already open.
+  const focusVisitId = searchParams.get('visit')
+  const urlDate = searchParams.get('date')
+  useEffect(() => {
+    if (urlDate && /^\d{4}-\d{2}-\d{2}$/.test(urlDate)) setDate(urlDate)
+  }, [urlDate])
+
+  const focusIndex = focusVisitId ? items.findIndex((v) => v.visitId === focusVisitId) : -1
+  const focusPage = focusIndex >= 0 ? Math.floor(focusIndex / pagination.pageSize) + 1 : null
+  const onPageChange = pagination.onPageChange
+  useEffect(() => {
+    if (focusPage) onPageChange(focusPage)
+  }, [focusPage, onPageChange])
+
+  const focusOnPage = !!focusVisitId && pageItems.some((v) => v.visitId === focusVisitId)
+  useEffect(() => {
+    if (focusOnPage) document.getElementById(`booking-${focusVisitId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focusOnPage, focusVisitId])
 
   const lookupPhone = sanitizePhoneDigits(form.phone)
   const duplicateBooking = phoneLookup?.openBookings.find(
@@ -166,6 +186,7 @@ export function ExpectedVisitorsPage() {
     setError(null)
     try {
       setItems(await visitorsApi.expected(date))
+      setLoadedDate(date)
     } catch (e) {
       setError(apiErrorMessage(e))
     } finally {
@@ -355,6 +376,7 @@ export function ExpectedVisitorsPage() {
                   (prev) => {
                     const next = new URLSearchParams(prev)
                     next.set('date', e.target.value)
+                    next.delete('visit')
                     return next
                   },
                   { replace: true },
@@ -383,6 +405,16 @@ export function ExpectedVisitorsPage() {
 
       {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
       {message ? <div className="mb-4"><Alert tone="success">{message}</Alert></div> : null}
+      {focusVisitId && !loading && focusIndex < 0 && loadedDate === date && urlDate === date ? (
+        <div className="mb-4">
+          <Alert tone="info" persistent>
+            This appointment is no longer waiting: the visitor may have already arrived, or it was cancelled.{' '}
+            <Link to={`/visitors/${focusVisitId}`} className="font-medium text-primary underline">
+              Open the visit
+            </Link>
+          </Alert>
+        </div>
+      ) : null}
 
       {showForm ? (
         <Panel className="mb-4">
@@ -625,9 +657,10 @@ export function ExpectedVisitorsPage() {
           return (
             <div
               key={v.visitId}
+              id={`booking-${v.visitId}`}
               className={cn(
                 'flex flex-col rounded-lg border border-gray-200 bg-white shadow-sm transition hover:border-steel hover:shadow-md',
-                v.visitId === savedVisitId && 'border-primary ring-2 ring-primary/40',
+                (v.visitId === savedVisitId || v.visitId === focusVisitId) && 'border-primary ring-2 ring-primary/40',
               )}
             >
               <button

@@ -92,7 +92,7 @@ public sealed class AppointmentReminderWorker : BackgroundService
                     // Push goes to the host's login; visitors have none.
                     if (!string.IsNullOrWhiteSpace(visit.HostEmployee?.UserId))
                         await notifications.NotifyAsync("Push", visit.HostEmployee.UserId, subject, body, pushKey,
-                            link: $"/visitors/expected?date={visit.ExpectedDate:yyyy-MM-dd}");
+                            link: $"/visitors/expected?date={visit.ExpectedDate:yyyy-MM-dd}&visit={visit.Id}");
                 }
                 catch (Exception ex)
                 {

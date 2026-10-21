@@ -799,8 +799,10 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            var visit = await db.VisitorVisits.IgnoreQueryFilters().FirstAsync(v => v.Id == visitId);
+            var visit = await db.VisitorVisits.IgnoreQueryFilters().Include(v => v.Passes).FirstAsync(v => v.Id == visitId);
             visit.Status = VisitStatus.Cancelled;
+            // A cancelled visit frees its pass number, so its badge must not stay active.
+            foreach (var pass in visit.Passes) pass.IsActive = false;
             await db.SaveChangesAsync();
         }
 

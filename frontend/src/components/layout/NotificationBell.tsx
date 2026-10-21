@@ -28,6 +28,8 @@ export function NotificationBell() {
   const [pushState, setPushState] = useState<PushState>('unsupported')
   const [pushBusy, setPushBusy] = useState(false)
   const [pushMessage, setPushMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
+  // Items that were new when the panel opened keep their dot while it stays open.
+  const [freshKeys, setFreshKeys] = useState<ReadonlySet<string>>(new Set())
   const panelRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
@@ -37,6 +39,17 @@ export function NotificationBell() {
       return next
     } catch {
       return null
+    }
+  }, [])
+
+  const markSeen = useCallback(async (shown: NotificationSummaryDto) => {
+    setFreshKeys(freshKeysOf(shown))
+    if (shown.unseen === 0) return
+    try {
+      await notificationsApi.markSeen()
+      setSummary((s) => (s ? { ...s, unseen: 0 } : s))
+    } catch {
+      // The badge simply stays until the next successful open.
     }
   }, [])
 
@@ -52,6 +65,7 @@ export function NotificationBell() {
       sessionStorage.setItem(key, '1')
       setWelcome(true)
       setOpen(true)
+      void markSeen(first)
     })
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load()
@@ -65,7 +79,7 @@ export function NotificationBell() {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [userId, load])
+  }, [userId, load, markSeen])
 
   useEffect(() => {
     if (!userId) return
@@ -80,12 +94,12 @@ export function NotificationBell() {
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type === 'open-url' && typeof event.data.url === 'string') {
         navigate(event.data.url)
-        void load()
+        void load().then((next) => next && markSeen(next))
       }
     }
     navigator.serviceWorker.addEventListener('message', onMessage)
     return () => navigator.serviceWorker.removeEventListener('message', onMessage)
-  }, [navigate, load])
+  }, [navigate, load, markSeen])
 
   useEffect(() => {
     if (!open) return
@@ -129,6 +143,7 @@ export function NotificationBell() {
   }
 
   const total = summary?.total ?? 0
+  const unseen = summary?.unseen ?? 0
 
   return (
     <div className="relative" ref={panelRef}>
@@ -137,17 +152,17 @@ export function NotificationBell() {
         onClick={() => {
           if (open) return close()
           setOpen(true)
-          void load()
+          void load().then((next) => next && markSeen(next))
         }}
         className="relative inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-border bg-white text-ink hover:bg-aqua-light"
-        aria-label={total > 0 ? `${t('notifications.title')} (${total})` : t('notifications.title')}
+        aria-label={unseen > 0 ? `${t('notifications.title')} (${unseen})` : t('notifications.title')}
         aria-expanded={open}
         aria-haspopup="dialog"
       >
         <BellIcon />
-        {total > 0 ? (
+        {unseen > 0 ? (
           <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[11px] font-semibold leading-5 text-white">
-            {total > 99 ? '99+' : total}
+            {unseen > 99 ? '99+' : unseen}
           </span>
         ) : null}
       </button>
@@ -185,7 +200,8 @@ export function NotificationBell() {
                 title={summary.appointmentsAreMine ? t('notifications.myAppointments') : t('notifications.expectedToday')}
                 count={summary.appointmentsTodayCount}
                 items={summary.appointmentsToday}
-                viewAll={summary.appointmentsToday[0]?.link ?? '/visitors/expected'}
+                isFresh={(i) => freshKeys.has(`appointment:${i.visitId}`)}
+                viewAll="/visitors/expected"
                 describe={(i) => i.time ?? ''}
                 onOpen={go}
                 t={t}
@@ -194,6 +210,7 @@ export function NotificationBell() {
                 title={t('notifications.momPending')}
                 count={summary.momPendingCount}
                 items={summary.momPending}
+                isFresh={(i) => freshKeys.has(`mom:${i.visitId}`)}
                 viewAll="/visitors/mom-pending"
                 describe={(i) => `${t('notifications.checkedOut')} ${formatDateTime(i.at)}`}
                 onOpen={go}
@@ -203,6 +220,7 @@ export function NotificationBell() {
                 title={t('notifications.approvals')}
                 count={summary.approvalsCount}
                 items={summary.approvals}
+                isFresh={(i) => freshKeys.has(`approval:${i.visitId}`)}
                 viewAll="/visitors?status=1"
                 describe={(i) => formatDateTime(i.at)}
                 onOpen={go}
@@ -232,10 +250,19 @@ export function NotificationBell() {
   )
 }
 
+function freshKeysOf(summary: NotificationSummaryDto): ReadonlySet<string> {
+  const keys = new Set<string>()
+  for (const i of summary.appointmentsToday) if (i.isNew) keys.add(`appointment:${i.visitId}`)
+  for (const i of summary.momPending) if (i.isNew) keys.add(`mom:${i.visitId}`)
+  for (const i of summary.approvals) if (i.isNew) keys.add(`approval:${i.visitId}`)
+  return keys
+}
+
 function Section({
   title,
   count,
   items,
+  isFresh,
   viewAll,
   describe,
   onOpen,
@@ -244,6 +271,7 @@ function Section({
   title: string
   count: number
   items: NotificationItemDto[]
+  isFresh: (item: NotificationItemDto) => boolean
   viewAll: string
   describe: (item: NotificationItemDto) => string
   onOpen: (link: string) => void
@@ -271,7 +299,12 @@ function Section({
               className="flex w-full items-start justify-between gap-3 rounded-xl px-2 py-1.5 text-left hover:bg-aqua-light/60"
             >
               <span className="min-w-0">
-                <span className="block truncate text-sm font-medium text-ink">{item.title}</span>
+                <span className="flex items-center gap-1.5 truncate text-sm font-medium text-ink">
+                  {isFresh(item) ? (
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-danger" aria-label={t('notifications.new', 'New')} />
+                  ) : null}
+                  <span className="truncate">{item.title}</span>
+                </span>
                 {item.subtitle ? <span className="block truncate text-xs text-ink-muted">{item.subtitle}</span> : null}
               </span>
               <span className="shrink-0 text-xs text-ink-muted">{describe(item)}</span>

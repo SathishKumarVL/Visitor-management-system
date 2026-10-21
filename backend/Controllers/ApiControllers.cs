@@ -1252,6 +1252,13 @@ public class NotificationsController : ControllerBase
     public async Task<ActionResult<ApiResponse<NotificationSummaryDto>>> Summary() =>
         Ok(new ApiResponse<NotificationSummaryDto>(true, await _employeeNotifications.GetSummaryAsync(User)));
 
+    [HttpPost("seen")]
+    public async Task<ActionResult<ApiResponse<object>>> MarkSeen()
+    {
+        await _employeeNotifications.MarkSeenAsync(User);
+        return Ok(new ApiResponse<object>(true, null));
+    }
+
     [HttpGet("push")]
     public async Task<ActionResult<ApiResponse<WebPushStatusDto>>> PushStatus()
     {

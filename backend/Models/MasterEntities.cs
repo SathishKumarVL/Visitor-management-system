@@ -28,6 +28,9 @@ public class ApplicationUser : IdentityUser
     [MaxLength(1000)]
     public string? AllowedMenuKeysJson { get; set; }
 
+    /// <summary>UTC time the user last opened the notification bell; the badge counts only items after it.</summary>
+    public DateTime? NotificationsSeenAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public string? CreatedBy { get; set; }

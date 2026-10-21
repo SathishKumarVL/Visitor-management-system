@@ -172,6 +172,7 @@ public class VisitorService : IVisitorService
         if (_tenant.LocationId is Guid boundLocation && boundLocation != Guid.Empty
             && !locationIds.Contains(boundLocation))
             locationIds.Add(boundLocation);
+        await AddHostLocationIfNoneAsync(locationIds, host);
         var locations = locationIds.Count == 0
             ? []
             : await _db.Locations.Where(l => locationIds.Contains(l.Id) && l.IsActive).ToListAsync();
@@ -453,6 +454,7 @@ public class VisitorService : IVisitorService
 
         var settings = await _settings.GetAsync();
         var host = await ResolveHostAsync(request.DepartmentId, request.HostEmployeeId, request.HostName, user.Identity?.Name);
+        await AddHostLocationIfNoneAsync(locationIds, host);
         var phone = NormalizeTenDigitPhone(request.Phone!);
 
         var duplicate = await _db.VisitorVisits.AsNoTracking()
@@ -620,6 +622,8 @@ public class VisitorService : IVisitorService
         var locationIds = request.LocationIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
         if (_tenant.LocationId is Guid boundLocation && boundLocation != Guid.Empty && !locationIds.Contains(boundLocation))
             locationIds.Add(boundLocation);
+        if (visit.VisitLocations.Count == 0)
+            await AddHostLocationIfNoneAsync(locationIds, host);
         if (locationIds.Count > 0)
         {
             foreach (var stale in visit.VisitLocations.Where(l => !locationIds.Contains(l.LocationId)).ToList())
@@ -717,16 +721,25 @@ public class VisitorService : IVisitorService
             }
         }
 
-        await _visitMail.SendAppointmentAsync(ctx with { AppointmentSendKey = sendKey });
-        if (!string.IsNullOrWhiteSpace(host.UserId))
-        {
-            var company = string.IsNullOrWhiteSpace(visitor.CompanyName) ? "" : $" ({visitor.CompanyName})";
-            await _notifications.NotifyAsync("Push", host.UserId,
-                sendKey.Length == 0 ? "Appointment booked" : "Appointment updated",
-                $"{visitor.FullName}{company} on {whenLocal:dd MMM yyyy, HH:mm}",
-                $"appointment-push:{visit.Id}{sendKey}",
-                link: $"/visitors/expected?date={whenLocal:yyyy-MM-dd}");
-        }
+        // Sent off the request path: a slow or failing mail server must not hold the booking form open.
+        QueueVisitMail(visit.TenantId, ctx with { AppointmentSendKey = sendKey }, MailContentKind.Appointment);
+        var company = string.IsNullOrWhiteSpace(visitor.CompanyName) ? "" : $" ({visitor.CompanyName})";
+        QueueHostPush(visit.TenantId, host.UserId,
+            sendKey.Length == 0 ? "Appointment booked" : "Appointment updated",
+            $"{visitor.FullName}{company} on {whenLocal:dd MMM yyyy, HH:mm}",
+            $"appointment-push:{visit.Id}{sendKey}",
+            $"/visitors/expected?date={whenLocal:yyyy-MM-dd}&visit={visit.Id}");
+    }
+
+    /// <summary>
+    /// A visit with no location is hidden from every location-bound login, including the host's own, so a
+    /// booking or walk-in made without one takes the host's location.
+    /// </summary>
+    private async Task AddHostLocationIfNoneAsync(List<Guid> locationIds, Employee host)
+    {
+        if (locationIds.Count > 0 || host.LocationId is not Guid hostLocation || hostLocation == Guid.Empty) return;
+        if (await _db.Locations.AnyAsync(l => l.Id == hostLocation && l.IsActive))
+            locationIds.Add(hostLocation);
     }
 
     private VisitMailContext BuildVisitMailContext(VisitorVisit visit, DateTime momentLocal)

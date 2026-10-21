@@ -388,6 +388,7 @@ export const dashboardApi = {
 
 export const notificationsApi = {
   summary: () => unwrap(api.get<ApiResponse<NotificationSummaryDto>>('/notifications/summary')),
+  markSeen: () => unwrapVoid(api.post<ApiResponse<object>>('/notifications/seen')),
   pushStatus: () => unwrap(api.get<ApiResponse<WebPushStatusDto>>('/notifications/push')),
   subscribe: (subscription: { endpoint: string; p256dh: string; auth: string }) =>
     unwrapVoid(api.post<ApiResponse<object>>('/notifications/push/subscribe', subscription)),
