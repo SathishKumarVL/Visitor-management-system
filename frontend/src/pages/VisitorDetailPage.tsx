@@ -31,13 +31,6 @@ export function VisitorDetailPage() {
   const [faceBusy, setFaceBusy] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const noticeRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!message && !error) return
-    noticeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [message, error])
-
   async function load() {
     if (!id) return
     setLoading(true)
@@ -211,10 +204,8 @@ export function VisitorDetailPage() {
         }
       />
 
-      <div ref={noticeRef} className="scroll-mt-24">
-        {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
-        {message ? <div className="mb-4"><Alert tone="success">{message}</Alert></div> : null}
-      </div>
+      {error ? <Alert tone="error">{error}</Alert> : null}
+      {message ? <Alert tone="success">{message}</Alert> : null}
       {checkInOpen ? (
         <Panel className="mb-4">
           <h2 className="mb-2 font-semibold text-steel">Capture face to check in</h2>
@@ -481,6 +472,9 @@ function PurposeFieldItem({ field }: { field: PurposeFieldValueDto }) {
         <dd className="text-xs text-emerald-700">Visitor&apos;s {what} is on the record</dd>
       ) : field.matched === false ? (
         <dd className="text-xs font-medium text-danger">Visitor&apos;s {what} was not on the record</dd>
+      ) : null}
+      {field.newPerson ? (
+        <dd className="text-xs font-medium text-amber-700">First visit by this person for {field.value}</dd>
       ) : null}
     </div>
   )

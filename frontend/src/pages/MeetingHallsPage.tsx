@@ -6,6 +6,13 @@ import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 import { ExcelImportButtons } from '../components/ExcelImportButtons'
+import {
+  ClearAllMasterButton,
+  DeleteSelectedMasterButton,
+  SelectPageHeader,
+  SelectRowCell,
+} from '../components/ClearAllMasterButton'
+import { useRowSelection } from '../lib/useRowSelection'
 import { Modal } from '../components/ui/Modal'
 import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
@@ -51,6 +58,7 @@ export function MeetingHallsPage() {
     active: (h) => (h.isActive ? 0 : 1),
   })
   const { pageItems, pagination } = usePagination(sorted, 20, `${effectiveLocationId}|${sort?.key}|${sort?.dir}`)
+  const selection = useRowSelection(items.map((h) => h.id))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -179,6 +187,8 @@ export function MeetingHallsPage() {
             </TextSelect>
             <ExcelImportButtons kind="meeting-halls" label="Meeting Halls" onImported={load} />
             <Button variant="amber" onClick={startCreate}>Add new</Button>
+            <DeleteSelectedMasterButton type="meeting-halls" label="Meeting Halls" ids={selection.ids} onDeleted={load} />
+            <ClearAllMasterButton type="meeting-halls" label="Meeting Halls" onCleared={load} />
           </div>
         }
       />
@@ -191,6 +201,7 @@ export function MeetingHallsPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="bg-gray-50 text-gray-500">
               <tr>
+                {isSuperAdmin ? <SelectPageHeader selection={selection} pageIds={pageItems.map((h) => h.id)} /> : null}
                 <SortHeader sortKey="code" sort={sort} onSort={onSort}>Code</SortHeader>
                 <SortHeader sortKey="name" sort={sort} onSort={onSort}>Name</SortHeader>
                 <SortHeader sortKey="capacity" sort={sort} onSort={onSort}>Seating capacity</SortHeader>
@@ -204,6 +215,7 @@ export function MeetingHallsPage() {
             <tbody>
               {pageItems.map((item) => (
                 <tr key={item.id} className="border-t border-gray-100">
+                  {isSuperAdmin ? <SelectRowCell selection={selection} id={item.id} label={item.name} /> : null}
                   <td className="px-4 py-3 font-medium">{item.code}</td>
                   <td className="px-4 py-3">{item.name}</td>
                   <td className="px-4 py-3">{item.seatingCapacity}</td>

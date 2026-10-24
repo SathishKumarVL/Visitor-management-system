@@ -356,6 +356,20 @@ public class VisitorsController : ControllerBase
             match is null ? "No visitor found for this mobile number." : "Existing visitor found."));
     }
 
+    /// <summary>A returning visitor's recent purpose answers (e.g. each student a parent visited), newest first.</summary>
+    [HttpGet("previous-purpose-answers")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<PreviousPurposeAnswersDto>>>> PreviousPurposeAnswers([FromQuery] Guid visitorId) =>
+        Ok(new ApiResponse<IReadOnlyList<PreviousPurposeAnswersDto>>(true, await _visitors.GetPreviousPurposeAnswersAsync(visitorId)));
+
+    /// <summary>People who came for a picked lookup record (e.g. a student), and whether this visitor is new to it.</summary>
+    [HttpGet("record-visitors")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<LookupRecordVisitorsDto>>> RecordVisitors(
+        [FromQuery] Guid sourceId, [FromQuery] string? recordId, [FromQuery] Guid? visitorId) =>
+        Ok(new ApiResponse<LookupRecordVisitorsDto>(true,
+            await _visitors.GetLookupRecordVisitorsAsync(sourceId, recordId ?? string.Empty, visitorId)));
+
     /// <summary>Today's bookings for a walk-up visitor, by mobile number and/or a face-matched visitor id.</summary>
     [HttpGet("expected/match")]
     [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
@@ -624,13 +638,42 @@ public class MastersController : ControllerBase
     private readonly IMasterDataService _masters;
     private readonly IFeedbackService _feedback;
     private readonly IMasterImportService _import;
+    private readonly IMasterClearService _clear;
 
-    public MastersController(IMasterDataService masters, IFeedbackService feedback, IMasterImportService import)
+    public MastersController(IMasterDataService masters, IFeedbackService feedback, IMasterImportService import, IMasterClearService clear)
     {
         _masters = masters;
         _feedback = feedback;
         _import = import;
+        _clear = clear;
     }
+
+    /// <summary>What clearing this whole master would delete, including the visits and logins that depend on it.</summary>
+    [HttpGet("{type}/clear-preview")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
+    public async Task<ActionResult<ApiResponse<MasterClearSummaryDto>>> ClearPreview(string type) =>
+        Ok(new ApiResponse<MasterClearSummaryDto>(true, await _clear.PreviewAsync(type, CallerUserId)));
+
+    /// <summary>What deleting the selected records would delete, including the visits and logins that depend on them.</summary>
+    [HttpPost("{type}/clear-preview")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
+    public async Task<ActionResult<ApiResponse<MasterClearSummaryDto>>> ClearSelectedPreview(
+        string type, [FromBody] MasterClearPreviewRequest request) =>
+        Ok(new ApiResponse<MasterClearSummaryDto>(true, await _clear.PreviewAsync(type, CallerUserId, request.Ids)));
+
+    /// <summary>Deletes every record of this master (or only the selected ones) and everything that depends on it.</summary>
+    [HttpPost("{type}/clear")]
+    [Authorize(Roles = AppRoles.SuperAdmin)]
+    public async Task<ActionResult<ApiResponse<MasterClearSummaryDto>>> Clear(string type, [FromBody] MasterClearRequest request)
+    {
+        if (!string.Equals(request.Confirm?.Trim(), MasterClearRequest.Phrase, StringComparison.Ordinal))
+            return BadRequest(new ApiResponse<MasterClearSummaryDto>(false, null, $"Type {MasterClearRequest.Phrase} to confirm."));
+        var result = await _clear.ClearAsync(type, CallerUserId, request.Ids);
+        return Ok(new ApiResponse<MasterClearSummaryDto>(true, result, request.Ids is null ? "Cleared." : "Deleted."));
+    }
+
+    private string? CallerUserId =>
+        User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
 
     /// <summary>Employees and locations are SuperAdmin-only (same as their create endpoints); other masters allow Admin too.</summary>
     private bool CanImport(string kind) =>

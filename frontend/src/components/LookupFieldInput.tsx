@@ -6,6 +6,11 @@ import { TextInput } from './ui/Field'
 
 const SEARCH_DELAY_MS = 350
 
+export interface LookupFieldNote {
+  tone: 'ok' | 'warn' | 'muted'
+  text: string
+}
+
 type SearchState =
   | { kind: 'idle' }
   | { kind: 'searching' }
@@ -25,6 +30,7 @@ export function LookupFieldInput({
   telephone,
   email,
   context,
+  note,
   onChange,
 }: {
   id: string
@@ -36,6 +42,8 @@ export function LookupFieldInput({
   email: string
   /** The purpose's other extra fields by label, for sources whose request uses {field:Label}. */
   context: Record<string, string>
+  /** Replaces the picked / typed-by-hand line, e.g. for a value filled in from the visitor's last visit. */
+  note?: LookupFieldNote
   onChange: (value: string, pick?: LookupPick) => void
 }) {
   const [search, setSearch] = useState<SearchState>({ kind: 'idle' })
@@ -80,7 +88,7 @@ export function LookupFieldInput({
   }
 
   function choose(m: LookupMatchDto) {
-    onChange(m.display, { token: m.token, display: m.display, details: m.details, hasMatchCheck: m.hasMatchCheck })
+    onChange(m.display, { token: m.token, recordId: m.recordId, display: m.display, details: m.details, hasMatchCheck: m.hasMatchCheck })
     setOpen(false)
     setSearch({ kind: 'idle' })
   }
@@ -174,13 +182,31 @@ export function LookupFieldInput({
 
       {pick ? (
         <div className="mt-1 space-y-0.5 text-xs">
-          <p className="font-medium text-emerald-700">✓ Picked from the list</p>
+          {note ? <NoteLine note={note} /> : <p className="font-medium text-emerald-700">✓ Picked from the list</p>}
           {pick.hasMatchCheck ? <MatchLine check={check} /> : null}
+        </div>
+      ) : note && value.trim() ? (
+        <div className="mt-1 text-xs">
+          <NoteLine note={note} />
         </div>
       ) : value.trim() ? (
         <p className="mt-1 text-xs text-amber-700">Typed by hand: will be saved as not verified.</p>
       ) : null}
     </div>
+  )
+}
+
+function NoteLine({ note }: { note: LookupFieldNote }) {
+  return (
+    <p
+      className={cn(
+        note.tone === 'ok' && 'font-medium text-emerald-700',
+        note.tone === 'warn' && 'text-amber-700',
+        note.tone === 'muted' && 'text-ink-muted',
+      )}
+    >
+      {note.text}
+    </p>
   )
 }
 

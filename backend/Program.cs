@@ -150,6 +150,7 @@ builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();
 builder.Services.AddScoped<IMasterImportService, MasterImportService>();
+builder.Services.AddScoped<IMasterClearService, MasterClearService>();
 builder.Services.AddScoped<IIntegrationKeyService, IntegrationKeyService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
@@ -172,6 +173,7 @@ builder.Services.AddHttpClient(LookupService.HttpClientName, c => c.Timeout = Ti
 builder.Services.AddHostedService<AppointmentReminderWorker>();
 builder.Services.AddHostedService<MomReminderWorker>();
 builder.Services.AddHostedService<StaleVisitAutoCheckOutWorker>();
+builder.Services.AddHostedService<EmailRetryWorker>();
 
 // Singleton: the ONNX sessions hold ~180 MB of weights and are thread-safe for concurrent inference.
 builder.Services.Configure<FaceRecognitionOptions>(

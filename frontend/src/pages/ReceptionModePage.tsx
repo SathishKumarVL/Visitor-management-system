@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { BrandLogo } from '../components/BrandLogo'
 import { Alert, ModeTile } from '../components/ui/Panel'
@@ -9,15 +10,21 @@ export function ReceptionModePage() {
   const location = useLocation()
   const { t } = useI18n()
   const company = useSettingsStore((s) => s.companyName)
-  const notice = location.state as
-    | {
+  const [notice] = useState(
+    () =>
+      location.state as {
         visitorName?: string
         pendingApproval?: boolean
         visitNumber?: string
         checkedOut?: boolean
-      }
-    | null
+      } | null,
+  )
   const visitorName = notice?.visitorName
+
+  // Shown once: a refresh or Back must not announce the same visitor again.
+  useEffect(() => {
+    if (location.state) navigate(location.pathname, { replace: true, state: null })
+  }, [location.state, location.pathname, navigate])
 
   return (
     <div className="mx-auto max-w-5xl">

@@ -65,6 +65,12 @@ public class LookupsController : ControllerBase
         Guid sourceId, [FromBody] LookupSearchRequest request, CancellationToken ct) =>
         Ok(new ApiResponse<IReadOnlyList<LookupMatchDto>>(true, await _lookups.SearchAsync(sourceId, request.Query, request.Context, ct)));
 
+    /// <summary>Confirms a returning visitor's earlier pick is still on record and returns it as a fresh pick.</summary>
+    [HttpPost("{sourceId:guid}/recheck")]
+    public async Task<ActionResult<ApiResponse<LookupMatchDto?>>> Recheck(
+        Guid sourceId, [FromBody] LookupRecheckRequest request, CancellationToken ct) =>
+        Ok(new ApiResponse<LookupMatchDto?>(true, await _lookups.RecheckAsync(sourceId, request, ct)));
+
     [HttpPost("check")]
     public ActionResult<ApiResponse<LookupCheckResultDto>> Check([FromBody] LookupCheckRequest request) =>
         Ok(new ApiResponse<LookupCheckResultDto>(true, _lookups.Check(request)));

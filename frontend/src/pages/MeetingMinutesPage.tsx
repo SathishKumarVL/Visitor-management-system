@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiErrorMessage, mastersApi, visitorsApi } from '../lib/api'
 import type { EmployeeDto, VisitorDetailDto } from '../types/api'
@@ -40,8 +40,6 @@ export function MeetingMinutesPage() {
   const [nextMeeting, setNextMeeting] = useState('')
   const [employees, setEmployees] = useState<EmployeeDto[]>([])
   const userLocationId = useAuthStore((s) => s.user?.locationId ?? null)
-  const noticeRef = useRef<HTMLDivElement | null>(null)
-
   useEffect(() => {
     let cancelled = false
     mastersApi
@@ -56,11 +54,6 @@ export function MeetingMinutesPage() {
       cancelled = true
     }
   }, [userLocationId])
-
-  useEffect(() => {
-    if (!error) return
-    noticeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [error])
 
   function fillForm(v: VisitorDetailDto) {
     setVisitor(v)
@@ -172,9 +165,7 @@ export function MeetingMinutesPage() {
         }
       />
 
-      <div ref={noticeRef} aria-live="polite" className="scroll-mt-24">
-        {error ? <div className="mb-4"><Alert tone="error">{error}</Alert></div> : null}
-      </div>
+      {error ? <Alert tone="error">{error}</Alert> : null}
 
       <Panel className="mb-4">
         <dl className="grid gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6">

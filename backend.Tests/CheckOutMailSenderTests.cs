@@ -29,6 +29,7 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
             Task.FromResult((true, ""));
 
         public Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20) => Task.FromResult((0, 0));
+        public Task<(int Attempted, int Sent)> RetryFailedEmailsAsync(DateTime createdAfterUtc, DateTime createdBeforeUtc, int take, CancellationToken ct = default) => Task.FromResult((0, 0));
     }
 
     private static VisitMailContext Context() => new(

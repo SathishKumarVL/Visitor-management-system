@@ -7,6 +7,13 @@ import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 import { ExcelImportButtons } from '../components/ExcelImportButtons'
+import {
+  ClearAllMasterButton,
+  DeleteSelectedMasterButton,
+  SelectPageHeader,
+  SelectRowCell,
+} from '../components/ClearAllMasterButton'
+import { useRowSelection } from '../lib/useRowSelection'
 import { Modal } from '../components/ui/Modal'
 import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
@@ -95,6 +102,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
     active: (i) => (i.isActive ? 0 : 1),
   })
   const { pageItems, pagination } = usePagination(sorted, 20, `${kind}|${filterLocationId}|${sort?.key}|${sort?.dir}`)
+  const selection = useRowSelection(items.map((i) => i.id))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -252,6 +260,8 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
                 <Button variant="amber" onClick={startCreate}>Add new</Button>
               </>
             ) : null}
+            <DeleteSelectedMasterButton type={kind} label={cfg.title} ids={selection.ids} onDeleted={load} />
+            <ClearAllMasterButton type={kind} label={cfg.title} onCleared={load} />
           </div>
         }
       />
@@ -264,6 +274,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
             <table className="min-w-full text-left text-sm">
               <thead className="bg-gray-50 text-gray-500">
                 <tr>
+                  {isSuperAdmin ? <SelectPageHeader selection={selection} pageIds={pageItems.map((i) => i.id)} /> : null}
                   <SortHeader sortKey="name" sort={sort} onSort={onSort}>Name</SortHeader>
                   <SortHeader sortKey="code" sort={sort} onSort={onSort}>Code</SortHeader>
                   {cfg.locationScoped ? <SortHeader sortKey="location" sort={sort} onSort={onSort}>Location</SortHeader> : null}
@@ -274,6 +285,7 @@ export function MasterListPage({ kind }: { kind: MasterKind }) {
               <tbody>
                 {pageItems.map((item) => (
                   <tr key={item.id} className="border-t border-gray-100">
+                    {isSuperAdmin ? <SelectRowCell selection={selection} id={item.id} label={item.name} /> : null}
                     <td className="px-4 py-3 font-medium">
                       {item.name}
                       {item.fields?.length ? (

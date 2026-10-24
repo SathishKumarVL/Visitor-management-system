@@ -3,16 +3,27 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiErrorMessage, lookupsApi, mastersApi, passApi, visitorsApi } from '../lib/api'
 import type {
   EmployeeDto,
+  LookupMatchDto,
+  LookupRecordVisitorsDto,
   LookupSourceOptionDto,
   MasterItemDto,
+  PreviousPurposeAnswersDto,
   RegisterVisitorRequest,
   VisitorWizardDraft,
 } from '../types/api'
 import { Alert, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { Button } from '../components/ui/Button'
 import { FieldError, TextInput, FieldLabel, TextSelect, SelectChip } from '../components/ui/Field'
-import { newUuid, nowIsoTime, sanitizePhoneDigits, todayIsoDate, validateVisitorEmail } from '../lib/utils'
+import {
+  formatDateTime,
+  newUuid,
+  nowIsoTime,
+  sanitizePhoneDigits,
+  todayIsoDate,
+  validateVisitorEmail,
+} from '../lib/utils'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
+import { newPersonAlertText, speakAlert } from '../lib/alertSound'
 import { SecureImage } from '../components/SecureImage'
 import { LoadingMask } from '../components/LoadingMask'
 import { FaceCameraPanel } from '../components/FaceCameraPanel'
@@ -20,9 +31,32 @@ import { captureFaceJpeg, openFaceCamera, toggleCameraFacing } from '../lib/came
 import type { BookingMatchDto, FaceSearchMatchDto, GroupEmployeeMatchDto, PassDto } from '../types/api'
 import { useAuthStore } from '../store/authStore'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
-import { LookupFieldInput } from '../components/LookupFieldInput'
+import { LookupFieldInput, type LookupFieldNote } from '../components/LookupFieldInput'
 
 const LEGACY_DRAFT_KEY = 'tiaano_visitor_wizard_draft'
+
+const PREVIOUS_NOTES = {
+  checking: { tone: 'muted', text: 'From the last visit. Checking it is still on record…' },
+  confirmed: { tone: 'ok', text: '✓ From the last visit, still on record' },
+  notFound: {
+    tone: 'warn',
+    text: 'From the last visit, but not found with these details now (for example, a new class). Correct the details and search again, or it is saved as not verified.',
+  },
+  unavailable: {
+    tone: 'warn',
+    text: 'From the last visit. It could not be checked right now: search again to verify it, or it is saved as not verified.',
+  },
+  unchecked: {
+    tone: 'warn',
+    text: 'From the last visit. Search and pick it again to verify it, or it is saved as not verified.',
+  },
+} satisfies Record<string, LookupFieldNote>
+
+/** "Parent visit: RAKSHAN - Class 1st-A": lookup picks name the entry best, otherwise all answers. */
+function previousAnswersLabel(set: PreviousPurposeAnswersDto): string {
+  const picked = set.fields.filter((f) => f.lookupSourceId).map((f) => f.value)
+  return `${set.purposeName}: ${(picked.length > 0 ? picked : set.fields.map((f) => f.value)).join(' · ')}`
+}
 const STATIC_ID_TYPES = ['Aadhaar', 'Pan Card', 'Passport'] as const
 
 const emptyDraft = (): VisitorWizardDraft => ({
@@ -95,6 +129,8 @@ export function NewVisitorWizardPage() {
   const [bookingMatches, setBookingMatches] = useState<BookingMatchDto[]>([])
   const [dismissedBookingIds, setDismissedBookingIds] = useState<string[]>([])
   const [linkedBooking, setLinkedBooking] = useState<BookingMatchDto | null>(null)
+  /** Visitor record of the arriving booking; the visit joins it unless a face match names someone else. */
+  const [arrivalVisitorId, setArrivalVisitorId] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const formTopRef = useRef<HTMLDivElement>(null)
@@ -248,6 +284,7 @@ export function NewVisitorWizardPage() {
           isWalkIn: false,
           expectedVisitId: visit.visitId,
         })
+        setArrivalVisitorId(visit.visitorId)
       } catch (e) {
         setError(apiErrorMessage(e))
       } finally {
@@ -290,6 +327,157 @@ export function NewVisitorWizardPage() {
     }
   }, [bookingLookupKey])
 
+  const [previousAnswers, setPreviousAnswers] = useState<PreviousPurposeAnswersDto[]>([])
+  const [appliedPrevious, setAppliedPrevious] = useState<number | null>(null)
+  const [previousNotes, setPreviousNotes] = useState<Record<string, LookupFieldNote>>({})
+  const draftRef = useRef(draft)
+  useEffect(() => {
+    draftRef.current = draft
+  })
+  /** Bumped on every fill, so a slow check from an earlier fill cannot overwrite a newer one. */
+  const previousFillRun = useRef(0)
+
+  const recognizedVisitorId = draft.recognizedVisitorId
+  useEffect(() => {
+    setPreviousAnswers([])
+    setAppliedPrevious(null)
+    if (!recognizedVisitorId) return
+    let cancelled = false
+    visitorsApi
+      .previousPurposeAnswers(recognizedVisitorId)
+      .then((sets) => {
+        if (!cancelled) setPreviousAnswers(sets)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviousAnswers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [recognizedVisitorId])
+
+  // A returning visitor with no purpose chosen yet gets their latest answers straight away.
+  useEffect(() => {
+    if (previousAnswers.length === 0 || appliedPrevious !== null) return
+    const d = draftRef.current
+    if (d.purposeIds.length > 0 || d.othersChecked) return
+    applyPreviousAnswers(0)
+  }, [previousAnswers, purposes])
+
+  /** Fills a purpose and its details from an earlier visit, then checks each lookup pick is still on record. */
+  function applyPreviousAnswers(index: number): boolean {
+    const set = previousAnswers[index]
+    const purpose = set ? purposes.find((p) => p.id === set.purposeId) : undefined
+    if (!set || !purpose) return false
+    const fieldIds = new Set((purpose.fields ?? []).flatMap((f) => (f.id ? [f.id] : [])))
+    const answers = set.fields.filter((a) => fieldIds.has(a.fieldId))
+    const isOthers = othersPurpose?.id === purpose.id
+    const run = ++previousFillRun.current
+
+    setDraft((d) => {
+      const values = { ...d.purposeFieldValues }
+      const picks = { ...d.purposeLookupPicks }
+      for (const id of fieldIds) {
+        delete values[id]
+        delete picks[id]
+      }
+      for (const a of answers) values[a.fieldId] = a.value
+      return {
+        ...d,
+        purposeIds: d.purposeIds.includes(purpose.id) ? d.purposeIds : [...d.purposeIds, purpose.id],
+        othersChecked: d.othersChecked || isOthers,
+        purposeFieldValues: values,
+        purposeLookupPicks: picks,
+      }
+    })
+    setPreviousNotes((n) => {
+      const next = { ...n }
+      for (const id of fieldIds) delete next[id]
+      for (const a of answers) {
+        if (a.lookupSourceId) next[a.fieldId] = a.recordId && a.query ? PREVIOUS_NOTES.checking : PREVIOUS_NOTES.unchecked
+      }
+      return next
+    })
+    setAppliedPrevious(index)
+
+    for (const a of answers) {
+      if (!a.lookupSourceId || !a.recordId || !a.query) continue
+      const context = Object.fromEntries(answers.filter((o) => o.fieldId !== a.fieldId).map((o) => [o.label, o.value]))
+      const settle = (note: LookupFieldNote, match?: LookupMatchDto | null) => {
+        // Reception may have edited the field or filled another entry while the check ran.
+        if (previousFillRun.current !== run || draftRef.current.purposeFieldValues[a.fieldId] !== a.value) return
+        if (match?.token) {
+          setDraft((d) => ({
+            ...d,
+            purposeFieldValues: { ...d.purposeFieldValues, [a.fieldId]: match.display },
+            purposeLookupPicks: {
+              ...d.purposeLookupPicks,
+              [a.fieldId]: {
+                token: match.token,
+                recordId: match.recordId,
+                display: match.display,
+                details: match.details,
+                hasMatchCheck: match.hasMatchCheck,
+              },
+            },
+          }))
+        }
+        setPreviousNotes((n) => ({ ...n, [a.fieldId]: note }))
+      }
+      lookupsApi
+        .recheck(a.lookupSourceId, { query: a.query, context, recordId: a.recordId })
+        .then((match) => settle(match?.token ? PREVIOUS_NOTES.confirmed : PREVIOUS_NOTES.notFound, match))
+        .catch(() => settle(PREVIOUS_NOTES.unavailable))
+    }
+    return true
+  }
+
+  /** Visitor record this registration joins, as the server picks it: face match first, then the booking. */
+  const comparedVisitorId = draft.recognizedVisitorId || arrivalVisitorId || ''
+  /** Picked records (e.g. a student) whose earlier visitors are compared with this visitor. */
+  const recordChecks = useMemo(
+    () =>
+      purposesWithFields.flatMap((purpose) =>
+        (purpose.fields ?? []).flatMap((field) => {
+          const pick = field.id ? draft.purposeLookupPicks[field.id] : undefined
+          if (!field.id || field.type !== 'lookup' || !field.lookupSourceId || !pick?.recordId) return []
+          return [
+            {
+              key: `${field.id}|${field.lookupSourceId}|${pick.recordId}|${comparedVisitorId}`,
+              purposeId: purpose.id,
+              sourceId: field.lookupSourceId,
+              recordId: pick.recordId,
+              display: pick.display,
+            },
+          ]
+        }),
+      ),
+    [purposesWithFields, draft.purposeLookupPicks, comparedVisitorId],
+  )
+  const recordChecksKey = recordChecks.map((c) => c.key).join(',')
+  const [recordVisitors, setRecordVisitors] = useState<Record<string, LookupRecordVisitorsDto>>({})
+  const [confirmedNewPeople, setConfirmedNewPeople] = useState<string[]>([])
+  const fetchedRecordChecks = useRef(new Set<string>())
+  useEffect(() => {
+    for (const check of recordChecks) {
+      if (fetchedRecordChecks.current.has(check.key)) continue
+      fetchedRecordChecks.current.add(check.key)
+      visitorsApi
+        .recordVisitors({ sourceId: check.sourceId, recordId: check.recordId, visitorId: comparedVisitorId })
+        .then((result) => setRecordVisitors((r) => ({ ...r, [check.key]: result })))
+        .catch(() => fetchedRecordChecks.current.delete(check.key))
+    }
+  }, [recordChecksKey])
+  const newPersonWarnings = recordChecks.filter((c) => recordVisitors[c.key]?.isNewPerson)
+  const newPersonWarningsKey = newPersonWarnings.map((c) => c.key).join(',')
+  const soundedNewPeople = useRef(new Set<string>())
+  useEffect(() => {
+    const fresh = newPersonWarnings.filter((c) => !soundedNewPeople.current.has(c.key))
+    if (fresh.length === 0) return
+    fresh.forEach((c) => soundedNewPeople.current.add(c.key))
+    speakAlert(newPersonAlertText(fresh[0].display))
+  }, [newPersonWarningsKey])
+
   function patch(partial: Partial<VisitorWizardDraft>) {
     setDraft((d) => ({ ...d, ...partial }))
   }
@@ -318,6 +506,7 @@ export function NewVisitorWizardPage() {
       expectedVisitId: booking.visitId,
     }))
     setLinkedBooking(booking)
+    setArrivalVisitorId(booking.visitorId)
     setBookingMatches([])
     setError(null)
   }
@@ -325,6 +514,7 @@ export function NewVisitorWizardPage() {
   function unlinkBooking() {
     if (linkedBooking) setDismissedBookingIds((ids) => [...ids, linkedBooking.visitId])
     setLinkedBooking(null)
+    setArrivalVisitorId(null)
     patch({ expectedVisitId: null, isWalkIn: true })
   }
 
@@ -356,6 +546,10 @@ export function NewVisitorWizardPage() {
         }
       }
     }
+    const unconfirmed = newPersonWarnings.find((c) => !confirmedNewPeople.includes(c.key))
+    if (unconfirmed) {
+      return `This person has not come for ${unconfirmed.display} before. Check with the family, then tick the confirmation.`
+    }
     const hasIdType = !!draft.idTypeName.trim()
     const hasIdNumber = !!draft.idNumber.trim()
     if (hasIdType !== hasIdNumber) {
@@ -381,6 +575,11 @@ export function NewVisitorWizardPage() {
     setBookingMatches([])
     setDismissedBookingIds([])
     setLinkedBooking(null)
+    setArrivalVisitorId(null)
+    fetchedRecordChecks.current.clear()
+    soundedNewPeople.current.clear()
+    setRecordVisitors({})
+    setConfirmedNewPeople([])
   }
 
   async function startCamera() {
@@ -544,6 +743,8 @@ export function NewVisitorWizardPage() {
     setEmailTouched(true)
     const msg = validateAll()
     if (msg) {
+      const unconfirmed = newPersonWarnings.find((c) => !confirmedNewPeople.includes(c.key))
+      if (unconfirmed) speakAlert(newPersonAlertText(unconfirmed.display))
       setError(msg)
       formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       return
@@ -1031,6 +1232,23 @@ export function NewVisitorWizardPage() {
           <Panel>
             <SectionTitle>Purpose</SectionTitle>
             <p className="mb-3 text-sm text-ink-muted">Select one or more visit purposes.</p>
+            {previousAnswers.length > 0 ? (
+              <div className="mb-4 rounded-xl border border-border bg-aqua-light/40 p-3">
+                <p className="mb-2 text-sm font-medium text-ink">From earlier visits</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {previousAnswers.map((set, i) => (
+                    <SelectChip
+                      key={`${set.purposeId}-${i}`}
+                      selected={appliedPrevious === i}
+                      onToggle={() => applyPreviousAnswers(i)}
+                    >
+                      {previousAnswersLabel(set)}
+                    </SelectChip>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-ink-muted">Tap one to fill in that purpose and its details again.</p>
+              </div>
+            ) : null}
             <div className="grid gap-2 sm:grid-cols-2">
               {listedPurposes.map((p) => (
                 <SelectChip
@@ -1091,7 +1309,8 @@ export function NewVisitorWizardPage() {
                                 .filter((f) => f.id && f.id !== field.id)
                                 .map((f) => [f.label, (draft.purposeFieldValues[f.id!] ?? '').trim()]),
                             )}
-                            onChange={(value, pick) =>
+                            note={previousNotes[field.id]}
+                            onChange={(value, pick) => {
                               setDraft((d) => {
                                 const picks = { ...d.purposeLookupPicks }
                                 if (pick) picks[field.id!] = pick
@@ -1102,7 +1321,13 @@ export function NewVisitorWizardPage() {
                                   purposeLookupPicks: picks,
                                 }
                               })
-                            }
+                              setPreviousNotes((n) => {
+                                if (!(field.id! in n)) return n
+                                const next = { ...n }
+                                delete next[field.id!]
+                                return next
+                              })
+                            }}
                           />
                         ) : (
                           <TextInput
@@ -1118,6 +1343,51 @@ export function NewVisitorWizardPage() {
                     ) : null,
                   )}
                 </div>
+                {newPersonWarnings
+                  .filter((check) => check.purposeId === purpose.id)
+                  .map((check) => (
+                    <div key={check.key} className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
+                      <p className="text-sm font-semibold text-amber-900">
+                        First time this person has come for {check.display}
+                      </p>
+                      <p className="mt-1 text-xs text-amber-900/80">
+                        Earlier visits were by the people below. Check with the family (for example, call the parent)
+                        before registering.
+                      </p>
+                      <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {recordVisitors[check.key].visitors.map((v) => (
+                          <li key={v.visitorId} className="flex items-center gap-3 rounded-lg bg-white/80 p-2">
+                            {v.photoUrl ? (
+                              <SecureImage src={v.photoUrl} alt="" className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+                            ) : (
+                              <div className="h-14 w-14 shrink-0 rounded-lg bg-border" />
+                            )}
+                            <div className="min-w-0 text-xs text-ink-muted">
+                              <p className="truncate text-sm font-medium text-ink">{v.visitorName}</p>
+                              {v.phone ? <p>{v.phone}</p> : null}
+                              <p>
+                                Last visit {formatDateTime(v.lastCheckInAt)}
+                                {v.visits > 1 ? ` · ${v.visits} visits` : ''}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                      <label className="mt-3 flex items-start gap-2 text-sm font-medium text-amber-900">
+                        <input
+                          type="checkbox"
+                          className="mt-1 accent-primary"
+                          checked={confirmedNewPeople.includes(check.key)}
+                          onChange={(e) =>
+                            setConfirmedNewPeople((keys) =>
+                              e.target.checked ? [...keys, check.key] : keys.filter((k) => k !== check.key),
+                            )
+                          }
+                        />
+                        I have checked that this person can come for {check.display}
+                      </label>
+                    </div>
+                  ))}
               </div>
             ))}
           </Panel>

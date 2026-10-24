@@ -266,6 +266,8 @@ public sealed class LookupSelection
     public string SourceName { get; set; } = string.Empty;
     public string RecordId { get; set; } = string.Empty;
     public string Display { get; set; } = string.Empty;
+    /// <summary>The text that found the record, kept so a returning visitor's pick can be searched again.</summary>
+    public string? Query { get; set; }
     public List<PurposeFieldDetail> Details { get; set; } = new();
     public List<string> MatchValues { get; set; } = new();
     public string? MatchAgainst { get; set; }

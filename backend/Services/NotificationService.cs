@@ -22,6 +22,11 @@ public interface INotificationService
     Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null, MailSender? sender = null);
     /// <summary>Re-attempts delivery for unsent Email outbox rows (e.g. after SMTP config fix).</summary>
     Task<(int Attempted, int Sent)> RetryUnsentEmailsAsync(int take = 20);
+    /// <summary>
+    /// Re-attempts unsent Email rows created in the window, oldest first. After a failure the remaining rows for
+    /// the same tenant and location wait for the next sweep, so a broken SMTP server is not hammered.
+    /// </summary>
+    Task<(int Attempted, int Sent)> RetryFailedEmailsAsync(DateTime createdAfterUtc, DateTime createdBeforeUtc, int take, CancellationToken ct = default);
 }
 
 public class NotificationService : INotificationService
@@ -118,7 +123,7 @@ public class NotificationService : INotificationService
             LocationId = locationId,
             Channel = "Email",
             Recipient = recipient.Trim(),
-            Subject = "Tiaano VMS SMTP test",
+            Subject = SmtpTestSubject,
             Body = $"SMTP test from Tiaano Visitor Management at {AppTime.Now:dd MMM yyyy HH:mm:ss}.",
             FromAddress = Clip(sender?.FromAddress, 256),
             FromName = Clip(sender?.FromName, 200),
@@ -174,6 +179,39 @@ public class NotificationService : INotificationService
 
         return (pending.Count, sent);
     }
+
+    public async Task<(int Attempted, int Sent)> RetryFailedEmailsAsync(
+        DateTime createdAfterUtc, DateTime createdBeforeUtc, int take, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 100);
+        // A failed SMTP test was shown to the person testing; sending it hours later would only confuse them.
+        var pending = await _db.NotificationOutbox.IgnoreQueryFilters()
+            .Where(n => n.Channel == "Email" && !n.IsSent
+                && n.CreatedAt >= createdAfterUtc && n.CreatedAt <= createdBeforeUtc
+                && n.Subject != SmtpTestSubject)
+            .OrderBy(n => n.CreatedAt)
+            .Take(take)
+            .ToListAsync(ct);
+
+        var failedServers = new HashSet<(Guid, Guid?)>();
+        var attempted = 0;
+        var sent = 0;
+        foreach (var row in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (row.TenantId is not Guid tenantId || tenantId == Guid.Empty) continue;
+            if (failedServers.Contains((tenantId, row.LocationId))) continue;
+            _tenant.Set(tenantId);
+            attempted++;
+            await TryDeliverAsync(row);
+            if (row.IsSent) sent++;
+            else failedServers.Add((tenantId, row.LocationId));
+        }
+
+        return (attempted, sent);
+    }
+
+    private const string SmtpTestSubject = "Tiaano VMS SMTP test";
 
     private async Task TryDeliverAsync(NotificationOutbox row)
     {

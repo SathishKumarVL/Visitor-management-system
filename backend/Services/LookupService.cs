@@ -19,6 +19,8 @@ public interface ILookupService
     Task DeleteAsync(Guid id);
     Task<LookupTestResultDto> TestAsync(LookupTestRequest request, CancellationToken ct);
     Task<IReadOnlyList<LookupMatchDto>> SearchAsync(Guid sourceId, string? query, IReadOnlyDictionary<string, string>? context, CancellationToken ct);
+    /// <summary>Searches again with a previous visit's text and details; null when that record is no longer found.</summary>
+    Task<LookupMatchDto?> RecheckAsync(Guid sourceId, LookupRecheckRequest request, CancellationToken ct);
     LookupCheckResultDto Check(LookupCheckRequest request);
     LookupSelection? ReadSelection(string token);
     Task<HashSet<Guid>> ExistingSourceIdsAsync(IEnumerable<Guid> ids);
@@ -179,7 +181,7 @@ public sealed class LookupService : ILookupService
             using var doc = Parse(fetched.Body);
             var records = LookupMapping.ExtractRecords(doc.RootElement, source.ResultsPath);
             result.RecordCount = records.Count;
-            result.Matches = records.Take(MaxResults).Select(r => ToMatch(source, r, includeMatchValues: true)).ToList();
+            result.Matches = records.Take(MaxResults).Select(r => ToMatch(source, r, query, includeMatchValues: true)).ToList();
             result.Ok = true;
             if (records.Count == 0)
                 result.Error = "The API answered, but no records were found at the results path. Compare the path with the raw response below.";
@@ -232,7 +234,7 @@ public sealed class LookupService : ILookupService
             using var doc = Parse(fetched.Body);
             matches = LookupMapping.ExtractRecords(doc.RootElement, source.ResultsPath)
                 .Take(MaxResults)
-                .Select(r => ToMatch(source, r, includeMatchValues: false))
+                .Select(r => ToMatch(source, r, q, includeMatchValues: false))
                 .Where(m => m.RecordId.Length > 0)
                 .ToList();
         }
@@ -242,6 +244,14 @@ public sealed class LookupService : ILookupService
         }
         _cache.Set(cacheKey, matches, CacheFor);
         return matches;
+    }
+
+    public async Task<LookupMatchDto?> RecheckAsync(Guid sourceId, LookupRecheckRequest request, CancellationToken ct)
+    {
+        var recordId = request.RecordId?.Trim() ?? string.Empty;
+        if (recordId.Length == 0) return null;
+        var matches = await SearchAsync(sourceId, request.Query, request.Context, ct);
+        return matches.FirstOrDefault(m => string.Equals(m.RecordId, recordId, StringComparison.Ordinal));
     }
 
     public LookupCheckResultDto Check(LookupCheckRequest request)
@@ -267,7 +277,7 @@ public sealed class LookupService : ILookupService
         return selection is not null && selection.TenantId == TenantId ? selection : null;
     }
 
-    private LookupMatchDto ToMatch(LookupSource source, JsonElement record, bool includeMatchValues)
+    private LookupMatchDto ToMatch(LookupSource source, JsonElement record, string query, bool includeMatchValues)
     {
         var recordId = LookupMapping.Truncate(LookupMapping.FirstText(record, source.IdPath) ?? string.Empty, 200);
         var display = LookupMapping.Render(source.DisplayTemplate, record);
@@ -298,6 +308,7 @@ public sealed class LookupService : ILookupService
                 SourceName = source.Name,
                 RecordId = recordId,
                 Display = display,
+                Query = query,
                 Details = details,
                 MatchValues = matchValues,
                 MatchAgainst = hasCheck ? source.MatchAgainst : null,

@@ -111,12 +111,15 @@ export interface PurposeFieldValueDto {
   details?: LookupDetailDto[] | null
   matchAgainst?: LookupMatchTarget | null
   matched?: boolean | null
+  /** True when others had come for this record before and this visitor never had. */
+  newPerson?: boolean | null
 }
 
 export type LookupMatchTarget = 'mobile' | 'email'
 
 export interface LookupPick {
   token: string
+  recordId?: string
   display: string
   details: LookupDetailDto[]
   hasMatchCheck: boolean
@@ -188,6 +191,54 @@ export interface LookupTestResultDto {
   recordCount: number
   matches: LookupMatchDto[]
   rawSample?: string | null
+}
+
+export interface PreviousPurposeFieldDto {
+  fieldId: string
+  label: string
+  value: string
+  lookupSourceId?: string | null
+  /** Record and search text of a verified pick; both are needed to check it again. */
+  recordId?: string | null
+  query?: string | null
+}
+
+/** One purpose's extra-field answers from a returning visitor's earlier visit. */
+export interface PreviousPurposeAnswersDto {
+  purposeId: string
+  purposeName: string
+  visitDate: string
+  fields: PreviousPurposeFieldDto[]
+}
+
+export interface LookupRecordVisitorDto {
+  visitorId: string
+  visitorName: string
+  phone?: string | null
+  photoUrl?: string | null
+  lastCheckInAt: string
+  visits: number
+}
+
+export type MasterClearType =
+  | 'employees'
+  | 'departments'
+  | 'designations'
+  | 'purposes'
+  | 'locations'
+  | 'feedback-questions'
+  | 'meeting-halls'
+
+/** What clearing a whole master removes (preview) or removed. */
+export interface MasterClearSummaryDto {
+  type: string
+  items: { label: string; count: number }[]
+}
+
+/** People who came for a picked record (e.g. a student) before. */
+export interface LookupRecordVisitorsDto {
+  isNewPerson: boolean
+  visitors: LookupRecordVisitorDto[]
 }
 
 export interface LookupSourceOptionDto {

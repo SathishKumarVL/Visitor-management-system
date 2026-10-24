@@ -197,11 +197,15 @@ public class PurposeFieldValue
     public bool? Verified { get; set; }
     public string? Source { get; set; }
     public string? RecordId { get; set; }
+    /// <summary>The search text that found the record; used to check the record again on the visitor's next visit.</summary>
+    public string? Query { get; set; }
     /// <summary>Record properties copied from the source at registration, so later API changes do not alter history.</summary>
     public List<PurposeFieldDetail>? Details { get; set; }
     /// <summary>"mobile" or "email" when the source checks the visitor against the record.</summary>
     public string? MatchAgainst { get; set; }
     public bool? Matched { get; set; }
+    /// <summary>True when other people had come for this record before and this visitor never had.</summary>
+    public bool? NewPerson { get; set; }
 }
 
 public class PurposeFieldDetail

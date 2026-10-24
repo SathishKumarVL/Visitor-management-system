@@ -43,6 +43,7 @@ public static class PurposeFields
             Details = v.Details?.Select(d => new LookupDetailDto { Label = d.Label, Value = d.Value }).ToList(),
             MatchAgainst = v.MatchAgainst,
             Matched = v.Matched,
+            NewPerson = v.NewPerson,
         }).ToList();
 
     /// <summary>"Invoice number: 123; Student: Arjun K (not verified)" for reports.</summary>
@@ -51,9 +52,11 @@ public static class PurposeFields
 
     private static string Qualifier(PurposeFieldValue v)
     {
-        if (v.Verified == false) return " (not verified)";
-        if (v.Matched == false) return $" ({v.MatchAgainst} not on record)";
-        return string.Empty;
+        var notes = new List<string>();
+        if (v.Verified == false) notes.Add("not verified");
+        else if (v.Matched == false) notes.Add($"{v.MatchAgainst} not on record");
+        if (v.NewPerson == true) notes.Add("first visit by this person");
+        return notes.Count == 0 ? string.Empty : $" ({string.Join(", ", notes)})";
     }
 
     /// <summary>Validates the edited list; fields keep their id so a visit form open during the edit still matches.</summary>
@@ -174,6 +177,7 @@ public static class PurposeFields
             Verified = true,
             Source = selection.SourceName,
             RecordId = selection.RecordId,
+            Query = selection.Query,
             Details = selection.Details.Count == 0 ? null : selection.Details,
             MatchAgainst = matched.HasValue ? selection.MatchAgainst : null,
             Matched = matched,

@@ -181,6 +181,55 @@ public class EmployeeNotificationTests : IClassFixture<TestApiFactory>
         Assert.False(badKey.IsSuccessStatusCode);
     }
 
+    [Fact]
+    public async Task Failed_Emails_Are_Retried_Except_Smtp_Tests_And_Old_Ones()
+    {
+        var windowStart = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(Random.Shared.Next(3000));
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        NotificationOutbox Row(string subject, DateTime createdAt) => new()
+        {
+            TenantId = WellKnownTenants.TiaanoId,
+            Channel = "Email",
+            Recipient = "retry@example.test",
+            Subject = subject,
+            Body = "Retry body",
+            IsSent = false,
+            Error = "SMTP down",
+            CreatedAt = createdAt,
+            IdempotencyKey = $"retry-test:{tag}:{subject}"
+        };
+        var failed = Row("Appointment scheduled", windowStart.AddHours(1));
+        var smtpTest = Row("Tiaano VMS SMTP test", windowStart.AddHours(2));
+        var tooOld = Row("Old appointment", windowStart.AddHours(-1));
+        using (var seed = _factory.Services.CreateScope())
+        {
+            var db = seed.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            db.NotificationOutbox.AddRange(failed, smtpTest, tooOld);
+            await db.SaveChangesAsync();
+        }
+        try
+        {
+            using var scope = _factory.Services.CreateScope();
+            var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+            var (attempted, sent) = await notifications.RetryFailedEmailsAsync(windowStart, windowStart.AddDays(1), 25);
+            Assert.Equal(1, attempted);
+            Assert.Equal(1, sent);
+
+            var rows = await OutboxAsync(scope, $"retry-test:{tag}:");
+            Assert.True(rows.Single(r => r.Id == failed.Id).IsSent);
+            Assert.False(rows.Single(r => r.Id == smtpTest.Id).IsSent);
+            Assert.False(rows.Single(r => r.Id == tooOld.Id).IsSent);
+        }
+        finally
+        {
+            using var cleanup = _factory.Services.CreateScope();
+            var db = cleanup.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await db.NotificationOutbox.IgnoreQueryFilters()
+                .Where(n => n.IdempotencyKey != null && n.IdempotencyKey.StartsWith($"retry-test:{tag}:"))
+                .ExecuteDeleteAsync();
+        }
+    }
+
     private static IEnumerable<Guid> Ids(JsonElement data, string list) =>
         data.GetProperty(list).EnumerateArray().Select(i => i.GetProperty("visitId").GetGuid());
 

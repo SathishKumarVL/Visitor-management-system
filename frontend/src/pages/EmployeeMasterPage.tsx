@@ -12,6 +12,13 @@ import { FaceCapture } from '../components/FaceCapture'
 import { SecureImage } from '../components/SecureImage'
 import { EmployeeLoginModal } from '../components/EmployeeLoginModal'
 import { ManageLoginModal } from '../components/ManageLoginModal'
+import {
+  ClearAllMasterButton,
+  DeleteSelectedMasterButton,
+  SelectPageHeader,
+  SelectRowCell,
+} from '../components/ClearAllMasterButton'
+import { useRowSelection } from '../lib/useRowSelection'
 import { roleLabel } from '../lib/roles'
 import { usePagination } from '../lib/usePagination'
 import { useSort } from '../lib/useSort'
@@ -105,6 +112,7 @@ export function EmployeeMasterPage() {
     20,
     `${departmentId}|${effectiveLocationId}|${search}|${sort?.key}|${sort?.dir}`,
   )
+  const selection = useRowSelection(sorted.map((e) => e.id))
 
   const formDepartments = useMemo(() => {
     const loc = form.locationId
@@ -309,6 +317,8 @@ export function EmployeeMasterPage() {
             </TextSelect>
             {isSuperAdmin ? <ExcelImportButtons kind="employees" label="Employees" onImported={load} /> : null}
             <Button variant="amber" onClick={startCreate}>Add employee</Button>
+            <DeleteSelectedMasterButton type="employees" label="Employees" ids={selection.ids} onDeleted={load} />
+            <ClearAllMasterButton type="employees" label="Employees" onCleared={load} />
           </div>
         }
       />
@@ -321,6 +331,7 @@ export function EmployeeMasterPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="bg-gray-50 text-gray-500">
               <tr className="whitespace-nowrap">
+                {isSuperAdmin ? <SelectPageHeader selection={selection} pageIds={pageItems.map((e) => e.id)} /> : null}
                 <th className="px-4 py-3">Face</th>
                 <SortHeader sortKey="name" sort={sort} onSort={onSort}>Employee</SortHeader>
                 <SortHeader sortKey="dob" sort={sort} onSort={onSort}>Date of birth</SortHeader>
@@ -336,6 +347,7 @@ export function EmployeeMasterPage() {
                 const login = item.userId ? usersById.get(item.userId) : undefined
                 return (
                   <tr key={item.id} className="border-t border-gray-100 align-middle">
+                    {isSuperAdmin ? <SelectRowCell selection={selection} id={item.id} label={item.fullName} /> : null}
                     <td className="px-4 py-2">
                       {item.photoUrl ? (
                         <SecureImage src={item.photoUrl} alt={item.fullName} className="h-10 w-10 rounded-full object-cover" />

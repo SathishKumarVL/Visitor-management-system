@@ -597,7 +597,7 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task Expected_Visit_Is_Superseded_Not_Deleted_On_Arrival()
+    public async Task Expected_Visit_Becomes_The_Visit_On_Arrival()
     {
         await SetApprovalRequiredAsync(false);
         var reception = await LoginAsync("reception");
@@ -622,9 +622,10 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
         Assert.True(create.IsSuccessStatusCode, await create.Content.ReadAsStringAsync());
         var expected = (await create.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
         var expectedVisitId = VisitId(expected);
+        var bookedVisitNumber = expected.GetProperty("visitNumber").GetString();
         Assert.Equal(VisitStatus.Expected, await StatusOfAsync(expectedVisitId));
 
-        var arrival = await reception.PostAsJsonAsync("/api/visitors", new
+        object ArrivalBody() => new
         {
             visitorName = "Expected Then Arrived",
             gender = 1,
@@ -641,11 +642,22 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             idTypeName = "Aadhaar",
             idNumber = "123456789012",
             passNumber = $"P-{Guid.NewGuid():N}"[..12].ToUpperInvariant()
-        });
+        };
+        var arrival = await reception.PostAsJsonAsync("/api/visitors", ArrivalBody());
         Assert.True(arrival.IsSuccessStatusCode, await arrival.Content.ReadAsStringAsync());
+        var arrived = (await arrival.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
 
-        // The pre-registration must survive as history rather than being erased.
-        Assert.Equal(VisitStatus.Cancelled, await StatusOfAsync(expectedVisitId));
+        Assert.Equal(expectedVisitId, VisitId(arrived));
+        Assert.Equal(bookedVisitNumber, arrived.GetProperty("visitNumber").GetString());
+        Assert.Equal(VisitStatus.Approved, await StatusOfAsync(expectedVisitId));
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            Assert.Equal(1, await db.VisitorVisits.IgnoreQueryFilters().CountAsync(v => v.Visitor.Phone!.EndsWith(phone)));
+        }
+
+        var again = await reception.PostAsJsonAsync("/api/visitors", ArrivalBody());
+        Assert.False(again.IsSuccessStatusCode);
     }
 
     [Fact]
@@ -770,9 +782,11 @@ public class CoreWorkflowTests : IClassFixture<TestApiFactory>
             idNumber = "123456789012"
         });
         Assert.True(walkIn.IsSuccessStatusCode, await walkIn.Content.ReadAsStringAsync());
+        var registeredId = VisitId((await walkIn.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data"));
 
+        Assert.Equal(!deskSaidNotThisVisitor, registeredId == bookingId);
         Assert.Equal(
-            deskSaidNotThisVisitor ? VisitStatus.Expected : VisitStatus.Cancelled,
+            deskSaidNotThisVisitor ? VisitStatus.Expected : VisitStatus.Approved,
             await StatusOfAsync(bookingId));
         if (!deskSaidNotThisVisitor)
         {

@@ -239,6 +239,25 @@ public class PurposeFieldValueDto
     public List<LookupDetailDto>? Details { get; set; }
     public string? MatchAgainst { get; set; }
     public bool? Matched { get; set; }
+    public bool? NewPerson { get; set; }
+}
+
+/// <summary>People who checked in for a lookup record (e.g. a student), for spotting a new face.</summary>
+public class LookupRecordVisitorsDto
+{
+    /// <summary>True when people have come for this record before and the visitor being registered is not one of them.</summary>
+    public bool IsNewPerson { get; set; }
+    public List<LookupRecordVisitorDto> Visitors { get; set; } = new();
+}
+
+public class LookupRecordVisitorDto
+{
+    public Guid VisitorId { get; set; }
+    public string VisitorName { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? PhotoUrl { get; set; }
+    public DateTime LastCheckInAt { get; set; }
+    public int Visits { get; set; }
 }
 
 public class LookupDetailDto
@@ -328,6 +347,61 @@ public class LookupSearchRequest
     public string? Query { get; set; }
     /// <summary>The purpose's other extra fields as typed so far, by label, for <c>{field:Label}</c> placeholders.</summary>
     public Dictionary<string, string>? Context { get; set; }
+}
+
+/// <summary>Clearing a whole master must be confirmed by typing <see cref="Phrase"/>.</summary>
+public class MasterClearRequest
+{
+    public const string Phrase = "DELETE";
+
+    public string? Confirm { get; set; }
+
+    /// <summary>Only these records (and what depends on them); null clears the whole master.</summary>
+    public List<Guid>? Ids { get; set; }
+}
+
+public class MasterClearPreviewRequest
+{
+    public List<Guid>? Ids { get; set; }
+}
+
+public record MasterClearCountDto(string Label, int Count);
+
+/// <summary>What clearing a master removes (preview) or removed.</summary>
+public class MasterClearSummaryDto
+{
+    public string Type { get; set; } = string.Empty;
+    public List<MasterClearCountDto> Items { get; set; } = [];
+}
+
+public class LookupRecheckRequest
+{
+    [MaxLength(100)]
+    public string? Query { get; set; }
+    public Dictionary<string, string>? Context { get; set; }
+    [Required, MaxLength(200)]
+    public string RecordId { get; set; } = string.Empty;
+}
+
+/// <summary>One purpose's extra-field answers from a visitor's earlier visit, offered to fill the form again.</summary>
+public class PreviousPurposeAnswersDto
+{
+    public Guid PurposeId { get; set; }
+    public string PurposeName { get; set; } = string.Empty;
+    public DateOnly VisitDate { get; set; }
+    public List<PreviousPurposeFieldDto> Fields { get; set; } = new();
+}
+
+public class PreviousPurposeFieldDto
+{
+    public Guid FieldId { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    /// <summary>Set when the field is a lookup today.</summary>
+    public Guid? LookupSourceId { get; set; }
+    /// <summary>Record and search text of a verified pick; both are needed to check it again.</summary>
+    public string? RecordId { get; set; }
+    public string? Query { get; set; }
 }
 
 public class LookupTestResultDto

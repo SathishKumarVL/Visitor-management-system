@@ -12,6 +12,13 @@ import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
 import { TextInput, FieldLabel, TextSelect } from '../components/ui/Field'
 import { ExcelImportButtons } from '../components/ExcelImportButtons'
+import {
+  ClearAllMasterButton,
+  DeleteSelectedMasterButton,
+  SelectPageHeader,
+  SelectRowCell,
+} from '../components/ClearAllMasterButton'
+import { useRowSelection } from '../lib/useRowSelection'
 import { Modal } from '../components/ui/Modal'
 import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
@@ -61,6 +68,7 @@ export function FeedbackQuestionsPage() {
     20,
     `${filterLocationId}|${sort?.key}|${sort?.dir}`,
   )
+  const selection = useRowSelection(items.map((q) => q.id))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const isSuperAdmin = hasAnyRole(useAuthStore((s) => s.user?.roles) ?? [], ['SuperAdmin'])
@@ -220,6 +228,13 @@ export function FeedbackQuestionsPage() {
             <Button variant="amber" onClick={startCreate}>
               Add question
             </Button>
+            <DeleteSelectedMasterButton
+              type="feedback-questions"
+              label="Feedback questions"
+              ids={selection.ids}
+              onDeleted={loadQuestions}
+            />
+            <ClearAllMasterButton type="feedback-questions" label="Feedback questions" onCleared={loadQuestions} />
           </div>
         ) : (
           <Button variant="secondary" onClick={() => void loadResponses()}>
@@ -312,6 +327,7 @@ export function FeedbackQuestionsPage() {
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-gray-50 text-gray-500">
                   <tr>
+                    {isSuperAdmin ? <SelectPageHeader selection={selection} pageIds={questionItems.map((q) => q.id)} /> : null}
                     <SortHeader sortKey="order" sort={sort} onSort={onSort}>#</SortHeader>
                     <SortHeader sortKey="prompt" sort={sort} onSort={onSort}>Question</SortHeader>
                     <SortHeader sortKey="location" sort={sort} onSort={onSort}>Location</SortHeader>
@@ -323,6 +339,7 @@ export function FeedbackQuestionsPage() {
                 <tbody>
                   {questionItems.map((item) => (
                     <tr key={item.id} className="border-t border-gray-100">
+                      {isSuperAdmin ? <SelectRowCell selection={selection} id={item.id} label={item.prompt} /> : null}
                       <td className="px-4 py-3">{item.sortOrder}</td>
                       <td className="px-4 py-3 font-medium">{item.prompt}</td>
                       <td className="px-4 py-3">{item.locationName || 'All locations'}</td>

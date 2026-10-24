@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiErrorMessage, visitorsApi } from '../lib/api'
 import type { VisitorListItemDto } from '../types/api'
@@ -36,13 +36,6 @@ export function CurrentlyInsidePage() {
   const [sort, setSort] = useState<SortKey>('longest')
   const [checkingOutId, setCheckingOutId] = useState<string | null>(null)
   const [momFlagId, setMomFlagId] = useState<string | null>(null)
-  const noticeRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!message && !error) return
-    noticeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [message, error])
-
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -169,18 +162,8 @@ export function CurrentlyInsidePage() {
         </Panel>
       </div>
 
-      <div ref={noticeRef} aria-live="polite" aria-atomic="true" className="scroll-mt-24">
-        {error ? (
-          <div className="mb-4">
-            <Alert tone="error">{error}</Alert>
-          </div>
-        ) : null}
-        {message ? (
-          <div className="mb-4">
-            <Alert tone="success">{message}</Alert>
-          </div>
-        ) : null}
-      </div>
+      {error ? <Alert tone="error">{error}</Alert> : null}
+      {message ? <Alert tone="success">{message}</Alert> : null}
       {loading ? <Spinner label="Loading currently inside…" /> : null}
       {!loading && filtered.length === 0 ? (
         <EmptyState

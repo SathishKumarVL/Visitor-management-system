@@ -80,8 +80,10 @@ function popupRoot(): HTMLElement {
 
 /**
  * Hides itself {@link ALERT_AUTO_HIDE_MS} after it appears; a different text message shows again for another 5 s.
+ * Errors are the exception: they stay until the user presses OK, so a failure is never missed.
  * Use `persistent` for alerts that are the page's only content or carry something the user must read or copy.
- * Errors that are not persistent pop up at the top of the screen instead of sitting in the page.
+ * Success, error and warning messages that are not persistent pop up at the top of the screen instead of sitting
+ * in the page; info notes stay in the page.
  */
 export function Alert({
   tone = 'info',
@@ -91,15 +93,22 @@ export function Alert({
   const messageKey = typeof children === 'string' || typeof children === 'number' ? String(children) : ''
   const [hiddenKey, setHiddenKey] = useState<string | null>(null)
 
+  const needsOk = tone === 'error' && !persistent
+
   useEffect(() => {
-    if (persistent) return
+    if (persistent || needsOk) return
     const timer = window.setTimeout(() => setHiddenKey(messageKey), ALERT_AUTO_HIDE_MS)
     return () => window.clearTimeout(timer)
-  }, [persistent, messageKey])
+  }, [persistent, needsOk, messageKey])
 
   const hidden = !persistent && hiddenKey === messageKey
 
-  if (tone === 'error' && !persistent) {
+  if (tone !== 'info' && !persistent) {
+    const popup = {
+      error: { role: 'alert', box: 'border-danger/30 text-danger', icon: 'bg-danger', mark: '!', close: 'text-danger/70 hover:bg-red-50 hover:text-danger' },
+      warning: { role: 'alert', box: 'border-warning/35 text-warning', icon: 'bg-warning', mark: '!', close: 'text-warning/70 hover:bg-amber-50 hover:text-warning' },
+      success: { role: 'status', box: 'border-success/30 text-success', icon: 'bg-success', mark: '✓', close: 'text-success/70 hover:bg-emerald-50 hover:text-success' },
+    }[tone]
     // The anchor lets CSS collapse the page's wrapper (e.g. "mb-4") that would otherwise leave a gap.
     return (
       <>
@@ -108,24 +117,40 @@ export function Alert({
           ? null
           : createPortal(
               <div
-                role="alert"
-                className="alert-popup pointer-events-auto flex w-full max-w-lg items-start gap-3 rounded-xl border border-danger/30 bg-white px-4 py-3 text-sm text-danger shadow-lg ring-1 ring-black/5"
+                role={popup.role}
+                className={cn(
+                  'alert-popup pointer-events-auto flex w-full max-w-lg items-start gap-3 rounded-xl border bg-white px-4 py-3 text-sm shadow-lg ring-1 ring-black/5',
+                  popup.box,
+                )}
               >
                 <span
                   aria-hidden
-                  className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs font-bold text-white"
+                  className={cn(
+                    'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white',
+                    popup.icon,
+                  )}
                 >
-                  !
+                  {popup.mark}
                 </span>
                 <div className="min-w-0 flex-1 break-words font-medium">{children}</div>
-                <button
-                  type="button"
-                  aria-label="Close"
-                  onClick={() => setHiddenKey(messageKey)}
-                  className="-mr-1 -mt-0.5 shrink-0 rounded-md px-1.5 text-base leading-none text-danger/70 hover:bg-red-50 hover:text-danger"
-                >
-                  ×
-                </button>
+                {needsOk ? (
+                  <button
+                    type="button"
+                    onClick={() => setHiddenKey(messageKey)}
+                    className="-my-1 shrink-0 rounded-lg bg-danger px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-danger"
+                  >
+                    OK
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label="Close"
+                    onClick={() => setHiddenKey(messageKey)}
+                    className={cn('-mr-1 -mt-0.5 shrink-0 rounded-md px-1.5 text-base leading-none', popup.close)}
+                  >
+                    ×
+                  </button>
+                )}
               </div>,
               popupRoot(),
             )}

@@ -35,6 +35,8 @@ public interface IVisitorService
     Task<IReadOnlyList<VisitorListItemDto>> GetExpectedAsync(DateOnly? date = null, ClaimsPrincipal? user = null);
     Task<IReadOnlyList<BookingMatchDto>> FindTodaysBookingsAsync(string? phone, Guid? visitorId);
     Task<VisitorPhoneLookupDto?> LookupByPhoneAsync(string? phone);
+    Task<IReadOnlyList<PreviousPurposeAnswersDto>> GetPreviousPurposeAnswersAsync(Guid visitorId);
+    Task<LookupRecordVisitorsDto> GetLookupRecordVisitorsAsync(Guid sourceId, string recordId, Guid? visitorId);
     Task<IReadOnlyList<VisitorListItemDto>> GetPendingApprovalsAsync(ClaimsPrincipal user);
     Task<PassDto?> GetPassAsync(Guid visitId, string webRoot);
     Task<PassDto> ReprintPassAsync(Guid visitId, ClaimsPrincipal user, string webRoot);
@@ -203,13 +205,16 @@ public class VisitorService : IVisitorService
 
         Visitor visitor;
         Visitor? newVisitor = null;
+        VisitorVisit? booking = null;
         if (request.ExpectedVisitId.HasValue)
         {
-            var expected = await _db.VisitorVisits.Include(v => v.Visitor)
+            var expected = await _db.VisitorVisits
+                .Include(v => v.Visitor)
+                .Include(v => v.VisitPurposes)
+                .Include(v => v.VisitLocations)
                 .FirstOrDefaultAsync(v => v.Id == request.ExpectedVisitId.Value)
                 ?? throw new InvalidOperationException("Expected visitor record not found.");
-            if (expected.Status is VisitStatus.Cancelled or VisitStatus.Rejected
-                or VisitStatus.Inside or VisitStatus.CheckedOut)
+            if (expected.Status != VisitStatus.Expected)
                 throw new InvalidOperationException("This booking has already been used or cancelled.");
             // A confirmed face match keeps the visit in the returning visitor's history, even when the
             // booking was made under a fresh visitor record.
@@ -220,13 +225,8 @@ public class VisitorService : IVisitorService
                 await EnsureVisitorNotAlreadyInsideAsync(recognized.Id);
             visitor = recognized ?? expected.Visitor;
             ApplyReturningVisitorProfile(visitor, request, user.Identity?.Name);
-            // The pre-registration is superseded, not erased: its visit number and audit trail stay intact.
-            expected.Status = VisitStatus.Cancelled;
-            expected.Notes = string.IsNullOrWhiteSpace(expected.Notes)
-                ? "Superseded by arrival registration."
-                : $"{expected.Notes} | Superseded by arrival registration.";
-            expected.UpdatedAt = DateTime.UtcNow;
-            expected.UpdatedBy = user.Identity?.Name;
+            // The booking becomes the visit, so one appointment is one entry with one visit number.
+            booking = expected;
         }
         else if (request.RecognizedVisitorId.HasValue)
         {
@@ -263,34 +263,41 @@ public class VisitorService : IVisitorService
             newVisitor = visitor;
         }
 
+        await MarkNewPeopleForRecordsAsync(purposeFieldValues, purposes, visitor.Id);
+
         // Approval is tenant configuration: walk-ins and scheduled visits can be gated independently.
         var needsApproval = request.IsWalkIn ? settings.WalkInApprovalRequired : settings.ApprovalRequired;
-        var visit = new VisitorVisit
+        var visit = booking ?? new VisitorVisit
         {
             TenantId = ResolveTenantId(user),
-            Visitor = visitor,
             VisitNumber = await NextVisitNumberAsync(settings.VisitorIdPrefix),
-            VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected,
-            Status = needsApproval ? VisitStatus.PendingApproval : VisitStatus.Approved,
-            VisitDate = request.VisitDate ?? AppTime.Today,
-            VisitTime = request.VisitTime ?? TimeOnly.FromDateTime(AppTime.Now),
-            DepartmentId = request.DepartmentId,
-            HostEmployeeId = host.Id,
-            HostIntercom = null,
-            PlantNumber = request.PlantNumber,
-            OtherLocationText = request.OtherLocationText,
-            PurposeNotes = request.PurposeNotes,
-            PurposeFieldsJson = PurposeFields.Write(purposeFieldValues),
-            Notes = request.Notes,
-            PassNumber = passNumber,
-            NumberOfPersons = request.NumberOfPersons < 1 ? 1 : Math.Min(request.NumberOfPersons, 99),
-            IsWalkIn = request.IsWalkIn,
-            IsGroupEmployee = groupEmployeeUserId is not null || groupEmployeeId is not null,
-            GroupEmployeeUserId = groupEmployeeUserId,
-            GroupEmployeeId = groupEmployeeId,
-            ClientRequestId = clientRequestId,
             CreatedBy = user.Identity?.Name
         };
+        visit.Visitor = visitor;
+        visit.VisitorType = request.IsWalkIn ? VisitorType.WalkIn : VisitorType.Expected;
+        visit.Status = needsApproval ? VisitStatus.PendingApproval : VisitStatus.Approved;
+        visit.VisitDate = request.VisitDate ?? AppTime.Today;
+        visit.VisitTime = request.VisitTime ?? TimeOnly.FromDateTime(AppTime.Now);
+        visit.DepartmentId = request.DepartmentId;
+        visit.HostEmployeeId = host.Id;
+        visit.HostIntercom = null;
+        visit.PlantNumber = request.PlantNumber;
+        visit.OtherLocationText = request.OtherLocationText;
+        visit.PurposeNotes = request.PurposeNotes;
+        visit.PurposeFieldsJson = PurposeFields.Write(purposeFieldValues);
+        visit.Notes = booking is not null && string.IsNullOrWhiteSpace(request.Notes) ? booking.Notes : request.Notes;
+        visit.PassNumber = passNumber;
+        visit.NumberOfPersons = request.NumberOfPersons < 1 ? 1 : Math.Min(request.NumberOfPersons, 99);
+        visit.IsWalkIn = request.IsWalkIn;
+        visit.IsGroupEmployee = groupEmployeeUserId is not null || groupEmployeeId is not null;
+        visit.GroupEmployeeUserId = groupEmployeeUserId;
+        visit.GroupEmployeeId = groupEmployeeId;
+        visit.ClientRequestId = clientRequestId;
+        if (booking is not null)
+        {
+            visit.UpdatedAt = DateTime.UtcNow;
+            visit.UpdatedBy = user.Identity?.Name;
+        }
         if (locations.Count > 0 && locations.All(l => !l.MomRequired))
         {
             visit.MomNotRequired = true;
@@ -298,36 +305,48 @@ public class VisitorService : IVisitorService
             visit.MomNotRequiredAt = DateTime.UtcNow;
         }
 
-        foreach (var p in purposes)
-            visit.VisitPurposes.Add(new VisitorVisitPurpose { VisitPurposeId = p.Id });
-        foreach (var l in locations)
-            visit.VisitLocations.Add(new VisitorVisitLocation { LocationId = l.Id });
-
-        if (needsApproval)
+        var purposeIdSet = purposes.Select(p => p.Id).ToHashSet();
+        foreach (var stale in visit.VisitPurposes.Where(p => !purposeIdSet.Contains(p.VisitPurposeId)).ToList())
+            visit.VisitPurposes.Remove(stale);
+        foreach (var p in purposes.Where(p => visit.VisitPurposes.All(x => x.VisitPurposeId != p.Id)).ToList())
         {
-            visit.Approvals.Add(new Approval
+            var link = new VisitorVisitPurpose { VisitPurposeId = p.Id };
+            visit.VisitPurposes.Add(link);
+            if (booking is not null) _db.VisitorVisitPurposes.Add(link);
+        }
+        var locationIdSet = locations.Select(l => l.Id).ToHashSet();
+        foreach (var stale in visit.VisitLocations.Where(l => !locationIdSet.Contains(l.LocationId)).ToList())
+            visit.VisitLocations.Remove(stale);
+        foreach (var l in locations.Where(l => visit.VisitLocations.All(x => x.LocationId != l.Id)).ToList())
+        {
+            var link = new VisitorVisitLocation { LocationId = l.Id };
+            visit.VisitLocations.Add(link);
+            if (booking is not null) _db.VisitorVisitLocations.Add(link);
+        }
+
+        var approval = needsApproval
+            ? new Approval
             {
                 Status = ApprovalStatus.Pending,
                 HostEmployeeId = host.Id,
                 RequestedToUserId = host.UserId
-            });
-        }
-        else
-        {
-            visit.Approvals.Add(new Approval
+            }
+            : new Approval
             {
                 Status = ApprovalStatus.Approved,
                 HostEmployeeId = host.Id,
                 ActionByUserId = user.FindFirstValue(ClaimTypes.NameIdentifier),
                 ActionAt = DateTime.UtcNow,
                 Notes = "Auto-approved based on settings"
-            });
-        }
+            };
+        visit.Approvals.Add(approval);
+        // Its Id is set client-side, so on an already-saved booking EF would otherwise issue an UPDATE.
+        if (booking is not null) _db.Approvals.Add(approval);
 
-        _db.VisitorVisits.Add(visit);
+        if (booking is null) _db.VisitorVisits.Add(visit);
         try
         {
-            await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix);
+            await SaveNewVisitAsync(visit, newVisitor, settings.VisitorIdPrefix, keepVisitNumber: booking is not null);
         }
         catch (DbUpdateException ex) when (clientRequestId is Guid racing && IsClientRequestTaken(ex))
         {
@@ -714,11 +733,23 @@ public class VisitorService : IVisitorService
                     VisitingPerson = host.FullName,
                     VisitingPersonEmail = host.Email,
                     VisitorName = visitor.FullName,
-                    VisitorEmail = visitor.Email,
+                    Salutation = SalutationFor(visitor.Gender),
+                    VisitorEmail = full.IsGroupEmployee ? null : visitor.Email,
                     Company = visitor.CompanyName ?? "",
                     VisitorNumber = visit.EntryNumber ?? visitor.VisitorNumber,
                 };
             }
+        }
+
+        // "Your appointment at {{Location}}" must not read "at  is confirmed" for a booking without a location.
+        if (string.IsNullOrWhiteSpace(ctx.Location))
+        {
+            var organisation = await _db.Tenants.AsNoTracking()
+                .Where(t => t.Id == visit.TenantId)
+                .Select(t => t.Name)
+                .FirstOrDefaultAsync();
+            if (!string.IsNullOrWhiteSpace(organisation))
+                ctx = ctx with { Location = organisation };
         }
 
         // Sent off the request path: a slow or failing mail server must not hold the booking form open.
@@ -1466,6 +1497,163 @@ public class VisitorService : IVisitorService
             })
             .ToListAsync();
         return visitor;
+    }
+
+    public async Task<IReadOnlyList<PreviousPurposeAnswersDto>> GetPreviousPurposeAnswersAsync(Guid visitorId)
+    {
+        const int visitsScanned = 30;
+        const int maxAnswerSets = 5;
+        var visits = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.VisitorId == visitorId && v.PurposeFieldsJson != null
+                        && v.Status != VisitStatus.Cancelled && v.Status != VisitStatus.Rejected)
+            .OrderByDescending(v => v.VisitDate).ThenByDescending(v => v.CreatedAt)
+            .Take(visitsScanned)
+            .Select(v => new { v.VisitDate, v.PurposeFieldsJson })
+            .ToListAsync();
+        if (visits.Count == 0) return [];
+
+        // Only answers to fields that still exist on an active purpose can fill today's form.
+        var purposes = await _db.VisitPurposes.AsNoTracking()
+            .Where(p => p.IsActive && p.FieldsJson != null)
+            .Select(p => new { p.Id, p.Name, p.FieldsJson })
+            .ToListAsync();
+        var fields = new Dictionary<Guid, (Guid PurposeId, string PurposeName, PurposeField Field)>();
+        foreach (var p in purposes)
+            foreach (var f in PurposeFields.ReadDefinitions(p.FieldsJson))
+                fields[f.Id] = (p.Id, p.Name, f);
+
+        var result = new List<PreviousPurposeAnswersDto>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var visit in visits)
+        {
+            var groups = PurposeFields.ReadValues(visit.PurposeFieldsJson)
+                .Where(a => fields.ContainsKey(a.FieldId) && !string.IsNullOrWhiteSpace(a.Value))
+                .GroupBy(a => fields[a.FieldId].PurposeId);
+            foreach (var group in groups)
+            {
+                var answers = group.ToList();
+                // The same picked record is one entry even when its text fields changed (e.g. next year's class).
+                var picked = answers.Where(a => a.Verified == true && !string.IsNullOrEmpty(a.RecordId)).ToList();
+                var key = picked.Count > 0
+                    ? $"{group.Key}|{string.Join("|", picked.OrderBy(a => a.FieldId).Select(a => $"{a.FieldId}#{a.RecordId}"))}"
+                    : $"{group.Key}|{string.Join("|", answers.OrderBy(a => a.FieldId).Select(a => $"{a.FieldId}={a.Value.Trim()}"))}";
+                if (!seen.Add(key)) continue;
+
+                var owner = fields[answers[0].FieldId];
+                result.Add(new PreviousPurposeAnswersDto
+                {
+                    PurposeId = group.Key,
+                    PurposeName = owner.PurposeName,
+                    VisitDate = visit.VisitDate,
+                    Fields = answers.Select(a =>
+                    {
+                        var field = fields[a.FieldId].Field;
+                        var lookup = PurposeFields.IsLookup(field);
+                        var verified = lookup && a.Verified == true && !string.IsNullOrEmpty(a.RecordId);
+                        return new PreviousPurposeFieldDto
+                        {
+                            FieldId = a.FieldId,
+                            Label = field.Label,
+                            Value = a.Value,
+                            LookupSourceId = lookup ? field.LookupSourceId : null,
+                            RecordId = verified ? a.RecordId : null,
+                            Query = verified ? a.Query : null,
+                        };
+                    }).ToList(),
+                });
+                if (result.Count >= maxAnswerSets) return result;
+            }
+        }
+        return result;
+    }
+
+    public async Task<LookupRecordVisitorsDto> GetLookupRecordVisitorsAsync(Guid sourceId, string recordId, Guid? visitorId)
+    {
+        const int maxShown = 8;
+        var people = await PeopleWhoCameForRecordAsync(sourceId, recordId);
+        if (people.Count == 0) return new LookupRecordVisitorsDto();
+
+        var ids = people.Keys.ToList();
+        var visitors = await _db.Visitors.AsNoTracking()
+            .Where(v => ids.Contains(v.Id))
+            .Select(v => new
+            {
+                v.Id,
+                v.FullName,
+                v.Phone,
+                PhotoPath = v.Photos.Where(p => p.IsPrimary).Select(p => p.FilePath).FirstOrDefault()
+            })
+            .ToListAsync();
+        return new LookupRecordVisitorsDto
+        {
+            IsNewPerson = visitorId is not Guid id || !people.ContainsKey(id),
+            Visitors = visitors
+                .Select(v => new LookupRecordVisitorDto
+                {
+                    VisitorId = v.Id,
+                    VisitorName = v.FullName,
+                    Phone = v.Phone,
+                    PhotoUrl = v.PhotoPath is null ? null : _media.ToPublicApiPath(Path.GetFileName(v.PhotoPath)),
+                    LastCheckInAt = AsUtc(people[v.Id].LastCheckIn)!.Value,
+                    Visits = people[v.Id].Visits,
+                })
+                .OrderByDescending(v => v.LastCheckInAt)
+                .Take(maxShown)
+                .ToList(),
+        };
+    }
+
+    /// <summary>Visitors who checked in with a verified pick of this record, with their latest check-in and visit count.</summary>
+    private async Task<Dictionary<Guid, (DateTime LastCheckIn, int Visits)>> PeopleWhoCameForRecordAsync(Guid sourceId, string recordId)
+    {
+        var people = new Dictionary<Guid, (DateTime LastCheckIn, int Visits)>();
+        recordId = recordId.Trim();
+        if (recordId.Length == 0) return people;
+
+        var sourceKey = sourceId.ToString();
+        var fieldIds = (await _db.VisitPurposes.AsNoTracking()
+                .Where(p => p.FieldsJson != null && p.FieldsJson.Contains(sourceKey))
+                .Select(p => p.FieldsJson)
+                .ToListAsync())
+            .SelectMany(PurposeFields.ReadDefinitions)
+            .Where(f => f.LookupSourceId == sourceId)
+            .Select(f => f.Id)
+            .ToHashSet();
+        if (fieldIds.Count == 0) return people;
+
+        // Narrow in SQL by the id as it appears in the stored JSON, then confirm field and record exactly.
+        var needle = JsonSerializer.Serialize(recordId)[1..^1];
+        var visits = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.CheckInAt != null && v.PurposeFieldsJson != null && v.PurposeFieldsJson.Contains(needle))
+            .Select(v => new { v.VisitorId, CheckInAt = v.CheckInAt!.Value, v.PurposeFieldsJson })
+            .ToListAsync();
+        foreach (var visit in visits)
+        {
+            var forRecord = PurposeFields.ReadValues(visit.PurposeFieldsJson)
+                .Any(a => a.Verified == true && fieldIds.Contains(a.FieldId) && string.Equals(a.RecordId, recordId, StringComparison.Ordinal));
+            if (!forRecord) continue;
+            people[visit.VisitorId] = people.TryGetValue(visit.VisitorId, out var seen)
+                ? (visit.CheckInAt > seen.LastCheckIn ? visit.CheckInAt : seen.LastCheckIn, seen.Visits + 1)
+                : (visit.CheckInAt, 1);
+        }
+        return people;
+    }
+
+    /// <summary>Flags picked records (e.g. a student) that others have come for but this visitor never has.</summary>
+    private async Task MarkNewPeopleForRecordsAsync(List<PurposeFieldValue> values, IEnumerable<VisitPurpose> purposes, Guid visitorId)
+    {
+        var sourceByField = purposes
+            .SelectMany(p => PurposeFields.ReadDefinitions(p.FieldsJson))
+            .Where(PurposeFields.IsLookup)
+            .GroupBy(f => f.Id)
+            .ToDictionary(g => g.Key, g => g.First().LookupSourceId!.Value);
+        foreach (var value in values)
+        {
+            if (value.Verified != true || string.IsNullOrEmpty(value.RecordId)
+                || !sourceByField.TryGetValue(value.FieldId, out var sourceId)) continue;
+            var people = await PeopleWhoCameForRecordAsync(sourceId, value.RecordId);
+            if (people.Count > 0 && !people.ContainsKey(visitorId)) value.NewPerson = true;
+        }
     }
 
     /// <summary>
@@ -2611,8 +2799,11 @@ public class VisitorService : IVisitorService
     /// same highest number, so allocation and insert happen inside one transaction holding that lock.
     /// The unique indexes stay the final authority; the retry covers numbers created outside this path.
     /// </summary>
-    private async Task SaveNewVisitAsync(VisitorVisit visit, Visitor? newVisitor, string prefix)
+    private async Task SaveNewVisitAsync(VisitorVisit visit, Visitor? newVisitor, string prefix, bool keepVisitNumber = false)
     {
+        var dailyPrefix = DailyNumberPrefix(prefix, visit.VisitDate);
+        var keepEntryNumber = keepVisitNumber
+            && visit.EntryNumber?.StartsWith(dailyPrefix, StringComparison.Ordinal) == true;
         const int maxAttempts = 5;
         for (var attempt = 1; ; attempt++)
         {
@@ -2624,13 +2815,15 @@ public class VisitorService : IVisitorService
                     await using var tx = await _db.Database.BeginTransactionAsync();
                     await AcquireNumberAllocationLockAsync(visit.TenantId, prefix);
 
-                    visit.VisitNumber = await NextVisitNumberAsync(prefix);
+                    if (!keepVisitNumber)
+                        visit.VisitNumber = await NextVisitNumberAsync(prefix);
                     if (newVisitor is not null)
                         newVisitor.VisitorNumber = await NextVisitorNumberAsync(prefix);
-                    visit.EntryNumber = newVisitor is not null
-                        && newVisitor.VisitorNumber.StartsWith(DailyNumberPrefix(prefix, visit.VisitDate), StringComparison.Ordinal)
-                            ? newVisitor.VisitorNumber
-                            : await NextEntryNumberAsync(prefix, visit.VisitDate);
+                    if (!keepEntryNumber)
+                        visit.EntryNumber = newVisitor is not null
+                            && newVisitor.VisitorNumber.StartsWith(dailyPrefix, StringComparison.Ordinal)
+                                ? newVisitor.VisitorNumber
+                                : await NextEntryNumberAsync(prefix, visit.VisitDate);
 
                     await _db.SaveChangesAsync();
                     await tx.CommitAsync();

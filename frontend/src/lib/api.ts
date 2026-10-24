@@ -24,7 +24,11 @@ import type {
   LookupSourceDto,
   LookupSourceOptionDto,
   LookupSourceUpsertRequest,
+  LookupRecordVisitorsDto,
   LookupTestResultDto,
+  MasterClearSummaryDto,
+  MasterClearType,
+  PreviousPurposeAnswersDto,
   MyDetailsDto,
   MailContentTemplateDto,
   MailContentUpsertRequest,
@@ -334,6 +338,14 @@ export const visitorsApi = {
     unwrapNullable(api.get<ApiResponse<VisitorPhoneLookupDto | null>>('/visitors/lookup', { params: { phone } })),
   matchBookings: (params: { phone?: string; visitorId?: string }) =>
     unwrap(api.get<ApiResponse<BookingMatchDto[]>>('/visitors/expected/match', { params })),
+  previousPurposeAnswers: (visitorId: string) =>
+    unwrap(api.get<ApiResponse<PreviousPurposeAnswersDto[]>>('/visitors/previous-purpose-answers', { params: { visitorId } })),
+  recordVisitors: (params: { sourceId: string; recordId: string; visitorId?: string | null }) =>
+    unwrap(
+      api.get<ApiResponse<LookupRecordVisitorsDto>>('/visitors/record-visitors', {
+        params: { sourceId: params.sourceId, recordId: params.recordId, visitorId: params.visitorId || undefined },
+      }),
+    ),
   createExpected: (body: ExpectedVisitorRequest) =>
     unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors/expected', body)),
   updateExpected: (id: string, body: ExpectedVisitorRequest) =>
@@ -412,6 +424,14 @@ export const employeeMasterApi = {
 }
 
 export const mastersApi = {
+  clearPreview: (type: MasterClearType, ids?: string[]) =>
+    unwrap(
+      ids
+        ? api.post<ApiResponse<MasterClearSummaryDto>>(`/masters/${type}/clear-preview`, { ids })
+        : api.get<ApiResponse<MasterClearSummaryDto>>(`/masters/${type}/clear-preview`),
+    ),
+  clearAll: (type: MasterClearType, confirm: string, ids?: string[]) =>
+    unwrap(api.post<ApiResponse<MasterClearSummaryDto>>(`/masters/${type}/clear`, { confirm, ids })),
   departments: (activeOnly = true, locationId?: string) =>
     unwrap(api.get<ApiResponse<MasterItemDto[]>>('/masters/departments', { params: { activeOnly, locationId } })),
   createDepartment: (body: MasterUpsertRequest) =>
@@ -550,6 +570,9 @@ export const lookupsApi = {
     unwrap(api.post<ApiResponse<LookupMatchDto[]>>(`/lookups/${sourceId}/search`, { query, context }, { signal })),
   check: (token: string, telephone: string, email: string) =>
     unwrap(api.post<ApiResponse<LookupCheckResultDto>>('/lookups/check', { token, telephone, email })),
+  /** Null when the earlier pick is no longer found with these details. */
+  recheck: (sourceId: string, body: { query: string; context: Record<string, string>; recordId: string }) =>
+    unwrapNullable(api.post<ApiResponse<LookupMatchDto | null>>(`/lookups/${sourceId}/recheck`, body)),
 }
 
 export const usersApi = {

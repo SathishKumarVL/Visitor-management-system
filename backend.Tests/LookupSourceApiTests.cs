@@ -216,7 +216,200 @@ public class LookupSourceApiTests : IClassFixture<TestApiFactory>
         }
     }
 
+    [Fact]
+    public async Task Returning_Visitor_Gets_Previous_Answers_And_The_Pick_Is_Checked_Again()
+    {
+        var admin = await LoginAsync("superadmin");
+        var reception = await LoginAsync("reception");
+        var sourceId = await CreatePostSourceAsync(admin);
+        var (purposeId, fields) = await CreateClassSectionStudentPurposeAsync(admin, sourceId);
+        try
+        {
+            var search = await reception.PostAsJsonAsync($"/api/lookups/{sourceId}/search", new
+            {
+                query = "rak",
+                context = new Dictionary<string, string> { ["Class"] = "1st", ["Section"] = "A" },
+            });
+            var token = JsonDocument.Parse(await search.Content.ReadAsStringAsync()).RootElement.GetProperty("data")[0].GetProperty("token").GetString()!;
+            var visit = await RegisterAsync(reception, purposeId, "9000000081",
+                new { fieldId = fields["Class"], value = "1st" },
+                new { fieldId = fields["Section"], value = "A" },
+                new { fieldId = fields["Student"], lookupToken = token });
+            var visitorId = visit.GetProperty("visitorId").GetGuid();
+
+            var host = await LoginAsync("host");
+            Assert.Equal(HttpStatusCode.Forbidden, (await host.GetAsync($"/api/visitors/previous-purpose-answers?visitorId={visitorId}")).StatusCode);
+
+            var previous = (await reception.GetFromJsonAsync<JsonElement>($"/api/visitors/previous-purpose-answers?visitorId={visitorId}", JsonOptions)).GetProperty("data");
+            var set = Assert.Single(previous.EnumerateArray());
+            Assert.Equal(purposeId, set.GetProperty("purposeId").GetGuid());
+            var answers = set.GetProperty("fields").EnumerateArray().ToDictionary(f => f.GetProperty("label").GetString()!);
+            Assert.Equal("1st", answers["Class"].GetProperty("value").GetString());
+            var student = answers["Student"];
+            Assert.Equal("RAKSHAN - Class 1st-A (Adm 94623)", student.GetProperty("value").GetString());
+            Assert.Equal(sourceId, student.GetProperty("lookupSourceId").GetGuid());
+            Assert.Equal("94623", student.GetProperty("recordId").GetString());
+            Assert.Equal("rak", student.GetProperty("query").GetString());
+
+            var recheck = await reception.PostAsJsonAsync($"/api/lookups/{sourceId}/recheck", new
+            {
+                query = "rak",
+                context = new Dictionary<string, string> { ["Class"] = "1st", ["Section"] = "A" },
+                recordId = "94623",
+            });
+            var fresh = (await recheck.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+            Assert.Equal("94623", fresh.GetProperty("recordId").GetString());
+            var freshToken = fresh.GetProperty("token").GetString()!;
+            Assert.NotEmpty(freshToken);
+
+            var promoted = await reception.PostAsJsonAsync($"/api/lookups/{sourceId}/recheck", new
+            {
+                query = "rak",
+                context = new Dictionary<string, string> { ["Class"] = "2nd", ["Section"] = "A" },
+                recordId = "94623",
+            });
+            Assert.True(promoted.IsSuccessStatusCode, await promoted.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, (await promoted.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data").ValueKind);
+
+            var again = await RegisterAsync(reception, purposeId, "9000000082",
+                new { fieldId = fields["Class"], value = "1st" },
+                new { fieldId = fields["Section"], value = "A" },
+                new { fieldId = fields["Student"], lookupToken = freshToken });
+            var saved = again.GetProperty("purposeFields").EnumerateArray().Single(f => f.GetProperty("label").GetString() == "Student");
+            Assert.True(saved.GetProperty("verified").GetBoolean());
+        }
+        finally
+        {
+            await RetirePurposeAsync(purposeId);
+            await DeleteSourceAsync(admin, sourceId);
+        }
+    }
+
+    [Fact]
+    public async Task A_New_Person_Coming_For_A_Student_Is_Flagged()
+    {
+        var admin = await LoginAsync("superadmin");
+        var reception = await LoginAsync("reception");
+        var sourceId = await CreatePostSourceAsync(admin);
+        var (purposeId, fields) = await CreateClassSectionStudentPurposeAsync(admin, sourceId);
+        try
+        {
+            async Task<string> PickAsync()
+            {
+                var search = await reception.PostAsJsonAsync($"/api/lookups/{sourceId}/search", new
+                {
+                    query = "rak",
+                    context = new Dictionary<string, string> { ["Class"] = "1st", ["Section"] = "A" },
+                });
+                return JsonDocument.Parse(await search.Content.ReadAsStringAsync()).RootElement.GetProperty("data")[0].GetProperty("token").GetString()!;
+            }
+            object[] Answers(string token) =>
+            [
+                new { fieldId = fields["Class"], value = "1st" },
+                new { fieldId = fields["Section"], value = "A" },
+                new { fieldId = fields["Student"], lookupToken = token },
+            ];
+            string RecordVisitorsUrl(Guid? visitorId) =>
+                $"/api/visitors/record-visitors?sourceId={sourceId}&recordId=94623" + (visitorId is Guid id ? $"&visitorId={id}" : "");
+
+            var none = (await reception.GetFromJsonAsync<JsonElement>(RecordVisitorsUrl(null), JsonOptions)).GetProperty("data");
+            Assert.False(none.GetProperty("isNewPerson").GetBoolean());
+            Assert.Empty(none.GetProperty("visitors").EnumerateArray());
+
+            var first = await RegisterAsync(reception, purposeId, "9000000083", Answers(await PickAsync()));
+            var firstStudent = first.GetProperty("purposeFields").EnumerateArray().Single(f => f.GetProperty("label").GetString() == "Student");
+            Assert.NotEqual(JsonValueKind.True, firstStudent.GetProperty("newPerson").ValueKind);
+            var father = first.GetProperty("visitorId").GetGuid();
+
+            var notCheckedIn = (await reception.GetFromJsonAsync<JsonElement>(RecordVisitorsUrl(null), JsonOptions)).GetProperty("data");
+            Assert.Empty(notCheckedIn.GetProperty("visitors").EnumerateArray());
+
+            using (var scope = _factory.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                var visitId = first.GetProperty("visitId").GetGuid();
+                var visit = await db.VisitorVisits.IgnoreQueryFilters().FirstAsync(v => v.Id == visitId);
+                visit.CheckInAt = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+            }
+
+            var known = (await reception.GetFromJsonAsync<JsonElement>(RecordVisitorsUrl(father), JsonOptions)).GetProperty("data");
+            Assert.False(known.GetProperty("isNewPerson").GetBoolean());
+            var earlier = Assert.Single(known.GetProperty("visitors").EnumerateArray());
+            Assert.Equal(father, earlier.GetProperty("visitorId").GetGuid());
+            Assert.Equal(1, earlier.GetProperty("visits").GetInt32());
+
+            var stranger = (await reception.GetFromJsonAsync<JsonElement>(RecordVisitorsUrl(null), JsonOptions)).GetProperty("data");
+            Assert.True(stranger.GetProperty("isNewPerson").GetBoolean());
+
+            var host = await LoginAsync("host");
+            Assert.Equal(HttpStatusCode.Forbidden, (await host.GetAsync(RecordVisitorsUrl(null))).StatusCode);
+
+            var second = await RegisterAsync(reception, purposeId, "9000000084", Answers(await PickAsync()));
+            var secondStudent = second.GetProperty("purposeFields").EnumerateArray().Single(f => f.GetProperty("label").GetString() == "Student");
+            Assert.True(secondStudent.GetProperty("newPerson").GetBoolean());
+        }
+        finally
+        {
+            await RetirePurposeAsync(purposeId);
+            await DeleteSourceAsync(admin, sourceId);
+        }
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private static async Task<Guid> CreatePostSourceAsync(HttpClient admin)
+    {
+        var create = await admin.PostAsJsonAsync("/api/settings/lookup-sources", new
+        {
+            name = $"Students {Guid.NewGuid():N}",
+            searchUrl = "https://api.school.example.test/api/Student/StudentBasicInfo",
+            httpMethod = "POST",
+            bodyTemplate = """{ "class": "{field:Class}", "section": "{field:Section}", "fullName": "{query}" }""",
+            apiKeyHeader = "Authorization",
+            apiKey = "Bearer " + ApiKey,
+            resultsPath = "data",
+            idPath = "admissionNo",
+            displayTemplate = "{fullName} - Class {class}-{section} (Adm {admissionNo})",
+            minChars = 3,
+            timeoutSeconds = 5,
+            isActive = true,
+        });
+        var body = await create.Content.ReadAsStringAsync();
+        Assert.True(create.IsSuccessStatusCode, body);
+        return JsonDocument.Parse(body).RootElement.GetProperty("data").GetProperty("id").GetGuid();
+    }
+
+    private async Task<(Guid PurposeId, Dictionary<string, Guid> Fields)> CreateClassSectionStudentPurposeAsync(HttpClient admin, Guid sourceId)
+    {
+        Guid locationId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            locationId = await db.Locations.IgnoreQueryFilters()
+                .Where(l => l.IsActive && l.TenantId == WellKnownTenants.TiaanoId)
+                .Select(l => l.Id)
+                .FirstAsync();
+        }
+        var create = await admin.PostAsJsonAsync("/api/masters/purposes", new
+        {
+            name = $"Parent visit {Guid.NewGuid():N}",
+            sortOrder = 9999,
+            isActive = true,
+            locationId,
+            fields = new object[]
+            {
+                new { label = "Class", isRequired = true, type = "text" },
+                new { label = "Section", isRequired = true, type = "text" },
+                new { label = "Student", isRequired = true, type = "lookup", lookupSourceId = sourceId },
+            },
+        });
+        Assert.True(create.IsSuccessStatusCode, await create.Content.ReadAsStringAsync());
+        var purpose = (await create.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data");
+        var fields = purpose.GetProperty("fields").EnumerateArray()
+            .ToDictionary(f => f.GetProperty("label").GetString()!, f => f.GetProperty("id").GetGuid());
+        return (purpose.GetProperty("id").GetGuid(), fields);
+    }
 
     private static object SourceBody(string name, string url = "https://school.example.test/api/students?search={query}",
         string? apiKey = ApiKey, bool block = false) => new
@@ -276,7 +469,7 @@ public class LookupSourceApiTests : IClassFixture<TestApiFactory>
         return (purpose.GetProperty("id").GetGuid(), field.GetProperty("id").GetGuid(), name);
     }
 
-    private async Task<object> RegisterBodyAsync(Guid purposeId, string telephone, object field)
+    private async Task<object> RegisterBodyAsync(Guid purposeId, string telephone, params object[] fields)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -294,7 +487,7 @@ public class LookupSourceApiTests : IClassFixture<TestApiFactory>
             departmentId = host.DepartmentId,
             hostEmployeeId = host.Id,
             purposeIds = new[] { purposeId },
-            purposeFields = new[] { field },
+            purposeFields = fields,
             locationIds = Array.Empty<Guid>(),
             numberOfPersons = 1,
             isWalkIn = true,
@@ -305,9 +498,9 @@ public class LookupSourceApiTests : IClassFixture<TestApiFactory>
         };
     }
 
-    private async Task<JsonElement> RegisterAsync(HttpClient reception, Guid purposeId, string telephone, object field)
+    private async Task<JsonElement> RegisterAsync(HttpClient reception, Guid purposeId, string telephone, params object[] fields)
     {
-        var saved = await reception.PostAsJsonAsync("/api/visitors", await RegisterBodyAsync(purposeId, telephone, field));
+        var saved = await reception.PostAsJsonAsync("/api/visitors", await RegisterBodyAsync(purposeId, telephone, fields));
         Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
         var visitId = (await saved.Content.ReadFromJsonAsync<JsonElement>(JsonOptions)).GetProperty("data").GetProperty("visitId").GetGuid();
         return (await reception.GetFromJsonAsync<JsonElement>($"/api/visitors/{visitId}", JsonOptions)).GetProperty("data");
@@ -367,9 +560,11 @@ public class LookupSourceApiTests : IClassFixture<TestApiFactory>
                 stub.LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
                 if (stub.LastAuthorization != "Bearer " + ApiKey || request.Content?.Headers.ContentType?.MediaType != "application/json")
                     return new HttpResponseMessage(HttpStatusCode.Unauthorized);
-                const string students = """
-                    { "message": "success", "data": [ { "fullName": "RAKSHAN", "class": "1st", "section": "A", "admissionNo": "94623" } ] }
-                    """;
+                using var sent = JsonDocument.Parse(stub.LastBody ?? "{}");
+                var inFirstClass = !sent.RootElement.TryGetProperty("class", out var cls) || cls.GetString() is "" or "1st";
+                var students = inFirstClass
+                    ? """{ "message": "success", "data": [ { "fullName": "RAKSHAN", "class": "1st", "section": "A", "admissionNo": "94623" } ] }"""
+                    : """{ "message": "success", "data": [] }""";
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(students, Encoding.UTF8, "application/json") };
             }
             return HandleGet(request);
