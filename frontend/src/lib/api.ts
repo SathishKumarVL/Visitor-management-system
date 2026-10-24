@@ -350,6 +350,8 @@ export const visitorsApi = {
     unwrap(api.post<ApiResponse<VisitorDetailDto>>('/visitors/expected', body)),
   updateExpected: (id: string, body: ExpectedVisitorRequest) =>
     unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/expected/${id}`, body)),
+  cancelExpected: (id: string, reason: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>(`/visitors/expected/${id}/cancel`, { reason: reason.trim() || null })),
   checkIn: (id: string, photoBase64?: string | null) =>
     unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {
       occurredAt: new Date().toISOString(),

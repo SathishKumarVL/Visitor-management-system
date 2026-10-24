@@ -825,6 +825,12 @@ public class FaceCheckoutMatchDto
     public double Similarity { get; set; }
 }
 
+public class CancelAppointmentRequest
+{
+    [MaxLength(500)]
+    public string? Reason { get; set; }
+}
+
 public class ExpectedVisitorRequest
 {
     [Required, MaxLength(150)]

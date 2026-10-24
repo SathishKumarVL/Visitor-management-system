@@ -26,7 +26,8 @@ public record VisitMailContext(
     string MomActionItems = "",
     string MomNextMeetingDate = "",
     string MomSendKey = "",
-    string AppointmentSendKey = "");
+    string AppointmentSendKey = "",
+    string CancelReason = "");
 
 /// <summary>Renders Mail Content templates and queues check-in / check-out / appointment / minutes emails.</summary>
 public interface IVisitMailService
@@ -34,6 +35,8 @@ public interface IVisitMailService
     Task SendCheckInAsync(VisitMailContext ctx);
     Task SendCheckOutAsync(VisitMailContext ctx);
     Task SendAppointmentAsync(VisitMailContext ctx);
+    /// <summary>Tells the host, and the visitor unless <paramref name="hostOnly"/>, that the appointment is off.</summary>
+    Task SendAppointmentCancelledAsync(VisitMailContext ctx, bool hostOnly = false);
     Task SendMeetingMinutesAsync(VisitMailContext ctx);
 }
 
@@ -154,10 +157,14 @@ public class VisitMailService : IVisitMailService
 
     public async Task SendAppointmentAsync(VisitMailContext ctx)
     {
+        // A re-send after an edit must not read like a second, separate appointment.
+        var subjectPrefix = string.IsNullOrEmpty(ctx.AppointmentSendKey) ? "" : "Updated: ";
+
         // The employee and the visitor get different wording, so each has its own Mail Content template.
         if (!string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail))
         {
             var (subject, body) = await RenderAsync(MailContentKind.Appointment, ctx);
+            subject = subjectPrefix + subject;
             await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
                 $"appointment:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
         }
@@ -170,12 +177,40 @@ public class VisitMailService : IVisitMailService
         {
             if (!MaySendVisitorCopy(ctx, "Appointment")) return;
             var (subject, body) = await RenderAsync(MailContentKind.AppointmentVisitor, ctx);
+            subject = subjectPrefix + subject;
             await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
                 $"appointment-visitor:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
         }
         else
         {
             _logger.LogWarning("Appointment visitor email skipped — {Name} has no email.", ctx.VisitorName);
+        }
+    }
+
+    public async Task SendAppointmentCancelledAsync(VisitMailContext ctx, bool hostOnly = false)
+    {
+        if (!string.IsNullOrWhiteSpace(ctx.VisitingPersonEmail))
+        {
+            var (subject, body) = await RenderAsync(MailContentKind.AppointmentCancelled, ctx);
+            await _notifications.NotifyAsync("Email", ctx.VisitingPersonEmail.Trim(), subject, body,
+                $"appointment-cancel:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitingPersonEmail.Trim()}", ctx.LocationId);
+        }
+        else
+        {
+            _logger.LogWarning("Appointment cancellation email skipped — host {Host} has no email.", ctx.VisitingPerson);
+        }
+
+        if (hostOnly) return;
+        if (!string.IsNullOrWhiteSpace(ctx.VisitorEmail))
+        {
+            if (!MaySendVisitorCopy(ctx, "Appointment cancellation")) return;
+            var (subject, body) = await RenderAsync(MailContentKind.AppointmentCancelledVisitor, ctx);
+            await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+                $"appointment-cancel-visitor:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
+        }
+        else
+        {
+            _logger.LogWarning("Appointment cancellation visitor email skipped — {Name} has no email.", ctx.VisitorName);
         }
     }
 
@@ -204,7 +239,8 @@ public class VisitMailService : IVisitMailService
             body = template.Body;
         }
 
-        if (kind is MailContentKind.Appointment or MailContentKind.AppointmentVisitor)
+        if (kind is MailContentKind.Appointment or MailContentKind.AppointmentVisitor
+            or MailContentKind.AppointmentCancelled or MailContentKind.AppointmentCancelledVisitor)
             body = EnsurePurposeLine(body);
         if (kind is MailContentKind.CheckIn && !string.IsNullOrWhiteSpace(ctx.MeetingHall))
             body = EnsureMeetingHallLine(body);
@@ -329,6 +365,7 @@ public class VisitMailService : IVisitMailService
         sb.Replace("{{Decisions}}", string.IsNullOrWhiteSpace(ctx.MomDecisions) ? "—" : ctx.MomDecisions);
         sb.Replace("{{ActionItems}}", string.IsNullOrWhiteSpace(ctx.MomActionItems) ? "—" : ctx.MomActionItems);
         sb.Replace("{{NextMeetingDate}}", string.IsNullOrWhiteSpace(ctx.MomNextMeetingDate) ? "—" : ctx.MomNextMeetingDate);
+        sb.Replace("{{Reason}}", string.IsNullOrWhiteSpace(ctx.CancelReason) ? "—" : ctx.CancelReason);
         sb.Replace("{{Date}}", ctx.MomentLocal.ToString("dd MMM yyyy"));
         sb.Replace("{{Time}}", ctx.MomentLocal.ToString("hh:mm tt"));
         return sb.ToString();

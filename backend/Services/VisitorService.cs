@@ -19,6 +19,8 @@ public interface IVisitorService
     Task<VisitorDetailDto> RegisterAsync(RegisterVisitorRequest request, ClaimsPrincipal user, string webRoot);
     Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user);
     Task<VisitorDetailDto> UpdateExpectedAsync(Guid visitId, ExpectedVisitorRequest request, ClaimsPrincipal user);
+    /// <summary>Cancels a booking that has not arrived yet and emails the host and the visitor.</summary>
+    Task CancelExpectedAsync(Guid visitId, string? reason, ClaimsPrincipal user);
     Task<PagedResult<VisitorListItemDto>> SearchAsync(VisitorSearchRequest request, ClaimsPrincipal user, int warningMinutes);
     Task<VisitorDetailDto?> GetAsync(Guid visitId, ClaimsPrincipal user, string encryptionKey);
     Task<VisitorListItemDto> ApproveAsync(Guid visitId, ClaimsPrincipal user);
@@ -576,6 +578,8 @@ public class VisitorService : IVisitorService
         if (string.IsNullOrWhiteSpace(request.Phone))
             throw new InvalidOperationException("Visitor mobile number is required.");
 
+        var before = BookingFingerprint(visit);
+        var oldHostId = visit.HostEmployeeId;
         var oldDate = visit.ExpectedDate ?? visit.VisitDate;
         var oldTime = visit.ExpectedTime ?? visit.VisitTime;
         var whenChanged = oldDate != request.ExpectedDate || oldTime != request.ExpectedTime;
@@ -651,9 +655,10 @@ public class VisitorService : IVisitorService
                 visit.VisitLocations.Add(new VisitorVisitLocation { LocationId = lid });
         }
 
+        var changed = BookingFingerprint(visit) != before;
         await _db.SaveChangesAsync();
 
-        if (whenChanged || hostChanged)
+        if (changed)
         {
             try
             {
@@ -662,7 +667,27 @@ public class VisitorService : IVisitorService
                     .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
                     .Include(v => v.Department)
                     .FirstAsync(v => v.Id == visit.Id);
-                await TryQueueAppointmentAckAsync(reloaded, visitor, host, $":updated-{DateTime.UtcNow.Ticks}");
+                var sendKey = $":updated-{DateTime.UtcNow.Ticks}";
+                await TryQueueAppointmentAckAsync(reloaded, visitor, host, sendKey);
+
+                // The replaced host would otherwise still expect the visitor.
+                var previousHost = hostChanged
+                    ? await _db.Employees.AsNoTracking().FirstOrDefaultAsync(e => e.Id == oldHostId)
+                    : null;
+                if (previousHost is not null)
+                {
+                    var ctx = await BuildAppointmentMailContextAsync(reloaded, visitor, previousHost) with
+                    {
+                        VisitorEmail = null,
+                        AppointmentSendKey = sendKey,
+                        CancelReason = $"The appointment was moved to {host.FullName}.",
+                    };
+                    QueueVisitMail(visit.TenantId, ctx, MailContentKind.AppointmentCancelled, hostOnly: true);
+                    QueueHostPush(visit.TenantId, previousHost.UserId, "Appointment cancelled",
+                        $"{visitor.FullName} will now meet {host.FullName}",
+                        $"appointment-cancel-push:{visit.Id}{sendKey}",
+                        $"/visitors/expected?date={ctx.MomentLocal:yyyy-MM-dd}");
+                }
             }
             catch (Exception ex)
             {
@@ -672,6 +697,79 @@ public class VisitorService : IVisitorService
 
         return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
     }
+
+    public async Task CancelExpectedAsync(Guid visitId, string? reason, ClaimsPrincipal user)
+    {
+        var visit = await _db.VisitorVisits
+            .Include(v => v.Visitor)
+            .Include(v => v.HostEmployee)
+            .Include(v => v.Department)
+            .Include(v => v.VisitPurposes).ThenInclude(p => p.VisitPurpose)
+            .Include(v => v.VisitLocations).ThenInclude(l => l.Location)
+            .FirstOrDefaultAsync(v => v.Id == visitId)
+            ?? throw new InvalidOperationException("Booking not found.");
+        if (visit.Status != VisitStatus.Expected)
+            throw new InvalidOperationException("Only bookings for visitors who have not arrived yet can be cancelled.");
+        EnsureOwnBookingForHostLogin(visit, user);
+
+        reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        if (reason is { Length: > 500 })
+            throw new InvalidOperationException("The reason can be at most 500 characters.");
+
+        var by = user.FindFirstValue("fullName") ?? user.Identity?.Name;
+        var note = reason is null ? $"Cancelled by {by}." : $"Cancelled by {by}: {reason}";
+        var notes = string.IsNullOrWhiteSpace(visit.Notes) ? note : $"{visit.Notes} | {note}";
+        visit.Notes = notes.Length > 1000 ? notes[^1000..] : notes;
+        visit.Status = VisitStatus.Cancelled;
+        visit.UpdatedAt = DateTime.UtcNow;
+        visit.UpdatedBy = user.Identity?.Name;
+        await SaveVisitLifecycleAsync();
+
+        // Best-effort, like the booking mail: a notify failure must not undo the cancellation.
+        try
+        {
+            var ctx = await BuildAppointmentMailContextAsync(visit, visit.Visitor, visit.HostEmployee) with
+            {
+                CancelReason = reason ?? "",
+            };
+            QueueVisitMail(visit.TenantId, ctx, MailContentKind.AppointmentCancelled);
+            var company = string.IsNullOrWhiteSpace(visit.Visitor.CompanyName) ? "" : $" ({visit.Visitor.CompanyName})";
+            QueueHostPush(visit.TenantId, visit.HostEmployee.UserId, "Appointment cancelled",
+                $"{visit.Visitor.FullName}{company} on {ctx.MomentLocal:dd MMM yyyy, HH:mm}",
+                $"appointment-cancel-push:{visit.Id}",
+                $"/visitors/expected?date={ctx.MomentLocal:yyyy-MM-dd}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Appointment cancellation notify failed for visit {VisitId}", visit.Id);
+        }
+    }
+
+    /// <summary>Host logins may cancel only their own appointments; desk and admin roles any in their scope.</summary>
+    private void EnsureOwnBookingForHostLogin(VisitorVisit visit, ClaimsPrincipal user)
+    {
+        if (user.IsInRole(AppRoles.SuperAdmin) || user.IsInRole(AppRoles.Admin) || user.IsInRole(AppRoles.Reception))
+            return;
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!_db.Employees.Any(e => e.UserId == userId && e.Id == visit.HostEmployeeId))
+            throw new UnauthorizedAccessException("You can only cancel your own appointments.");
+    }
+
+    /// <summary>Everything the appointment mail shows or depends on: any difference after an edit re-sends it.</summary>
+    private static string BookingFingerprint(VisitorVisit visit) => string.Join("|",
+        visit.Visitor.Id,
+        visit.Visitor.FullName,
+        visit.Visitor.Gender,
+        visit.Visitor.CompanyName,
+        visit.Visitor.Email,
+        visit.Visitor.Phone,
+        visit.ExpectedDate ?? visit.VisitDate,
+        visit.ExpectedTime ?? visit.VisitTime,
+        visit.DepartmentId,
+        visit.HostEmployeeId,
+        visit.PurposeNotes,
+        string.Join(",", visit.VisitPurposes.Select(p => p.VisitPurposeId).Order()),
+        string.Join(",", visit.VisitLocations.Select(l => l.LocationId).Order()));
 
     /// <summary>Booking purposes: typed "Others" text implies the Others purpose; at least one active purpose.</summary>
     private async Task<List<Guid>> ResolveBookingPurposeIdsAsync(ExpectedVisitorRequest request, ClaimsPrincipal user)
@@ -698,6 +796,21 @@ public class VisitorService : IVisitorService
 
     /// <param name="sendKey">Distinguishes a re-send (edited booking) from the original appointment mail.</param>
     private async Task TryQueueAppointmentAckAsync(VisitorVisit visit, Visitor visitor, Employee host, string sendKey = "")
+    {
+        var ctx = await BuildAppointmentMailContextAsync(visit, visitor, host);
+
+        // Sent off the request path: a slow or failing mail server must not hold the booking form open.
+        QueueVisitMail(visit.TenantId, ctx with { AppointmentSendKey = sendKey }, MailContentKind.Appointment);
+        var company = string.IsNullOrWhiteSpace(visitor.CompanyName) ? "" : $" ({visitor.CompanyName})";
+        QueueHostPush(visit.TenantId, host.UserId,
+            sendKey.Length == 0 ? "Appointment booked" : "Appointment updated",
+            $"{visitor.FullName}{company} on {ctx.MomentLocal:dd MMM yyyy, HH:mm}",
+            $"appointment-push:{visit.Id}{sendKey}",
+            $"/visitors/expected?date={ctx.MomentLocal:yyyy-MM-dd}&visit={visit.Id}");
+    }
+
+    /// <summary>What the appointment, update and cancellation mails show; <paramref name="host"/> is the addressee.</summary>
+    private async Task<VisitMailContext> BuildAppointmentMailContextAsync(VisitorVisit visit, Visitor visitor, Employee host)
     {
         var whenLocal = visit.ExpectedDate.HasValue
             ? visit.ExpectedDate.Value.ToDateTime(visit.ExpectedTime ?? TimeOnly.MinValue)
@@ -752,14 +865,7 @@ public class VisitorService : IVisitorService
                 ctx = ctx with { Location = organisation };
         }
 
-        // Sent off the request path: a slow or failing mail server must not hold the booking form open.
-        QueueVisitMail(visit.TenantId, ctx with { AppointmentSendKey = sendKey }, MailContentKind.Appointment);
-        var company = string.IsNullOrWhiteSpace(visitor.CompanyName) ? "" : $" ({visitor.CompanyName})";
-        QueueHostPush(visit.TenantId, host.UserId,
-            sendKey.Length == 0 ? "Appointment booked" : "Appointment updated",
-            $"{visitor.FullName}{company} on {whenLocal:dd MMM yyyy, HH:mm}",
-            $"appointment-push:{visit.Id}{sendKey}",
-            $"/visitors/expected?date={whenLocal:yyyy-MM-dd}&visit={visit.Id}");
+        return ctx;
     }
 
     /// <summary>
@@ -847,7 +953,7 @@ public class VisitorService : IVisitorService
         return sb.ToString();
     }
 
-    private void QueueVisitMail(Guid tenantId, VisitMailContext ctx, MailContentKind kind)
+    private void QueueVisitMail(Guid tenantId, VisitMailContext ctx, MailContentKind kind, bool hostOnly = false)
     {
         _ = Task.Run(async () =>
         {
@@ -866,6 +972,9 @@ public class VisitorService : IVisitorService
                         break;
                     case MailContentKind.Appointment:
                         await mail.SendAppointmentAsync(ctx);
+                        break;
+                    case MailContentKind.AppointmentCancelled:
+                        await mail.SendAppointmentCancelledAsync(ctx, hostOnly);
                         break;
                     case MailContentKind.MeetingMinutes:
                         await mail.SendMeetingMinutesAsync(ctx);

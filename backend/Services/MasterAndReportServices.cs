@@ -597,6 +597,39 @@ public class MasterDataService : IMasterDataService
             Regards,
             Tiaano VMS
             """),
+        MailContentKind.AppointmentCancelled => (
+            "Appointment cancelled: {{Salutation}} {{VisitorName}}",
+            """
+            Dear {{VisitingPerson}},
+
+            The appointment with {{Salutation}} {{VisitorName}} ({{Company}}) at {{Location}} has been cancelled.
+
+            Visit number: {{VisitorNumber}}
+            Department: {{Department}}
+            Purpose: {{Purpose}}
+            Date/Time: {{Date}} {{Time}}
+            Reason: {{Reason}}
+
+            Regards,
+            Tiaano VMS
+            """),
+        MailContentKind.AppointmentCancelledVisitor => (
+            "Your appointment at {{Location}} has been cancelled",
+            """
+            Dear {{Salutation}} {{VisitorName}},
+
+            Your appointment with {{VisitingPerson}} at {{Location}} has been cancelled.
+
+            Date/Time: {{Date}} {{Time}}
+            Visiting person: {{VisitingPerson}}
+            Purpose: {{Purpose}}
+            Reason: {{Reason}}
+
+            Please contact {{VisitingPerson}} if you would like to arrange another time.
+
+            Regards,
+            Tiaano VMS
+            """),
         _ => ("Notification", "Visitor update for {{Salutation}} {{VisitorName}}."),
     };
 

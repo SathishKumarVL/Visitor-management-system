@@ -11,6 +11,7 @@ import type {
 import { Alert, Badge, EmptyState, PageHeader, Panel, Spinner } from '../components/ui/Panel'
 import { LoadingMask } from '../components/LoadingMask'
 import { Button } from '../components/ui/Button'
+import { Modal } from '../components/ui/Modal'
 import { TextInput, TextSelect, FieldLabel, SelectChip } from '../components/ui/Field'
 import { Pagination } from '../components/ui/Pagination'
 import { usePagination } from '../lib/usePagination'
@@ -78,6 +79,10 @@ export function ExpectedVisitorsPage() {
   const [emailTouched, setEmailTouched] = useState(false)
   const [phoneLookup, setPhoneLookup] = useState<VisitorPhoneLookupDto | null>(null)
   const [editing, setEditing] = useState<{ visitId: string; visitNumber: string; date: string; time: string } | null>(null)
+  const [cancelling, setCancelling] = useState<VisitorListItemDto | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelError, setCancelError] = useState<string | null>(null)
+  const [cancelSaving, setCancelSaving] = useState(false)
 
   const { pageItems, pagination } = usePagination(items, 12, date)
 
@@ -356,6 +361,30 @@ export function ExpectedVisitorsPage() {
 
   function openArrival(visitId: string) {
     navigate(`/visitors/new?expectedId=${visitId}`)
+  }
+
+  function startCancel(v: VisitorListItemDto) {
+    setCancelling(v)
+    setCancelReason('')
+    setCancelError(null)
+  }
+
+  async function confirmCancel() {
+    if (!cancelling) return
+    setCancelSaving(true)
+    setCancelError(null)
+    try {
+      await visitorsApi.cancelExpected(cancelling.visitId, cancelReason)
+      if (editing?.visitId === cancelling.visitId) closeForm()
+      setError(null)
+      setMessage(`Appointment for ${cancelling.visitorName} cancelled.`)
+      setCancelling(null)
+      await load()
+    } catch (err) {
+      setCancelError(apiErrorMessage(err))
+    } finally {
+      setCancelSaving(false)
+    }
   }
 
   return (
@@ -686,7 +715,10 @@ export function ExpectedVisitorsPage() {
                 </div>
               </button>
               {canEdit ? (
-                <div className="flex justify-end border-t border-gray-100 px-4 py-2">
+                <div className="flex justify-end gap-2 border-t border-gray-100 px-4 py-2">
+                  <Button size="sm" variant="secondary" onClick={() => startCancel(v)}>
+                    Cancel appointment
+                  </Button>
                   <Button size="sm" variant="secondary" onClick={() => void startEdit(v.visitId)}>
                     Edit
                   </Button>
@@ -701,6 +733,47 @@ export function ExpectedVisitorsPage() {
           <Pagination {...pagination} pageSizeOptions={[12, 24, 48, 96]} bordered={false} />
         </Panel>
       ) : null}
+
+      <Modal
+        open={!!cancelling}
+        title="Cancel appointment"
+        subtitle={
+          cancelling
+            ? `${cancelling.visitorName} with ${cancelling.hostName} on ${formatDate(cancelling.visitDate)} ${cancelling.visitTime?.slice(0, 5) ?? ''}`
+            : undefined
+        }
+        onClose={() => {
+          if (!cancelSaving) setCancelling(null)
+        }}
+      >
+        <div className="space-y-4">
+          {cancelError ? <Alert tone="error">{cancelError}</Alert> : null}
+          <p className="text-sm text-ink">
+            The visitor and the employee get a cancellation email (if they have an email address), and the booking can
+            no longer be used at reception.
+          </p>
+          <div>
+            <FieldLabel htmlFor="cancel-reason">Reason (optional, shown in the email)</FieldLabel>
+            <textarea
+              id="cancel-reason"
+              rows={3}
+              maxLength={500}
+              disabled={cancelSaving}
+              className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm shadow-sm focus:border-steel focus:outline-none focus:ring-1 focus:ring-steel"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" disabled={cancelSaving} onClick={() => setCancelling(null)}>
+              Keep appointment
+            </Button>
+            <Button variant="danger" disabled={cancelSaving} onClick={() => void confirmCancel()}>
+              {cancelSaving ? 'Cancelling…' : 'Cancel appointment'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

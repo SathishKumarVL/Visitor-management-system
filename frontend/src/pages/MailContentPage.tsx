@@ -28,13 +28,26 @@ const MINUTES_PLACEHOLDERS = ['{{Discussion}}', '{{Decisions}}', '{{ActionItems}
 
 const MINUTES_KIND = 5
 
+/** Only the appointment cancellation emails fill this. */
+const CANCELLATION_PLACEHOLDERS = ['{{Reason}}']
+const CANCELLATION_KINDS = [6, 7]
+
 const KIND_LABELS: Record<number, string> = {
   1: 'Check-in (to employee)',
   2: 'Check-out (to visitor and employee)',
   3: 'Appointment (to employee)',
   4: 'Appointment (to visitor)',
   5: 'Minutes of meeting (to visitor and employee)',
+  6: 'Appointment cancelled (to employee)',
+  7: 'Appointment cancelled (to visitor)',
 }
+
+const placeholdersFor = (kind: number) =>
+  kind === MINUTES_KIND
+    ? [...PLACEHOLDERS, ...MINUTES_PLACEHOLDERS]
+    : CANCELLATION_KINDS.includes(kind)
+      ? [...PLACEHOLDERS, ...CANCELLATION_PLACEHOLDERS]
+      : PLACEHOLDERS
 
 const kindLabel = (item: MailContentTemplateDto) => KIND_LABELS[item.kind] ?? item.kindLabel
 
@@ -112,7 +125,8 @@ export function MailContentPanel({ lockedLocationId = '' }: { lockedLocationId?:
       <div>
         <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-ink-muted">Mail content</h2>
         <p className="mt-1 text-xs text-ink-muted">
-          Subject and body of the check-in, check-out, appointment and minutes emails.
+          Subject and body of the check-in, check-out, appointment, cancellation and minutes emails. An appointment
+          email re-sent after an edit gets &quot;Updated:&quot; in front of its subject.
         </p>
       </div>
       {error ? <Alert tone="error">{error}</Alert> : null}
@@ -194,7 +208,7 @@ export function MailContentPanel({ lockedLocationId = '' }: { lockedLocationId?:
           </label>
           <p className="text-xs text-ink-muted">
             Placeholders:{' '}
-            {(form.kind === MINUTES_KIND ? [...PLACEHOLDERS, ...MINUTES_PLACEHOLDERS] : PLACEHOLDERS).join(', ')}
+            {placeholdersFor(form.kind).join(', ')}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>

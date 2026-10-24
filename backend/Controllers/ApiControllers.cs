@@ -238,6 +238,21 @@ public class VisitorsController : ControllerBase
         }
     }
 
+    [HttpPost("expected/{id:guid}/cancel")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception},{AppRoles.Host}")]
+    public async Task<ActionResult<ApiResponse<object>>> CancelExpected(Guid id, [FromBody] CancelAppointmentRequest? request)
+    {
+        try
+        {
+            await _visitors.CancelExpectedAsync(id, request?.Reason, User);
+            return Ok(new ApiResponse<object>(true, null, "Appointment cancelled."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<object>(false, null, ex.Message));
+        }
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<VisitorDetailDto>>> Get(Guid id)
     {

@@ -367,6 +367,7 @@ public class GroupEmployeeTests : IClassFixture<TestApiFactory>, IAsyncLifetime
 
         public Task SendCheckInAsync(VisitMailContext ctx) => Task.CompletedTask;
         public Task SendAppointmentAsync(VisitMailContext ctx) => Task.CompletedTask;
+        public Task SendAppointmentCancelledAsync(VisitMailContext ctx, bool hostOnly = false) => Task.CompletedTask;
 
         public Task SendCheckOutAsync(VisitMailContext ctx)
         {

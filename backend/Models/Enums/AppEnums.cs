@@ -69,7 +69,9 @@ public enum MailContentKind
     CheckOut = 2,
     Appointment = 3,
     AppointmentVisitor = 4,
-    MeetingMinutes = 5
+    MeetingMinutes = 5,
+    AppointmentCancelled = 6,
+    AppointmentCancelledVisitor = 7
 }
 
 public enum VisitorGender

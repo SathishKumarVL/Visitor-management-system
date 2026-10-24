@@ -160,6 +160,36 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
         Assert.Contains("Purpose: Meeting", visitorCopy.Body);
     }
 
+    [Fact]
+    public async Task Cancellation_Mail_Gives_Both_Sides_The_Reason_And_An_Edit_Is_Marked_Updated()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var notifications = new CapturingNotifications();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        var service = new VisitMailService(db, notifications, NullLogger<VisitMailService>.Instance, config);
+
+        await service.SendAppointmentCancelledAsync(Context() with { CancelReason = "Host is travelling" });
+        var hostCopy = Assert.Single(notifications.Sent, s => s.Recipient == "suresh.baskar@example.test");
+        var visitorCopy = Assert.Single(notifications.Sent, s => s.Recipient == "asha@example.test");
+        Assert.Contains("cancelled", hostCopy.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cancelled", visitorCopy.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Reason: Host is travelling", hostCopy.Body);
+        Assert.Contains("Reason: Host is travelling", visitorCopy.Body);
+        Assert.Contains("Dear Ms. Asha", visitorCopy.Body);
+        Assert.DoesNotContain("{{", visitorCopy.Body);
+
+        notifications.Sent.Clear();
+        await service.SendAppointmentCancelledAsync(Context(), hostOnly: true);
+        Assert.Equal("suresh.baskar@example.test", Assert.Single(notifications.Sent).Recipient);
+        Assert.Contains("Reason: —", notifications.Sent[0].Body);
+
+        notifications.Sent.Clear();
+        await service.SendAppointmentAsync(Context() with { AppointmentSendKey = ":updated-1" });
+        Assert.All(notifications.Sent, s => Assert.StartsWith("Updated: ", s.Subject));
+        Assert.Equal(2, notifications.Sent.Count);
+    }
+
     [Theory]
     [InlineData("Dear X,\n\nDepartment: {{Department}}\nDate/Time: {{Date}}\n\nRegards,\nTiaano", "Department: {{Department}}\nPurpose: {{Purpose}}\n")]
     [InlineData("Dear X,\n\nDate/Time: {{Date}}\n\nRegards,\nTiaano", "Purpose: {{Purpose}}\n\nRegards,")]
