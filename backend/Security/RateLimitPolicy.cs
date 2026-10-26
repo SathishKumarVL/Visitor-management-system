@@ -18,6 +18,10 @@ public static class RateLimitPolicy
     public const string RefreshPolicyName = "refresh";
     public const int RefreshPermitLimit = 60;
 
+    /// <summary>The visitor invitation page: opened and submitted without signing in.</summary>
+    public const string PublicInvitePolicyName = "public-invite";
+    public const int PublicInvitePermitLimit = 30;
+
     /// <summary>
     /// Environments allowed to run without the login limiter. Matching is exact and case-sensitive:
     /// anything unrecognised — including an unset environment name — stays rate limited.

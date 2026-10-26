@@ -491,3 +491,44 @@ public class NotificationOutbox
     [MaxLength(300)]
     public string? Link { get; set; }
 }
+
+/// <summary>
+/// A single-use link emailed to a visitor so they fill in their own details and face photo, which books an
+/// appointment with <see cref="HostEmployeeId"/>. Only the SHA-256 of the link token is stored.
+/// </summary>
+public class VisitorInvitation
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
+
+    [Required, MaxLength(64)]
+    public string TokenHash { get; set; } = string.Empty;
+
+    [Required, MaxLength(150)]
+    public string Email { get; set; } = string.Empty;
+
+    public Guid HostEmployeeId { get; set; }
+    public Employee? HostEmployee { get; set; }
+
+    /// <summary>Location the booking is made for; the visitor cannot change it.</summary>
+    public Guid? LocationId { get; set; }
+
+    public DateTime ExpiresAt { get; set; }
+    public VisitorInvitationStatus Status { get; set; } = VisitorInvitationStatus.Pending;
+
+    /// <summary>The booking the visitor created; not a foreign key, so clearing visits leaves the history.</summary>
+    public Guid? VisitorVisitId { get; set; }
+    public DateTime? CompletedAt { get; set; }
+
+    public int SendCount { get; set; }
+    public DateTime? LastSentAt { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    [MaxLength(256)]
+    public string? CreatedBy { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+    [MaxLength(256)]
+    public string? UpdatedBy { get; set; }
+}

@@ -71,7 +71,16 @@ public enum MailContentKind
     AppointmentVisitor = 4,
     MeetingMinutes = 5,
     AppointmentCancelled = 6,
-    AppointmentCancelledVisitor = 7
+    AppointmentCancelledVisitor = 7,
+    VisitorInvitation = 8
+}
+
+/// <summary>An invitation that has passed its expiry while Pending is shown as expired; it is not stored as such.</summary>
+public enum VisitorInvitationStatus
+{
+    Pending = 1,
+    Completed = 2,
+    Withdrawn = 3
 }
 
 public enum VisitorGender

@@ -18,6 +18,11 @@ public interface IVisitorService
 {
     Task<VisitorDetailDto> RegisterAsync(RegisterVisitorRequest request, ClaimsPrincipal user, string webRoot);
     Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user);
+    /// <summary>
+    /// Books the appointment a visitor submitted through an invitation link, with their face photo. Runs without a
+    /// signed-in user: the tenant context must already be set, and the photo already checked for exactly one face.
+    /// </summary>
+    Task<(Guid VisitId, string VisitNumber)> CreateInvitedBookingAsync(ExpectedVisitorRequest request, string photoBase64, string createdBy);
     Task<VisitorDetailDto> UpdateExpectedAsync(Guid visitId, ExpectedVisitorRequest request, ClaimsPrincipal user);
     /// <summary>Cancels a booking that has not arrived yet and emails the host and the visitor.</summary>
     Task CancelExpectedAsync(Guid visitId, string? reason, ClaimsPrincipal user);
@@ -455,6 +460,42 @@ public class VisitorService : IVisitorService
 
     public async Task<VisitorDetailDto> CreateExpectedAsync(ExpectedVisitorRequest request, ClaimsPrincipal user)
     {
+        var visit = await CreateExpectedCoreAsync(request, user);
+        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+    }
+
+    public async Task<(Guid VisitId, string VisitNumber)> CreateInvitedBookingAsync(
+        ExpectedVisitorRequest request, string photoBase64, string createdBy)
+    {
+        var tenantId = TenantClaims.RequireTenantId(null, _tenant);
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.Name, createdBy), new Claim(TenantClaims.TenantIdClaim, tenantId.ToString())],
+            "VisitorInvitation"));
+
+        // The form is filled in by an outsider, so it may not take over someone else's visitor record (and face).
+        var phone = NormalizeTenDigitPhone(request.Phone ?? string.Empty);
+        var existingEmail = await VisitorsByPhone(phone).Select(v => v.Email).FirstOrDefaultAsync();
+        if (!string.IsNullOrWhiteSpace(existingEmail)
+            && !string.Equals(existingEmail.Trim(), request.Email?.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "This mobile number is already registered to another visitor. Please check the number, or contact the person who invited you.");
+
+        var visit = await CreateExpectedCoreAsync(request, principal);
+        try
+        {
+            await SavePhotoAsync(visit.VisitorId, visit.Id, photoBase64, string.Empty, createdBy);
+            await EnrolFaceAsync(visit.VisitorId, photoBase64, principal);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The photo passed the same check before booking; a failure now must not lose the booking.
+            _logger.LogWarning(ex, "Face photo from invitation could not be saved for visit {VisitId}", visit.Id);
+        }
+        return (visit.Id, visit.VisitNumber);
+    }
+
+    private async Task<VisitorVisit> CreateExpectedCoreAsync(ExpectedVisitorRequest request, ClaimsPrincipal user)
+    {
         if (string.IsNullOrWhiteSpace(request.VisitorName) || string.IsNullOrWhiteSpace(request.CompanyName))
             throw new InvalidOperationException("Visitor name and company are required.");
         if (request.Gender is not (VisitorGender.Male or VisitorGender.Female))
@@ -556,7 +597,7 @@ public class VisitorService : IVisitorService
             _logger.LogWarning(ex, "Appointment acknowledgement notify failed for visit {VisitId}", visit.Id);
         }
 
-        return (await BuildDetailAsync(visit.Id, user, EncryptionKey()))!;
+        return visit;
     }
 
     /// <summary>Edits a booking that has not arrived yet. A changed date, time or host re-sends the appointment mail.</summary>

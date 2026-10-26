@@ -639,6 +639,60 @@ export interface ExpectedVisitorRequest {
   notes?: string | null
 }
 
+export type VisitorInvitationStatus = 'Pending' | 'Expired' | 'Completed' | 'Withdrawn'
+
+export interface VisitorInvitationDto {
+  id: string
+  email: string
+  hostEmployeeId: string
+  hostName: string
+  locationName?: string | null
+  status: VisitorInvitationStatus
+  createdAt: string
+  createdBy?: string | null
+  expiresAt: string
+  lastSentAt?: string | null
+  sendCount: number
+  completedAt?: string | null
+  visitorVisitId?: string | null
+  visitorName?: string | null
+  visitDate?: string | null
+  visitTime?: string | null
+  emailError?: string | null
+}
+
+export interface PublicInvitationDto {
+  email: string
+  hostName: string
+  departmentName?: string | null
+  locationName?: string | null
+  organisationName: string
+  expiresAt: string
+  purposes: { id: string; name: string }[]
+}
+
+export interface PublicInvitationSubmitRequest {
+  token: string
+  visitorName: string
+  companyName: string
+  /** 1 = Male (Mr.), 2 = Female (Ms.) */
+  gender: 1 | 2
+  phone: string
+  expectedDate: string
+  expectedTime: string
+  purposeIds: string[]
+  purposeNotes?: string | null
+  photoBase64: string
+}
+
+export interface PublicInvitationResultDto {
+  visitNumber: string
+  hostName: string
+  locationName?: string | null
+  visitDate: string
+  visitTime: string
+}
+
 export interface ChartPointDto {
   label: string
   value: number

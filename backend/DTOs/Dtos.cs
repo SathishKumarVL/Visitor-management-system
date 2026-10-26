@@ -870,6 +870,100 @@ public class ExpectedVisitorRequest
     public string? Notes { get; set; }
 }
 
+public class CreateVisitorInvitationRequest
+{
+    [Required, MaxLength(150), EmailAddress]
+    public string Email { get; set; } = string.Empty;
+
+    /// <summary>Employee the visitor will meet; a Host login always invites for themselves.</summary>
+    public Guid? HostEmployeeId { get; set; }
+}
+
+public class VisitorInvitationDto
+{
+    public Guid Id { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public Guid HostEmployeeId { get; set; }
+    public string HostName { get; set; } = string.Empty;
+    public string? LocationName { get; set; }
+    /// <summary>Pending, Expired, Completed or Withdrawn.</summary>
+    public string Status { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? LastSentAt { get; set; }
+    public int SendCount { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public Guid? VisitorVisitId { get; set; }
+    public string? VisitorName { get; set; }
+    public DateOnly? VisitDate { get; set; }
+    public TimeOnly? VisitTime { get; set; }
+    /// <summary>Delivery error of the latest invitation email, if it has not gone out.</summary>
+    public string? EmailError { get; set; }
+}
+
+/// <summary>What the public invitation page may show: nothing beyond who invited the visitor and where.</summary>
+public class PublicInvitationDto
+{
+    public string Email { get; set; } = string.Empty;
+    public string HostName { get; set; } = string.Empty;
+    public string? DepartmentName { get; set; }
+    public string? LocationName { get; set; }
+    public string OrganisationName { get; set; } = string.Empty;
+    public DateTime ExpiresAt { get; set; }
+    public IReadOnlyList<PublicPurposeDto> Purposes { get; set; } = Array.Empty<PublicPurposeDto>();
+}
+
+public class PublicPurposeDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+}
+
+public class PublicInvitationTokenRequest
+{
+    [Required, MaxLength(100)]
+    public string Token { get; set; } = string.Empty;
+}
+
+public class PublicInvitationSubmitRequest : PublicInvitationTokenRequest
+{
+    [Required, MaxLength(150)]
+    public string VisitorName { get; set; } = string.Empty;
+
+    [Required, MaxLength(200)]
+    public string CompanyName { get; set; } = string.Empty;
+
+    [Required]
+    public VisitorGender Gender { get; set; }
+
+    [Required, MaxLength(20)]
+    public string Phone { get; set; } = string.Empty;
+
+    [Required]
+    public DateOnly ExpectedDate { get; set; }
+
+    [Required]
+    public TimeOnly ExpectedTime { get; set; }
+
+    public List<Guid> PurposeIds { get; set; } = new();
+
+    [MaxLength(500)]
+    public string? PurposeNotes { get; set; }
+
+    [Required]
+    public string PhotoBase64 { get; set; } = string.Empty;
+}
+
+public class PublicInvitationResultDto
+{
+    public string VisitNumber { get; set; } = string.Empty;
+    public string HostName { get; set; } = string.Empty;
+    public string? LocationName { get; set; }
+    public DateOnly VisitDate { get; set; }
+    public TimeOnly VisitTime { get; set; }
+}
+
 public class VisitorListItemDto
 {
     public Guid VisitId { get; set; }

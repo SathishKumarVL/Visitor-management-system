@@ -1812,6 +1812,75 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.ToTable("VisitorFaceDescriptors");
                 });
 
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.VisitorInvitation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("HostEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("LastSentAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("LocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("SendCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<Guid?>("VisitorVisitId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HostEmployeeId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "CreatedAt");
+
+                    b.ToTable("VisitorInvitations");
+                });
+
             modelBuilder.Entity("Tiaano.Vms.Api.Models.VisitorPass", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2697,6 +2766,25 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.Navigation("Tenant");
 
                     b.Navigation("Visitor");
+                });
+
+            modelBuilder.Entity("Tiaano.Vms.Api.Models.VisitorInvitation", b =>
+                {
+                    b.HasOne("Tiaano.Vms.Api.Models.Employee", "HostEmployee")
+                        .WithMany()
+                        .HasForeignKey("HostEmployeeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Tiaano.Vms.Api.Models.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("HostEmployee");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("Tiaano.Vms.Api.Models.VisitorPass", b =>

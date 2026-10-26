@@ -57,6 +57,10 @@ import type {
   FeedbackQuestionUpsertRequest,
   SubmitVisitFeedbackRequest,
   VisitFeedbackDto,
+  VisitorInvitationDto,
+  PublicInvitationDto,
+  PublicInvitationSubmitRequest,
+  PublicInvitationResultDto,
 } from '../types/api'
 
 const TOKEN_KEY = 'tiaano_vms_token'
@@ -379,6 +383,31 @@ export const visitorsApi = {
   /** Exactly-one-face gate before accepting a visitor registration photo. Does not store the image. */
   validatePhoto: (photoBase64: string) =>
     unwrap(api.post<ApiResponse<FacePhotoValidationDto>>('/visitors/validate-photo', { photoBase64 })),
+}
+
+export const invitationsApi = {
+  list: () => unwrap(api.get<ApiResponse<VisitorInvitationDto[]>>('/visitors/invitations')),
+  create: async (email: string, hostEmployeeId?: string | null) => {
+    const { data } = await api.post<ApiResponse<VisitorInvitationDto>>('/visitors/invitations', {
+      email: email.trim(),
+      hostEmployeeId: hostEmployeeId || null,
+    }, { timeout: 60000 })
+    return { invitation: await unwrap(Promise.resolve({ data })), message: data.message ?? '' }
+  },
+  resend: async (id: string) => {
+    const { data } = await api.post<ApiResponse<VisitorInvitationDto>>(`/visitors/invitations/${id}/resend`, undefined, { timeout: 60000 })
+    return { invitation: await unwrap(Promise.resolve({ data })), message: data.message ?? '' }
+  },
+  withdraw: (id: string) =>
+    unwrapVoid(api.post<ApiResponse<object>>(`/visitors/invitations/${id}/withdraw`)),
+}
+
+/** The visitor's side of an invitation; the link token is sent in the body so it stays out of URLs and logs. */
+export const publicInviteApi = {
+  open: (token: string) =>
+    unwrap(api.post<ApiResponse<PublicInvitationDto>>('/public/invitations/open', { token })),
+  submit: (body: PublicInvitationSubmitRequest) =>
+    unwrap(api.post<ApiResponse<PublicInvitationResultDto>>('/public/invitations/submit', body, { timeout: 90000 })),
 }
 
 export const approvalsApi = {

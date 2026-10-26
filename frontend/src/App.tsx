@@ -32,6 +32,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
 import { MyDetailsPage } from './pages/MyDetailsPage'
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordResetPages'
+import { InvitationPage } from './pages/InvitationPage'
 import { VisitorWelcomePage } from './pages/VisitorWelcomePage'
 import { VisitorThankYouPage } from './pages/VisitorThankYouPage'
 
@@ -55,6 +56,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/invite" element={<InvitationPage />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<HomeRedirect />} />

@@ -52,6 +52,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<UserFaceLogin> UserFaceLogins => Set<UserFaceLogin>();
     public DbSet<MeetingHall> MeetingHalls => Set<MeetingHall>();
     public DbSet<LookupSource> LookupSources => Set<LookupSource>();
+    public DbSet<VisitorInvitation> VisitorInvitations => Set<VisitorInvitation>();
 
     /// <summary>One inside visit per hall: concurrent check-ins cannot both take the same hall.</summary>
     public const string MeetingHallInsideIndex = "IX_VisitorVisits_MeetingHallId_Inside";
@@ -392,6 +393,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.FeedbackQuestion).WithMany().HasForeignKey(x => x.FeedbackQuestionId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<VisitorInvitation>(e =>
+        {
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.CreatedAt });
+            e.HasIndex(x => x.HostEmployeeId);
+            e.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.HostEmployee).WithMany().HasForeignKey(x => x.HostEmployeeId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => _tenant == null || (_tenant.TenantId != null && x.TenantId == _tenant.TenantId));
         });
 
         builder.Entity<RefreshToken>(e =>

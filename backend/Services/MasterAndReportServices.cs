@@ -630,6 +630,23 @@ public class MasterDataService : IMasterDataService
             Regards,
             Tiaano VMS
             """),
+        MailContentKind.VisitorInvitation => (
+            "{{VisitingPerson}} has invited you to visit {{Location}}",
+            """
+            Hello,
+
+            {{VisitingPerson}} has invited you to visit {{Location}}.
+
+            Please open the link below to fill in your details, choose the date and time of your visit, and add a
+            face photo so reception can check you in quickly when you arrive:
+
+            {{InviteLink}}
+
+            The link can be used once and is valid until {{Date}} {{Time}}.
+
+            Regards,
+            {{VisitingPerson}}
+            """),
         _ => ("Notification", "Visitor update for {{Salutation}} {{VisitorName}}."),
     };
 

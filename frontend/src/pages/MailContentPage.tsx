@@ -40,10 +40,17 @@ const KIND_LABELS: Record<number, string> = {
   5: 'Minutes of meeting (to visitor and employee)',
   6: 'Appointment cancelled (to employee)',
   7: 'Appointment cancelled (to visitor)',
+  8: 'Visitor invitation (to visitor)',
 }
 
+/** The invitation goes out before the visitor's details exist; {{Date}} {{Time}} is when the link expires. */
+const INVITATION_KIND = 8
+const INVITATION_PLACEHOLDERS = ['{{VisitingPerson}}', '{{Location}}', '{{Department}}', '{{Date}}', '{{Time}}', '{{InviteLink}}']
+
 const placeholdersFor = (kind: number) =>
-  kind === MINUTES_KIND
+  kind === INVITATION_KIND
+    ? INVITATION_PLACEHOLDERS
+    : kind === MINUTES_KIND
     ? [...PLACEHOLDERS, ...MINUTES_PLACEHOLDERS]
     : CANCELLATION_KINDS.includes(kind)
       ? [...PLACEHOLDERS, ...CANCELLATION_PLACEHOLDERS]

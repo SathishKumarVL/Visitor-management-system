@@ -190,6 +190,25 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
         Assert.Equal(2, notifications.Sent.Count);
     }
 
+    [Fact]
+    public async Task Invitation_Mail_Goes_Only_To_The_Visitor_With_The_Link()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var notifications = new CapturingNotifications();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        var service = new VisitMailService(db, notifications, NullLogger<VisitMailService>.Instance, config);
+        const string link = "https://vms.example.test/invite#abc123";
+
+        Assert.True(await service.SendVisitorInvitationAsync(Context() with { InviteLink = link }, $"visitor-invite:{Guid.NewGuid()}:1"));
+        var sent = Assert.Single(notifications.Sent);
+        Assert.Equal("asha@example.test", sent.Recipient);
+        Assert.Contains("Suresh Baskar", sent.Subject);
+        Assert.Contains(link, sent.Body);
+        Assert.Equal("suresh.baskar@example.test", sent.Sender!.ReplyTo);
+        Assert.DoesNotContain("{{", sent.Body);
+    }
+
     [Theory]
     [InlineData("Dear X,\n\nDepartment: {{Department}}\nDate/Time: {{Date}}\n\nRegards,\nTiaano", "Department: {{Department}}\nPurpose: {{Purpose}}\n")]
     [InlineData("Dear X,\n\nDate/Time: {{Date}}\n\nRegards,\nTiaano", "Purpose: {{Purpose}}\n\nRegards,")]

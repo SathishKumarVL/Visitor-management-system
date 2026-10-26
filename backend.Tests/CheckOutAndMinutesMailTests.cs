@@ -335,6 +335,7 @@ public class CheckOutAndMinutesMailTests : IClassFixture<TestApiFactory>
         public Task SendCheckInAsync(VisitMailContext ctx) => Task.CompletedTask;
         public Task SendAppointmentAsync(VisitMailContext ctx) => Task.CompletedTask;
         public Task SendAppointmentCancelledAsync(VisitMailContext ctx, bool hostOnly = false) => Task.CompletedTask;
+        public Task<bool> SendVisitorInvitationAsync(VisitMailContext ctx, string idempotencyKey) => Task.FromResult(true);
 
         public Task SendCheckOutAsync(VisitMailContext ctx)
         {

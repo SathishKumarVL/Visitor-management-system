@@ -27,7 +27,8 @@ public record VisitMailContext(
     string MomNextMeetingDate = "",
     string MomSendKey = "",
     string AppointmentSendKey = "",
-    string CancelReason = "");
+    string CancelReason = "",
+    string InviteLink = "");
 
 /// <summary>Renders Mail Content templates and queues check-in / check-out / appointment / minutes emails.</summary>
 public interface IVisitMailService
@@ -38,6 +39,11 @@ public interface IVisitMailService
     /// <summary>Tells the host, and the visitor unless <paramref name="hostOnly"/>, that the appointment is off.</summary>
     Task SendAppointmentCancelledAsync(VisitMailContext ctx, bool hostOnly = false);
     Task SendMeetingMinutesAsync(VisitMailContext ctx);
+    /// <summary>
+    /// Emails the self-registration link to <see cref="VisitMailContext.VisitorEmail"/>; <see cref="VisitMailContext.MomentLocal"/>
+    /// is the expiry. False when it may not be sent at all (Mail:SendAsHostOnly and the host has no email).
+    /// </summary>
+    Task<bool> SendVisitorInvitationAsync(VisitMailContext ctx, string idempotencyKey);
 }
 
 public class VisitMailService : IVisitMailService
@@ -214,6 +220,15 @@ public class VisitMailService : IVisitMailService
         }
     }
 
+    public async Task<bool> SendVisitorInvitationAsync(VisitMailContext ctx, string idempotencyKey)
+    {
+        if (string.IsNullOrWhiteSpace(ctx.VisitorEmail) || !MaySendVisitorCopy(ctx, "Visitor invitation")) return false;
+        var (subject, body) = await RenderAsync(MailContentKind.VisitorInvitation, ctx);
+        await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
+            idempotencyKey, ctx.LocationId, HostSender(ctx));
+        return true;
+    }
+
     private async Task<(string Subject, string Body)> RenderAsync(MailContentKind kind, VisitMailContext ctx)
     {
         var candidates = await _db.MailContentTemplates.AsNoTracking()
@@ -246,6 +261,8 @@ public class VisitMailService : IVisitMailService
             body = EnsureMeetingHallLine(body);
         if (kind is MailContentKind.CheckOut)
             body = RemoveMeetingMinutesSection(body);
+        if (kind is MailContentKind.VisitorInvitation && !body.Contains("{{InviteLink}}", StringComparison.Ordinal))
+            body = body.TrimEnd() + "\n\nOpen this link to fill in your details: {{InviteLink}}\n";
 
         return (Apply(subject, ctx), Apply(body, ctx));
     }
@@ -366,6 +383,7 @@ public class VisitMailService : IVisitMailService
         sb.Replace("{{ActionItems}}", string.IsNullOrWhiteSpace(ctx.MomActionItems) ? "—" : ctx.MomActionItems);
         sb.Replace("{{NextMeetingDate}}", string.IsNullOrWhiteSpace(ctx.MomNextMeetingDate) ? "—" : ctx.MomNextMeetingDate);
         sb.Replace("{{Reason}}", string.IsNullOrWhiteSpace(ctx.CancelReason) ? "—" : ctx.CancelReason);
+        sb.Replace("{{InviteLink}}", ctx.InviteLink);
         sb.Replace("{{Date}}", ctx.MomentLocal.ToString("dd MMM yyyy"));
         sb.Replace("{{Time}}", ctx.MomentLocal.ToString("hh:mm tt"));
         return sb.ToString();

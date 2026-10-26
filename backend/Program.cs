@@ -100,6 +100,7 @@ builder.Services.AddRateLimiter(options =>
     {
         options.AddPolicy(RateLimitPolicy.LoginPolicyName, _ => RateLimitPartition.GetNoLimiter("dev"));
         options.AddPolicy(RateLimitPolicy.RefreshPolicyName, _ => RateLimitPartition.GetNoLimiter("dev"));
+        options.AddPolicy(RateLimitPolicy.PublicInvitePolicyName, _ => RateLimitPartition.GetNoLimiter("dev"));
     }
     else
     {
@@ -118,6 +119,15 @@ builder.Services.AddRateLimiter(options =>
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = RateLimitPolicy.RefreshPermitLimit,
+                    Window = RateLimitPolicy.LoginWindow,
+                    QueueLimit = 0
+                }));
+        options.AddPolicy(RateLimitPolicy.PublicInvitePolicyName, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = RateLimitPolicy.PublicInvitePermitLimit,
                     Window = RateLimitPolicy.LoginWindow,
                     QueueLimit = 0
                 }));
@@ -147,6 +157,7 @@ builder.Services.AddScoped<IUserFaceLoginService, UserFaceLoginService>();
 builder.Services.AddScoped<IEmployeeMasterService, EmployeeMasterService>();
 builder.Services.AddScoped<IMeetingHallAllocator, MeetingHallAllocator>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
+builder.Services.AddScoped<IVisitorInvitationService, VisitorInvitationService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IMasterDataService, MasterDataService>();
 builder.Services.AddScoped<IMasterImportService, MasterImportService>();

@@ -236,5 +236,7 @@ public class AppointmentChangeMailTests : IClassFixture<TestApiFactory>
             _cancellations.Enqueue((ctx, hostOnly));
             return Task.CompletedTask;
         }
+
+        public Task<bool> SendVisitorInvitationAsync(VisitMailContext ctx, string idempotencyKey) => Task.FromResult(true);
     }
 }

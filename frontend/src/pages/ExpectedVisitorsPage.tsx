@@ -19,6 +19,7 @@ import { formatDate, isPastDateTime, nextBookingSlot, sanitizePhoneDigits, statu
 import { useAuthStore } from '../store/authStore'
 import { cn, hasAnyRole } from '../lib/utils'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
+import { VisitorInvitations } from '../components/VisitorInvitations'
 
 const PAST_APPOINTMENT_ERROR = 'Appointment date and time cannot be in the past.'
 
@@ -59,6 +60,8 @@ export function ExpectedVisitorsPage() {
   const userLocationId = useAuthStore((s) => s.user?.locationId || '')
   const canCreate = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Host'])
   const canArrive = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Security'])
+  const hostOnly = hasAnyRole(roles, ['Host']) && !hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception'])
+  const [inviteOpen, setInviteOpen] = useState(false)
 
   const [date, setDate] = useState(() => {
     const fromUrl = searchParams.get('date')
@@ -202,6 +205,8 @@ export function ExpectedVisitorsPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const reloadBookings = useCallback(() => void load(), [load])
 
   useEffect(() => {
     if (!savedVisitId) return
@@ -414,6 +419,11 @@ export function ExpectedVisitorsPage() {
               className="w-auto"
             />
             {canCreate ? (
+              <Button variant="secondary" onClick={() => setInviteOpen(true)}>
+                Invite visitor
+              </Button>
+            ) : null}
+            {canCreate ? (
               <Button
                 variant="amber"
                 onClick={() => {
@@ -443,6 +453,16 @@ export function ExpectedVisitorsPage() {
             </Link>
           </Alert>
         </div>
+      ) : null}
+
+      {canCreate ? (
+        <VisitorInvitations
+          inviteOpen={inviteOpen}
+          onInviteClose={() => setInviteOpen(false)}
+          hostOnly={hostOnly}
+          locationId={userLocationId}
+          onBooked={reloadBookings}
+        />
       ) : null}
 
       {showForm ? (
