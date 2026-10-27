@@ -58,6 +58,8 @@ import type {
   SubmitVisitFeedbackRequest,
   VisitFeedbackDto,
   VisitorInvitationDto,
+  ArrivalCodeMatchDto,
+  BookingFaceCheckDto,
   PublicInvitationDto,
   PublicInvitationSubmitRequest,
   PublicInvitationResultDto,
@@ -356,6 +358,10 @@ export const visitorsApi = {
     unwrap(api.put<ApiResponse<VisitorDetailDto>>(`/visitors/expected/${id}`, body)),
   cancelExpected: (id: string, reason: string) =>
     unwrapVoid(api.post<ApiResponse<object>>(`/visitors/expected/${id}/cancel`, { reason: reason.trim() || null })),
+  findByArrivalCode: (code: string) =>
+    unwrap(api.post<ApiResponse<ArrivalCodeMatchDto>>('/visitors/expected/arrival-code', { code: code.trim() })),
+  checkBookingFace: (id: string, photoBase64: string) =>
+    unwrap(api.post<ApiResponse<BookingFaceCheckDto>>(`/visitors/expected/${id}/face-check`, { photoBase64 })),
   checkIn: (id: string, photoBase64?: string | null) =>
     unwrap(api.post<ApiResponse<PassDto>>(`/visitors/${id}/check-in`, {
       occurredAt: new Date().toISOString(),

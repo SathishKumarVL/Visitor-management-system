@@ -18,10 +18,14 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
     {
         public List<(string Recipient, MailSender? Sender, string Subject, string Body)> Sent { get; } = [];
 
+        public List<(string Recipient, string? QrText)> Qr { get; } = new();
+
         public Task NotifyAsync(string channel, string recipient, string subject, string body,
-            string? idempotencyKey = null, Guid? locationId = null, MailSender? sender = null, string? link = null)
+            string? idempotencyKey = null, Guid? locationId = null, MailSender? sender = null, string? link = null,
+            string? qrText = null)
         {
             Sent.Add((recipient, sender, subject, body));
+            Qr.Add((recipient, qrText));
             return Task.CompletedTask;
         }
 
@@ -158,6 +162,54 @@ public class CheckOutMailSenderTests : IClassFixture<TestApiFactory>
 
         Assert.Contains("Purpose: Meeting", hostCopy.Body);
         Assert.Contains("Purpose: Meeting", visitorCopy.Body);
+    }
+
+    [Fact]
+    public async Task Appointment_Qr_Goes_Only_On_The_Visitor_Copy()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var notifications = new CapturingNotifications();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        var service = new VisitMailService(db, notifications, NullLogger<VisitMailService>.Instance, config);
+        var code = ArrivalCodes.New();
+
+        await service.SendAppointmentAsync(Context() with { ArrivalCode = code });
+
+        Assert.Equal(code, Assert.Single(notifications.Qr, q => q.Recipient == "asha@example.test").QrText);
+        Assert.Null(Assert.Single(notifications.Qr, q => q.Recipient == "suresh.baskar@example.test").QrText);
+        Assert.Contains("QR code", Assert.Single(notifications.Sent, s => s.Recipient == "asha@example.test").Body);
+        Assert.DoesNotContain(code, string.Join("\n", notifications.Sent.Select(s => s.Body)));
+
+        notifications.Qr.Clear();
+        await service.SendAppointmentAsync(Context());
+        Assert.All(notifications.Qr, q => Assert.Null(q.QrText));
+    }
+
+    [Fact]
+    public void Email_With_A_Qr_Carries_The_Image_Inline()
+    {
+        var row = new Tiaano.Vms.Api.Models.NotificationOutbox
+        {
+            Channel = "Email",
+            Recipient = "asha@example.test",
+            Subject = "Appointment",
+            Body = "Dear Asha,\nSee you <soon>.",
+            QrText = ArrivalCodes.New(),
+        };
+        var smtp = new SmtpRuntimeOptions { FromAddress = "info@example.test" };
+
+        var message = EmailNotificationProvider.BuildMessage(row, smtp, true);
+
+        var image = Assert.Single(message.BodyParts.OfType<MimeKit.MimePart>(), p => p.ContentType.MimeType == "image/png");
+        Assert.False(string.IsNullOrEmpty(image.ContentId));
+        Assert.Contains($"cid:{image.ContentId}", message.HtmlBody);
+        Assert.Contains("&lt;soon&gt;", message.HtmlBody);
+        Assert.Contains("See you <soon>.", message.TextBody);
+
+        row.QrText = null;
+        Assert.Empty(EmailNotificationProvider.BuildMessage(row, smtp, true).BodyParts.OfType<MimeKit.MimePart>()
+            .Where(p => p.ContentType.MimeType == "image/png"));
     }
 
     [Fact]

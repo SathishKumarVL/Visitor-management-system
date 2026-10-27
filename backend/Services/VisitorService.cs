@@ -51,6 +51,8 @@ public interface IVisitorService
     Task<DashboardDto> GetDashboardAsync(ClaimsPrincipal user, int warningMinutes);
     Task<IReadOnlyList<MomNotSentByEmployeeDto>> GetMomNotSentByEmployeeAsync(ClaimsPrincipal user);
     Task<FaceSearchMatchDto?> FaceSearchAsync(string photoBase64, ClaimsPrincipal user);
+    Task<ArrivalCodeMatchDto> FindByArrivalCodeAsync(string code);
+    Task<BookingFaceCheckDto> CheckBookingFaceAsync(Guid visitId, string photoBase64);
     Task<FaceCheckoutMatchDto?> FaceIdentifyInsideAsync(string photoBase64, ClaimsPrincipal user);
     /// <summary>Validates that a visitor photo contains exactly one detectable face (no persistence).</summary>
     FacePhotoValidationDto ValidateVisitorPhoto(string photoBase64);
@@ -189,6 +191,27 @@ public class VisitorService : IVisitorService
             throw new InvalidOperationException("At least one valid location is required.");
         if (_tenant.LocationId is Guid requiredLoc && !locations.Any(l => l.Id == requiredLoc))
             throw new InvalidOperationException("Visits must include your assigned location.");
+
+        // Opening a booking (from the list or its QR) checks that the person at the desk is the one booked.
+        // A walk-in matched to a booking further down is not held up by this.
+        string? faceMismatchNote = null;
+        if (request.ExpectedVisitId is Guid openedBookingId && !string.IsNullOrWhiteSpace(request.PhotoBase64))
+        {
+            var bookedVisitorId = await _db.VisitorVisits.AsNoTracking()
+                .Where(v => v.Id == openedBookingId)
+                .Select(v => (Guid?)v.VisitorId)
+                .FirstOrDefaultAsync();
+            if (bookedVisitorId is Guid bookedId
+                && await CompareWithVisitorFaceAsync(bookedId, request.PhotoBase64) == BookingFaceCheck.Mismatch)
+            {
+                if (!request.FaceMismatchConfirmed)
+                    throw new InvalidOperationException(
+                        "The face does not match the photo on this booking. Check the visitor's ID, then confirm to continue.");
+                var by = user.FindFirstValue("fullName") ?? user.Identity?.Name;
+                faceMismatchNote = $"Face did not match the booking photo; {by} checked ID and confirmed at check-in.";
+            }
+        }
+
         // Always allocate from the location (or tenant) series — free-text desk badges collide with unique PassCode.
         Guid? passLocationId = locations.Select(l => (Guid?)l.Id).FirstOrDefault()
             ?? (_tenant.LocationId is Guid tl && tl != Guid.Empty ? tl : null);
@@ -293,6 +316,12 @@ public class VisitorService : IVisitorService
         visit.PurposeNotes = request.PurposeNotes;
         visit.PurposeFieldsJson = PurposeFields.Write(purposeFieldValues);
         visit.Notes = booking is not null && string.IsNullOrWhiteSpace(request.Notes) ? booking.Notes : request.Notes;
+        if (faceMismatchNote is not null)
+        {
+            var notes = string.IsNullOrWhiteSpace(visit.Notes) ? faceMismatchNote : $"{visit.Notes} | {faceMismatchNote}";
+            visit.Notes = notes.Length > 1000 ? notes[^1000..] : notes;
+        }
+        visit.ArrivalCodeHash = null;
         visit.PassNumber = passNumber;
         visit.NumberOfPersons = request.NumberOfPersons < 1 ? 1 : Math.Min(request.NumberOfPersons, 99);
         visit.IsWalkIn = request.IsWalkIn;
@@ -762,6 +791,7 @@ public class VisitorService : IVisitorService
         var notes = string.IsNullOrWhiteSpace(visit.Notes) ? note : $"{visit.Notes} | {note}";
         visit.Notes = notes.Length > 1000 ? notes[^1000..] : notes;
         visit.Status = VisitStatus.Cancelled;
+        visit.ArrivalCodeHash = null;
         visit.UpdatedAt = DateTime.UtcNow;
         visit.UpdatedBy = user.Identity?.Name;
         await SaveVisitLifecycleAsync();
@@ -840,8 +870,15 @@ public class VisitorService : IVisitorService
     {
         var ctx = await BuildAppointmentMailContextAsync(visit, visitor, host);
 
+        // Every appointment email carries a fresh QR, so the one in an older (now outdated) email stops working.
+        var arrivalCode = string.IsNullOrWhiteSpace(visitor.Email) ? null : ArrivalCodes.New();
+        var arrivalHash = arrivalCode is null ? null : ArrivalCodes.HashOf(arrivalCode);
+        await _db.VisitorVisits.Where(v => v.Id == visit.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(v => v.ArrivalCodeHash, arrivalHash));
+
         // Sent off the request path: a slow or failing mail server must not hold the booking form open.
-        QueueVisitMail(visit.TenantId, ctx with { AppointmentSendKey = sendKey }, MailContentKind.Appointment);
+        QueueVisitMail(visit.TenantId, ctx with { AppointmentSendKey = sendKey, ArrivalCode = arrivalCode ?? "" },
+            MailContentKind.Appointment);
         var company = string.IsNullOrWhiteSpace(visitor.CompanyName) ? "" : $" ({visitor.CompanyName})";
         QueueHostPush(visit.TenantId, host.UserId,
             sendKey.Length == 0 ? "Appointment booked" : "Appointment updated",
@@ -2352,6 +2389,77 @@ public class VisitorService : IVisitorService
             MeetingHallName = visit.MeetingHall?.Name,
             MeetingHallIntercom = visit.MeetingHall?.IntercomNo
         };
+    }
+
+    public async Task<ArrivalCodeMatchDto> FindByArrivalCodeAsync(string code)
+    {
+        const string unknown = "This QR code is not valid, or a newer appointment email replaced it. Find the booking in the list instead.";
+        var hash = ArrivalCodes.HashOf(code) ?? throw new InvalidOperationException(unknown);
+        // The query filters keep a code from finding a booking in another tenant or another location's scope.
+        var booking = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.ArrivalCodeHash == hash)
+            .Select(v => new
+            {
+                v.Id,
+                v.VisitNumber,
+                v.Status,
+                VisitorName = v.Visitor.FullName,
+                v.Visitor.CompanyName,
+                HostName = v.HostEmployee != null ? v.HostEmployee.FullName : "",
+                Date = v.ExpectedDate ?? v.VisitDate,
+                Time = v.ExpectedTime ?? v.VisitTime,
+            })
+            .FirstOrDefaultAsync()
+            ?? throw new InvalidOperationException(unknown);
+        if (booking.Status != VisitStatus.Expected)
+            throw new InvalidOperationException($"Booking {booking.VisitNumber} has already been used or cancelled.");
+        if (booking.Date != AppTime.Today)
+            throw new InvalidOperationException(
+                $"This QR code is for {booking.VisitorName}'s appointment on {booking.Date:dd MMM yyyy}. It works only on that day.");
+
+        return new ArrivalCodeMatchDto
+        {
+            VisitId = booking.Id,
+            VisitNumber = booking.VisitNumber,
+            VisitorName = booking.VisitorName,
+            CompanyName = booking.CompanyName,
+            HostName = booking.HostName,
+            VisitDate = booking.Date,
+            VisitTime = booking.Time,
+        };
+    }
+
+    public async Task<BookingFaceCheckDto> CheckBookingFaceAsync(Guid visitId, string photoBase64)
+    {
+        var booking = await _db.VisitorVisits.AsNoTracking()
+            .Where(v => v.Id == visitId)
+            .Select(v => new { v.VisitorId, v.Visitor.FullName })
+            .FirstOrDefaultAsync()
+            ?? throw new InvalidOperationException("Booking not found.");
+        return new BookingFaceCheckDto
+        {
+            Result = await CompareWithVisitorFaceAsync(booking.VisitorId, photoBase64),
+            VisitorName = booking.FullName,
+        };
+    }
+
+    /// <summary>Whether a capture is the same person as the faces enrolled for <paramref name="visitorId"/>.</summary>
+    private async Task<string> CompareWithVisitorFaceAsync(Guid visitorId, string photoBase64)
+    {
+        if (!_faces.IsAvailable) return BookingFaceCheck.NoReference;
+        var stored = await _db.VisitorFaceDescriptors.AsNoTracking()
+            .Where(f => f.VisitorId == visitorId && f.Model == _faces.ModelId && f.Dimensions == _faces.Dimensions)
+            .Select(f => f.Descriptor)
+            .ToListAsync();
+        if (stored.Count == 0) return BookingFaceCheck.NoReference;
+
+        var probe = EmbedPhoto(photoBase64);
+        var best = stored.Select(FromBytes)
+            .Where(s => s.Length == probe.Vector.Length)
+            .Select(s => _faces.Similarity(probe.Vector, s))
+            .DefaultIfEmpty(double.MinValue)
+            .Max();
+        return best >= _faces.MatchThreshold ? BookingFaceCheck.Match : BookingFaceCheck.Mismatch;
     }
 
     /// <summary>

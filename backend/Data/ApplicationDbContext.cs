@@ -161,6 +161,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => new { x.Status, x.CheckOutAt });
             e.HasIndex(x => x.VisitDate);
             e.HasIndex(x => x.PreRegistrationReference);
+            e.HasIndex(x => x.ArrivalCodeHash).IsUnique().HasFilter("[ArrivalCodeHash] IS NOT NULL");
             // Additive column: existing rows default to false (face/normal check-out).
             e.Property(x => x.IsManualCheckOut).HasDefaultValue(false);
             e.Property(x => x.RowVersion).IsRowVersion();

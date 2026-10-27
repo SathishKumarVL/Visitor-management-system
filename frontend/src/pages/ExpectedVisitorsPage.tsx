@@ -20,6 +20,7 @@ import { useAuthStore } from '../store/authStore'
 import { cn, hasAnyRole } from '../lib/utils'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
 import { VisitorInvitations } from '../components/VisitorInvitations'
+import { ArrivalQrScanner } from '../components/ArrivalQrScanner'
 
 const PAST_APPOINTMENT_ERROR = 'Appointment date and time cannot be in the past.'
 
@@ -62,6 +63,8 @@ export function ExpectedVisitorsPage() {
   const canArrive = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception', 'Security'])
   const hostOnly = hasAnyRole(roles, ['Host']) && !hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception'])
   const [inviteOpen, setInviteOpen] = useState(false)
+  const canScanQr = hasAnyRole(roles, ['SuperAdmin', 'Admin', 'Reception'])
+  const [scanOpen, setScanOpen] = useState(false)
 
   const [date, setDate] = useState(() => {
     const fromUrl = searchParams.get('date')
@@ -418,6 +421,11 @@ export function ExpectedVisitorsPage() {
               }}
               className="w-auto"
             />
+            {canScanQr ? (
+              <Button variant="secondary" onClick={() => setScanOpen(true)}>
+                Scan QR
+              </Button>
+            ) : null}
             {canCreate ? (
               <Button variant="secondary" onClick={() => setInviteOpen(true)}>
                 Invite visitor
@@ -454,6 +462,8 @@ export function ExpectedVisitorsPage() {
           </Alert>
         </div>
       ) : null}
+
+      {canScanQr ? <ArrivalQrScanner open={scanOpen} onClose={() => setScanOpen(false)} /> : null}
 
       {canCreate ? (
         <VisitorInvitations

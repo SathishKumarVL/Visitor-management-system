@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { ArrivalQrScanner } from '../components/ArrivalQrScanner'
 import { BrandLogo } from '../components/BrandLogo'
 import { Alert, ModeTile } from '../components/ui/Panel'
 import { useSettingsStore } from '../store/settingsStore'
@@ -20,6 +21,7 @@ export function ReceptionModePage() {
       } | null,
   )
   const visitorName = notice?.visitorName
+  const [scanOpen, setScanOpen] = useState(false)
 
   // Shown once: a refresh or Back must not announce the same visitor again.
   useEffect(() => {
@@ -74,6 +76,13 @@ export function ReceptionModePage() {
             onClick={() => navigate('/visitors/new')}
           />
           <ModeTile
+            className="min-h-28 sm:col-span-2"
+            title={t('reception.scanQr', 'Scan appointment QR')}
+            description={t('reception.scanQrDesc', 'Visitor shows the QR from their appointment email; check in with face')}
+            icon="▦"
+            onClick={() => setScanOpen(true)}
+          />
+          <ModeTile
             className="min-h-36"
             title={t('reception.expectedVisitor')}
             description={t('reception.expectedVisitorDesc')}
@@ -103,6 +112,7 @@ export function ReceptionModePage() {
           />
         </div>
       </div>
+      <ArrivalQrScanner open={scanOpen} onClose={() => setScanOpen(false)} />
     </div>
   )
 }

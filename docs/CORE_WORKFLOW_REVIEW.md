@@ -126,7 +126,9 @@ The thank-you email is queued on a background task so SMTP can never delay or fa
 
 ## Pass behaviour
 
-The pass carries tenant branding, visitor photo, name, company, host, department, purpose, location, visit number, entry time and status. It contains **no QR code and no barcode**, and none is to be reintroduced. Branding comes from tenant settings rather than hardcoded values.
+The pass carries tenant branding, visitor photo, name, company, host, department, purpose, location, visit number, entry time and status. It contains **no QR code and no barcode**.
+
+The only QR in the product is the arrival QR in the visitor's appointment email. It holds a random code (only its SHA-256 is stored on the booking), works only on the appointment day and only while the booking is still expected, and is replaced whenever the appointment email is sent again. Reception scans it to open the booking; check-in still captures the visitor's face, which is compared with the face on file for the booking, and a mismatch needs reception to confirm the visitor's ID (recorded on the visit). Branding comes from tenant settings rather than hardcoded values.
 
 A pass is only created for a visit that is cleared to enter: at registration when approval is off, otherwise at check-in. A pending-approval visit has no pass.
 

@@ -17,7 +17,8 @@ public interface INotificationService
         string? idempotencyKey = null,
         Guid? locationId = null,
         MailSender? sender = null,
-        string? link = null);
+        string? link = null,
+        string? qrText = null);
     /// <summary>With <paramref name="sender"/>, the test goes out from that address (checks the Send As permission).</summary>
     Task<(bool Ok, string Message)> SendTestEmailAsync(string recipient, Guid? locationId = null, MailSender? sender = null);
     /// <summary>Re-attempts delivery for unsent Email outbox rows (e.g. after SMTP config fix).</summary>
@@ -61,7 +62,8 @@ public class NotificationService : INotificationService
         string? idempotencyKey = null,
         Guid? locationId = null,
         MailSender? sender = null,
-        string? link = null)
+        string? link = null,
+        string? qrText = null)
     {
         var tenantId = QueueingTenantId;
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
@@ -88,6 +90,7 @@ public class NotificationService : INotificationService
             FromName = Clip(sender?.FromName, 200),
             ReplyTo = Clip(sender?.ReplyTo, 256),
             Link = Clip(link, 300),
+            QrText = Clip(qrText, 100),
             IsSent = false
         };
         _db.NotificationOutbox.Add(row);
@@ -234,6 +237,8 @@ public class NotificationService : INotificationService
             row.IsSent = true;
             row.SentAt = DateTime.UtcNow;
             row.Error = null;
+            // The QR is a check-in credential; once it is in the visitor's mailbox the outbox has no use for it.
+            row.QrText = null;
             await _db.SaveChangesAsync();
         }
         catch (Exception ex)

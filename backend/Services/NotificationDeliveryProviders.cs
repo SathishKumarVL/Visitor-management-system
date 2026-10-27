@@ -133,13 +133,14 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
         return $"{row.FromName} via {smtp.FromName}";
     }
 
-    private static MimeKit.MimeMessage BuildMessage(NotificationOutbox row, SmtpRuntimeOptions smtp, bool sendAsOverride)
+    public static MimeKit.MimeMessage BuildMessage(
+        NotificationOutbox row, SmtpRuntimeOptions smtp, bool sendAsOverride, string? fallbackFromAddress = null)
     {
         var useOverride = sendAsOverride && !string.IsNullOrWhiteSpace(row.FromAddress);
         var message = new MimeKit.MimeMessage();
         message.From.Add(new MimeKit.MailboxAddress(
             SenderDisplayName(row, smtp, useOverride),
-            useOverride ? row.FromAddress!.Trim() : smtp.FromAddress));
+            useOverride ? row.FromAddress!.Trim() : string.IsNullOrWhiteSpace(smtp.FromAddress) ? fallbackFromAddress : smtp.FromAddress));
         if (!string.IsNullOrWhiteSpace(row.ReplyTo)
             && MimeKit.MailboxAddress.TryParse(row.ReplyTo.Trim(), out var replyTo))
         {
@@ -148,12 +149,29 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
         }
         message.To.Add(MimeKit.MailboxAddress.Parse(row.Recipient.Trim()));
         message.Subject = row.Subject;
-        message.Body = new MimeKit.TextPart("plain")
-        {
-            Text = row.Body,
-            ContentTransferEncoding = MimeKit.ContentEncoding.QuotedPrintable
-        };
+        message.Body = string.IsNullOrWhiteSpace(row.QrText)
+            ? new MimeKit.TextPart("plain")
+            {
+                Text = row.Body,
+                ContentTransferEncoding = MimeKit.ContentEncoding.QuotedPrintable
+            }
+            : BodyWithQr(row.Body, row.QrText);
         return message;
+    }
+
+    /// <summary>Plain text plus an HTML copy with the QR drawn inline; the PNG also arrives as an attachment.</summary>
+    private static MimeKit.MimeEntity BodyWithQr(string text, string qrText)
+    {
+        var png = QrImage.Png(qrText);
+        var builder = new MimeKit.BodyBuilder { TextBody = text };
+        var image = builder.LinkedResources.Add("checkin-qr.png", png, MimeKit.ContentType.Parse("image/png"));
+        image.ContentId = MimeKit.Utils.MimeUtils.GenerateMessageId();
+        var html = System.Net.WebUtility.HtmlEncode(text).Replace("\r\n", "\n").Replace("\n", "<br>\n");
+        builder.HtmlBody =
+            $"<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1f2937\">{html}" +
+            $"<p style=\"margin-top:20px\"><img src=\"cid:{image.ContentId}\" alt=\"Check-in QR code\" width=\"220\" height=\"220\"></p>" +
+            "</div>";
+        return builder.ToMessageBody();
     }
 
     private static async Task SendMessageAsync(
@@ -194,20 +212,8 @@ public sealed class EmailNotificationProvider : IEmailNotificationProvider
         Directory.CreateDirectory(pickup);
 
         var path = Path.Combine(pickup, $"{Guid.NewGuid():N}.eml");
-        var sb = new System.Text.StringBuilder();
-        var fromAddress = !string.IsNullOrWhiteSpace(row.FromAddress)
-            ? row.FromAddress
-            : string.IsNullOrWhiteSpace(smtp.FromAddress) ? "info@tianode.com" : smtp.FromAddress;
-        var fromName = SenderDisplayName(row, smtp, !string.IsNullOrWhiteSpace(row.FromAddress));
-        sb.AppendLine(string.IsNullOrWhiteSpace(fromName) ? $"From: {fromAddress}" : $"From: \"{fromName}\" <{fromAddress}>");
-        if (!string.IsNullOrWhiteSpace(row.ReplyTo))
-            sb.AppendLine($"Reply-To: {row.ReplyTo}");
-        sb.AppendLine($"To: {row.Recipient}");
-        sb.AppendLine($"Subject: {row.Subject}");
-        sb.AppendLine($"Date: {DateTime.UtcNow:R}");
-        sb.AppendLine();
-        sb.AppendLine(row.Body);
-        await File.WriteAllTextAsync(path, sb.ToString(), ct);
+        var message = BuildMessage(row, smtp, sendAsOverride: true, fallbackFromAddress: "info@tianode.com");
+        await message.WriteToAsync(path, ct);
     }
 }
 

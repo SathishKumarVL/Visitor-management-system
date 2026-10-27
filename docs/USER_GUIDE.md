@@ -55,4 +55,8 @@ account for staff using your existing muster process.
 
 ## Visitor pass
 
-Printed pass includes branding, photo, visitor/host/department/purpose/location, human-readable Visit Number (e.g. `VMS-2026-000184`), check-in time, and status. No QR codes.
+Printed pass includes branding, photo, visitor/host/department/purpose/location, human-readable Visit Number (e.g. `VMS-2026-000184`), check-in time, and status. The pass has no QR code.
+
+## Appointment QR
+
+The visitor's appointment email carries a QR code. At reception, use **Scan QR** (Expected Visitors or Reception mode) and hold the visitor's QR to the camera, or scan it with a handheld scanner. It opens today's booking; capture the visitor's face as usual. If the face does not match the photo on file for the booking, check their ID and tick the confirmation to continue. A QR works only on the appointment day, and a newer appointment email (after an edit) replaces it.

@@ -28,7 +28,7 @@ import { SecureImage } from '../components/SecureImage'
 import { LoadingMask } from '../components/LoadingMask'
 import { FaceCameraPanel } from '../components/FaceCameraPanel'
 import { captureFaceJpeg, openFaceCamera, toggleCameraFacing } from '../lib/cameraCapture'
-import type { BookingMatchDto, FaceSearchMatchDto, GroupEmployeeMatchDto, PassDto } from '../types/api'
+import type { BookingFaceCheckDto, BookingMatchDto, FaceSearchMatchDto, GroupEmployeeMatchDto, PassDto } from '../types/api'
 import { useAuthStore } from '../store/authStore'
 import { EmployeeSearchField } from '../components/EmployeeSearchField'
 import { LookupFieldInput, type LookupFieldNote } from '../components/LookupFieldInput'
@@ -126,6 +126,8 @@ export function NewVisitorWizardPage() {
   const [employeeVisitorMatch, setEmployeeVisitorMatch] = useState<FaceSearchMatchDto | null>(null)
   const [emailTouched, setEmailTouched] = useState(false)
   const [loadingExpected, setLoadingExpected] = useState(!!expectedId)
+  const [bookingFace, setBookingFace] = useState<BookingFaceCheckDto | null>(null)
+  const [faceMismatchConfirmed, setFaceMismatchConfirmed] = useState(false)
   const [bookingMatches, setBookingMatches] = useState<BookingMatchDto[]>([])
   const [dismissedBookingIds, setDismissedBookingIds] = useState<string[]>([])
   const [linkedBooking, setLinkedBooking] = useState<BookingMatchDto | null>(null)
@@ -518,8 +520,29 @@ export function NewVisitorWizardPage() {
     patch({ expectedVisitId: null, isWalkIn: true })
   }
 
+  // A booking opened at the desk (from the list, its QR or a booking match) must be met by the person booked.
+  useEffect(() => {
+    setBookingFace(null)
+    setFaceMismatchConfirmed(false)
+    if (!draft.photoBase64 || !draft.expectedVisitId || !online) return
+    let cancelled = false
+    visitorsApi.checkBookingFace(draft.expectedVisitId, draft.photoBase64)
+      .then((result) => {
+        if (!cancelled) setBookingFace(result)
+      })
+      .catch(() => {
+        /* the server checks again on register */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [draft.photoBase64, draft.expectedVisitId, online])
+
   function validateAll(): string | null {
     if (!draft.photoBase64) return 'Capture the visitor face photo to continue.'
+    if (bookingFace?.result === 'Mismatch' && !faceMismatchConfirmed) {
+      return 'The face does not match the photo on this booking. Check the visitor’s ID and tick the confirmation to continue.'
+    }
     if (faceMatch) return 'Confirm whether this is the same visitor before continuing.'
     if (employeeMatch) return 'Confirm whether this is the group employee before continuing.'
     if (!draft.visitorName.trim()) return 'Visitor name is required.'
@@ -786,6 +809,7 @@ export function NewVisitorWizardPage() {
       notes: draft.notes.trim() || null,
       isWalkIn: draft.isWalkIn,
       expectedVisitId: draft.expectedVisitId,
+      faceMismatchConfirmed: bookingFace?.result === 'Mismatch' && faceMismatchConfirmed,
       recognizedVisitorId: draft.recognizedVisitorId,
       groupEmployeeUserId: draft.groupEmployeeUserId,
       groupEmployeeId: draft.groupEmployeeId,
@@ -831,7 +855,11 @@ export function NewVisitorWizardPage() {
         },
       })
     } catch (e) {
-      setError(apiErrorMessage(e, 'Registration failed.'))
+      const message = apiErrorMessage(e, 'Registration failed.')
+      // The server's own face check caught a mismatch the screen had not shown yet.
+      if (message.includes('does not match the photo on this booking') && bookingFace?.result !== 'Mismatch')
+        setBookingFace({ result: 'Mismatch', visitorName: draft.visitorName.trim() })
+      setError(message)
       formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     } finally {
       setSubmitting(false)
@@ -1000,6 +1028,38 @@ export function NewVisitorWizardPage() {
                 Change photo
               </Button>
             </div>
+            {bookingFace?.result === 'Match' ? (
+              <div className="mt-3">
+                <Alert tone="success" persistent>
+                  Face matches the photo on file for {bookingFace.visitorName}.
+                </Alert>
+              </div>
+            ) : null}
+            {bookingFace?.result === 'NoReference' ? (
+              <p className="mt-3 text-sm text-ink-muted">
+                No photo is on file for this booking to compare with. Check the visitor’s ID if you are unsure.
+              </p>
+            ) : null}
+            {bookingFace?.result === 'Mismatch' ? (
+              <div className="mt-3 space-y-2 rounded-2xl border-2 border-danger/40 bg-red-50 p-4">
+                <p className="text-sm font-semibold text-danger">
+                  This face does not match the photo on file for {bookingFace.visitorName || 'the booked visitor'}.
+                </p>
+                <p className="text-sm text-ink">
+                  Retake the photo, or check the visitor’s ID before letting them in. The check-in is recorded with
+                  your name if you continue.
+                </p>
+                <label className="flex items-start gap-2 text-sm font-medium text-ink">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4"
+                    checked={faceMismatchConfirmed}
+                    onChange={(e) => setFaceMismatchConfirmed(e.target.checked)}
+                  />
+                  I have checked this person’s ID and they are the booked visitor.
+                </label>
+              </div>
+            ) : null}
           </Panel>
 
           {linkedBooking ? (

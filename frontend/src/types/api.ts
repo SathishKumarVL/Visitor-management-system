@@ -533,6 +533,8 @@ export interface RegisterVisitorRequest {
   /** One per filled-in form; resubmitting it returns the visit already saved instead of a duplicate. */
   clientRequestId?: string | null
   expectedVisitId?: string | null
+  /** Reception checked ID after the photo did not match the face on file for the booking. */
+  faceMismatchConfirmed?: boolean
   recognizedVisitorId?: string | null
   /** Group employee confirmed from the face match: an official visit with no visitor emails. */
   groupEmployeeUserId?: string | null
@@ -637,6 +639,21 @@ export interface ExpectedVisitorRequest {
   plantNumber?: string | null
   otherLocationText?: string | null
   notes?: string | null
+}
+
+export interface ArrivalCodeMatchDto {
+  visitId: string
+  visitNumber: string
+  visitorName: string
+  companyName?: string | null
+  hostName: string
+  visitDate: string
+  visitTime: string
+}
+
+export interface BookingFaceCheckDto {
+  result: 'Match' | 'Mismatch' | 'NoReference'
+  visitorName: string
 }
 
 export type VisitorInvitationStatus = 'Pending' | 'Expired' | 'Completed' | 'Withdrawn'

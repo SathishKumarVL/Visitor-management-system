@@ -96,7 +96,7 @@ Until that exists: keep the existing encryption key in the secret store even if 
 ## What Phase 1A does **not** cover
 
 MFA, full site-scoped authorization, SaaS-ready licensing portal, and remaining blockers B-002/B-003/B-004.
-QR functionality has been removed from the product.
+Passes carry no QR. The appointment email carries an arrival QR: a random 128-bit code stored only as its SHA-256, valid on the appointment day while the booking is expected, replaced on every re-send and removed from the email outbox once delivered. It only locates the booking; check-in still requires a face capture that is compared with the booked visitor's face, and a mismatch must be confirmed by reception after checking ID.
 
 ## Tenant isolation & entitlements (hardening slice)
 

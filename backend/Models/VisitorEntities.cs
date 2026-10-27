@@ -61,6 +61,13 @@ public class VisitorVisit
     [MaxLength(50)]
     public string? PreRegistrationReference { get; set; }
 
+    /// <summary>
+    /// SHA-256 of the code in the QR emailed with the appointment. Reception scans it to open this booking;
+    /// a new code replaces it whenever the appointment email is sent again.
+    /// </summary>
+    [MaxLength(64)]
+    public string? ArrivalCodeHash { get; set; }
+
     public VisitorType VisitorType { get; set; } = VisitorType.WalkIn;
     public VisitStatus Status { get; set; } = VisitStatus.PendingApproval;
 
@@ -490,6 +497,10 @@ public class NotificationOutbox
     /// <summary>App page opened when a push notification is tapped, e.g. "/visitors/{id}/minutes".</summary>
     [MaxLength(300)]
     public string? Link { get; set; }
+
+    /// <summary>Text shown as a QR image in the email (a visitor's arrival code). Cleared once delivered.</summary>
+    [MaxLength(100)]
+    public string? QrText { get; set; }
 }
 
 /// <summary>

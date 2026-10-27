@@ -70,7 +70,14 @@ is currently inside. See `docs/CORE_WORKFLOW_REVIEW.md` for the full state machi
 | POST | `/api/pass/{visitId}/generate` | Reprint |
 | GET | `/api/pass/verify/{visitNumber}` | Lookup by human-readable visit number |
 
-Visitor passes display a Visit Number (e.g. `VMS-2026-000184`). QR codes are not used.
+Visitor passes display a Visit Number (e.g. `VMS-2026-000184`) and carry no QR code.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/visitors/expected/arrival-code` | Today's booking from the QR in the appointment email (`{ code }`) |
+| POST | `/api/visitors/expected/{id}/face-check` | Compare a check-in capture with the booked visitor's face: `Match`, `Mismatch` or `NoReference` |
+
+Registering against a booking (`expectedVisitId`) with a photo that does not match the booked visitor's face is refused unless `faceMismatchConfirmed` is true; the confirmation is noted on the visit.
 
 ## Masters / Users / Settings / Reports
 

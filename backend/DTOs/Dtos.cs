@@ -627,6 +627,12 @@ public class RegisterVisitorRequest
     public Guid? ExpectedVisitId { get; set; }
 
     /// <summary>
+    /// Reception checked the visitor's ID after the check-in photo did not match the face on file for the
+    /// booking in <see cref="ExpectedVisitId"/>. Without it such a check-in is refused.
+    /// </summary>
+    public bool FaceMismatchConfirmed { get; set; }
+
+    /// <summary>
     /// Visitor the operator confirmed from the face match. The visit is still new; this only keeps the
     /// return visit attached to the existing visitor instead of creating a duplicate record.
     /// </summary>
@@ -868,6 +874,38 @@ public class ExpectedVisitorRequest
     public string? PurposeNotes { get; set; }
 
     public string? Notes { get; set; }
+}
+
+public class ArrivalCodeRequest
+{
+    [Required, MaxLength(200)]
+    public string Code { get; set; } = string.Empty;
+}
+
+public class ArrivalCodeMatchDto
+{
+    public Guid VisitId { get; set; }
+    public string VisitNumber { get; set; } = string.Empty;
+    public string VisitorName { get; set; } = string.Empty;
+    public string? CompanyName { get; set; }
+    public string HostName { get; set; } = string.Empty;
+    public DateOnly VisitDate { get; set; }
+    public TimeOnly VisitTime { get; set; }
+}
+
+public static class BookingFaceCheck
+{
+    public const string Match = "Match";
+    public const string Mismatch = "Mismatch";
+    /// <summary>The booked visitor has no face on file to compare with.</summary>
+    public const string NoReference = "NoReference";
+}
+
+public class BookingFaceCheckDto
+{
+    /// <summary>One of <see cref="BookingFaceCheck"/>.</summary>
+    public string Result { get; set; } = BookingFaceCheck.NoReference;
+    public string VisitorName { get; set; } = string.Empty;
 }
 
 public class CreateVisitorInvitationRequest

@@ -253,6 +253,36 @@ public class VisitorsController : ControllerBase
         }
     }
 
+    /// <summary>Finds today's booking from the QR in the visitor's appointment email.</summary>
+    [HttpPost("expected/arrival-code")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<ArrivalCodeMatchDto>>> FindByArrivalCode([FromBody] ArrivalCodeRequest request)
+    {
+        try
+        {
+            return Ok(new ApiResponse<ArrivalCodeMatchDto>(true, await _visitors.FindByArrivalCodeAsync(request.Code)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<ArrivalCodeMatchDto>(false, null, ex.Message));
+        }
+    }
+
+    /// <summary>Compares a check-in capture with the face on file for the booked visitor. Does not store the image.</summary>
+    [HttpPost("expected/{id:guid}/face-check")]
+    [Authorize(Roles = $"{AppRoles.SuperAdmin},{AppRoles.Admin},{AppRoles.Reception}")]
+    public async Task<ActionResult<ApiResponse<BookingFaceCheckDto>>> CheckBookingFace(Guid id, [FromBody] FaceSearchRequest request)
+    {
+        try
+        {
+            return Ok(new ApiResponse<BookingFaceCheckDto>(true, await _visitors.CheckBookingFaceAsync(id, request.PhotoBase64)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ApiResponse<BookingFaceCheckDto>(false, null, ex.Message));
+        }
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<VisitorDetailDto>>> Get(Guid id)
     {

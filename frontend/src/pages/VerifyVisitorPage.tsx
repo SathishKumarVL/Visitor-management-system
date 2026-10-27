@@ -84,7 +84,7 @@ export function VerifyVisitorPage() {
       <PageHeader
         eyebrow="Security operations"
         title={checkoutMode ? 'Check Out by Visit Number' : 'Verify Visitor'}
-        subtitle="Look up visitors by the visit number printed on their pass. No QR codes."
+        subtitle="Look up visitors by the visit number printed on their pass."
       />
 
       <Panel className="mx-auto max-w-xl">

@@ -28,7 +28,8 @@ public record VisitMailContext(
     string MomSendKey = "",
     string AppointmentSendKey = "",
     string CancelReason = "",
-    string InviteLink = "");
+    string InviteLink = "",
+    string ArrivalCode = "");
 
 /// <summary>Renders Mail Content templates and queues check-in / check-out / appointment / minutes emails.</summary>
 public interface IVisitMailService
@@ -184,8 +185,13 @@ public class VisitMailService : IVisitMailService
             if (!MaySendVisitorCopy(ctx, "Appointment")) return;
             var (subject, body) = await RenderAsync(MailContentKind.AppointmentVisitor, ctx);
             subject = subjectPrefix + subject;
+            var qr = string.IsNullOrWhiteSpace(ctx.ArrivalCode) ? null : ctx.ArrivalCode;
+            if (qr is not null)
+                body = body.TrimEnd() + "\n\nAt reception, show the QR code in this email to check in quickly. " +
+                       "It works only on the day of your appointment, and your face photo is taken at check-in.\n";
             await _notifications.NotifyAsync("Email", ctx.VisitorEmail.Trim(), subject, body,
-                $"appointment-visitor:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx));
+                $"appointment-visitor:{ctx.VisitNumber}{ctx.AppointmentSendKey}:{ctx.VisitorEmail.Trim()}", ctx.LocationId, HostSender(ctx),
+                qrText: qr);
         }
         else
         {

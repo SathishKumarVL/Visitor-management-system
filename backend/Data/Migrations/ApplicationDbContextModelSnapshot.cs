@@ -1032,6 +1032,10 @@ namespace Tiaano.Vms.Api.Data.Migrations
                     b.Property<Guid?>("LocationId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("QrText")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<string>("Recipient")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -1975,6 +1979,10 @@ namespace Tiaano.Vms.Api.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("ArrivalCodeHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<DateTime?>("CheckInAt")
                         .HasColumnType("datetime2");
 
@@ -2140,6 +2148,10 @@ namespace Tiaano.Vms.Api.Data.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ArrivalCodeHash")
+                        .IsUnique()
+                        .HasFilter("[ArrivalCodeHash] IS NOT NULL");
 
                     b.HasIndex("CheckedInByUserId");
 
