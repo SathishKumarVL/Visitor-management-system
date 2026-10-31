@@ -17,6 +17,11 @@ export function LoginPage() {
   const { t } = useI18n()
   const navigate = useNavigate()
   const [params] = useSearchParams()
+  const requested = params.get('redirect')
+  // Only pages inside this app; never another site.
+  const redirect = requested && requested.startsWith('/') && !requested.startsWith('//') && !requested.startsWith('/login')
+    ? requested
+    : null
   const { login, faceLogin, loading, token, user } = useAuthStore()
   const loadSettings = useSettingsStore((s) => s.load)
 
@@ -39,12 +44,11 @@ export function LoginPage() {
   }, [])
 
   if (token && user) {
-    return <Navigate to={params.get('redirect') || '/'} replace />
+    return <Navigate to={redirect || '/'} replace />
   }
 
   function goToDestination(dest: string) {
     void loadSettings()
-    const redirect = params.get('redirect')
     navigate(dest === '/change-password' ? dest : redirect || dest, { replace: true })
   }
 

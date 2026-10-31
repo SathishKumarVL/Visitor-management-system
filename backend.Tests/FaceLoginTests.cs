@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Tiaano.Vms.Api.Data;
 using Tiaano.Vms.Api.DTOs;
 using Tiaano.Vms.Api.Models;
 using Tiaano.Vms.Api.Models.Enums;
@@ -190,6 +191,68 @@ public class FaceLoginTests : IClassFixture<TestApiFactory>, IAsyncLifetime
         Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
         users = (await admin.GetFromJsonAsync<ApiResponse<List<UserDto>>>("/api/users", JsonOptions))!.Data!;
         Assert.Equal(new[] { AppRoles.Reception }, users.Single(u => u.Id == login.Id).Roles);
+    }
+
+    [Fact]
+    public async Task A_Shared_Login_Can_Be_Renamed_But_An_Employee_Login_Cannot()
+    {
+        var admin = await LoginAsync("admin");
+        var login = await CreateUserAsync(admin, AppRoles.Security);
+        var current = (await admin.GetFromJsonAsync<ApiResponse<List<UserDto>>>("/api/users", JsonOptions))!.Data!
+            .Single(u => u.Id == login.Id);
+        object Body(string? username) => new
+        {
+            fullName = current.FullName,
+            username,
+            email = current.Email,
+            role = AppRoles.Security,
+            departmentId = current.DepartmentId,
+            locationId = current.LocationId,
+            allowedMenuKeys = Array.Empty<string>(),
+            isActive = true,
+        };
+
+        var taken = await admin.PutAsJsonAsync($"/api/users/{login.Id}", Body("admin"));
+        Assert.Equal(HttpStatusCode.BadRequest, taken.StatusCode);
+
+        var newName = $"desk{Guid.NewGuid():N}"[..14];
+        var renamed = await admin.PutAsJsonAsync($"/api/users/{login.Id}", Body($"  {newName}  "));
+        Assert.True(renamed.IsSuccessStatusCode, await renamed.Content.ReadAsStringAsync());
+        Assert.Equal(newName, (await renamed.Content.ReadFromJsonAsync<ApiResponse<UserDto>>(JsonOptions))!.Data!.Username);
+
+        var client = _factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/auth/login",
+            new { username = newName, password = TestSecrets.SeedPassword, rememberMe = false })).StatusCode);
+        Assert.False((await client.PostAsJsonAsync("/api/auth/login",
+            new { username = login.Username, password = TestSecrets.SeedPassword, rememberMe = false })).IsSuccessStatusCode);
+
+        // Leaving the username out keeps it.
+        var unchanged = await admin.PutAsJsonAsync($"/api/users/{login.Id}", Body(null));
+        Assert.Equal(newName, (await unchanged.Content.ReadFromJsonAsync<ApiResponse<UserDto>>(JsonOptions))!.Data!.Username);
+
+        Guid employeeId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var employee = await db.Employees.IgnoreQueryFilters()
+                .FirstAsync(e => e.TenantId == WellKnownTenants.TiaanoId && e.UserId == null);
+            employeeId = employee.Id;
+            employee.UserId = login.Id;
+            await db.SaveChangesAsync();
+        }
+        try
+        {
+            var refused = await admin.PutAsJsonAsync($"/api/users/{login.Id}", Body($"emp{Guid.NewGuid():N}"[..13]));
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            Assert.Contains("belongs to an employee", await refused.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await db.Employees.IgnoreQueryFilters().Where(e => e.Id == employeeId)
+                .ExecuteUpdateAsync(s => s.SetProperty(e => e.UserId, (string?)null));
+        }
     }
 
     private async Task<HttpResponseMessage> FaceLoginAsync(string photoBase64) =>

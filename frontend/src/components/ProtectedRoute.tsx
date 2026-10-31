@@ -11,7 +11,7 @@ export function ProtectedRoute({ roles }: { roles?: Role[] }) {
 
   if (!initialized) return <LoadingMask label="Checking session…" />
   if (!token || !user) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+    return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />
   }
   if (user.mustChangePassword && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" replace />

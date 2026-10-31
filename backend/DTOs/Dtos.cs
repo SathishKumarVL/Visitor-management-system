@@ -170,6 +170,10 @@ public class UpdateUserRequest
     [Required, MaxLength(150)]
     public string FullName { get; set; } = string.Empty;
 
+    /// <summary>New sign-in name; only logins without an employee record can be renamed. Null keeps the current one.</summary>
+    [MaxLength(50)]
+    public string? Username { get; set; }
+
     [Required, EmailAddress]
     public string Email { get; set; } = string.Empty;
 

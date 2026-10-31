@@ -45,6 +45,7 @@ export function ManageLoginModal({
     return allowed.filter((k) => defaultMenus(initialRole).includes(k))
   })
   const [fullName, setFullName] = useState(user.fullName)
+  const [username, setUsername] = useState(user.username)
   const [email, setEmail] = useState(user.email)
   const [departmentId, setDepartmentId] = useState(user.departmentId ?? '')
   const [locationId, setLocationId] = useState(user.locationId ?? '')
@@ -87,8 +88,9 @@ export function ManageLoginModal({
     setSaving(true)
     setError(null)
     try {
-      await usersApi.update(user.id, {
+      const saved = await usersApi.update(user.id, {
         fullName: employee ? employee.fullName : fullName.trim(),
+        username: employee ? undefined : username.trim(),
         email: employee?.email || email.trim(),
         role,
         departmentId: (employee ? employee.departmentId : departmentId) || null,
@@ -96,7 +98,11 @@ export function ManageLoginModal({
         allowedMenuKeys: menus,
         isActive,
       })
-      await onChanged(`Login '${user.username}' updated.`)
+      await onChanged(
+        saved.username !== user.username
+          ? `Login '${user.username}' renamed to '${saved.username}'. It now signs in with the new username.`
+          : `Login '${user.username}' updated.`,
+      )
       onClose()
     } catch (err) {
       setError(apiErrorMessage(err))
@@ -186,6 +192,17 @@ export function ManageLoginModal({
               <div>
                 <FieldLabel htmlFor="login-name">Name</FieldLabel>
                 <TextInput id="login-name" required value={fullName} onChange={(e) => setFullName(e.target.value)} />
+              </div>
+              <div>
+                <FieldLabel htmlFor="login-username">Username</FieldLabel>
+                <TextInput
+                  id="login-username"
+                  required
+                  maxLength={50}
+                  autoComplete="off"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
               </div>
               <div>
                 <FieldLabel htmlFor="login-email">Email</FieldLabel>

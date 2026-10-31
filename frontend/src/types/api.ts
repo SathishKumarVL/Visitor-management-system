@@ -875,6 +875,8 @@ export interface MasterImportResultDto {
 
 export interface UpdateUserRequest {
   fullName: string
+  /** Only logins without an employee record can be renamed. */
+  username?: string
   email: string
   role: string
   departmentId?: string | null

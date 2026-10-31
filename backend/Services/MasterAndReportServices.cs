@@ -1699,6 +1699,13 @@ public class UserAdminService : IUserAdminService
             throw new InvalidOperationException("Invalid role.");
         await EnsureCanManageUserAsync(user);
         var locationId = await ResolveUserLocationAsync(request.Role, request.LocationId);
+        var username = request.Username?.Trim();
+        if (!string.IsNullOrEmpty(username) && !string.Equals(username, user.UserName, StringComparison.Ordinal))
+        {
+            if (await _db.Employees.AnyAsync(e => e.UserId == user.Id))
+                throw new InvalidOperationException("This login belongs to an employee, so its username cannot be changed.");
+            EnsureSucceeded(await _userManager.SetUserNameAsync(user, username));
+        }
         user.FullName = request.FullName.Trim();
         user.Email = request.Email.Trim();
         user.DepartmentId = request.DepartmentId;
