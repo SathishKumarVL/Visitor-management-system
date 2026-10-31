@@ -671,6 +671,9 @@ export function NewVisitorWizardPage() {
         patch({ photoBase64: '', recognizedVisitorId: null })
         setFaceStatus(null)
         void startCamera()
+      } else if (match && draft.expectedVisitId && match.visitorId === arrivalVisitorId) {
+        // The booking already names this visitor and its details are filled in.
+        setFaceStatus(null)
       } else if (employee) {
         setEmployeeMatch(employee)
         setEmployeeVisitorMatch(match)
